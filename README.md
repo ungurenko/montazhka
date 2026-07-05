@@ -29,7 +29,7 @@
 достаточно Command Line Tools.
 
 ```bash
-scripts/build-app.sh            # собрать build/Монтажка.app
+scripts/build-app.sh            # собрать build.noindex/Монтажка.app
 scripts/build-app.sh --install  # собрать и поставить в /Applications
 swift build && .build/debug/Montazhka --selftest   # самопроверка движка
 swift scripts/make-icon.swift   # перегенерировать иконку

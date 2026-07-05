@@ -15,7 +15,8 @@ if [ ! -f "$BIN" ]; then
   exit 1
 fi
 
-APP="build/Монтажка.app"
+# .noindex — чтобы Spotlight не показывал рабочую копию как вторую «Монтажку»
+APP="build.noindex/Монтажка.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
