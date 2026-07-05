@@ -22,6 +22,20 @@ struct DetectionSettings: Codable, Equatable {
     var paddingMS: Double = 150
 }
 
+/// Настройки улучшения голоса — сохраняются вместе с проектом.
+struct VoiceEnhanceSettings: Codable, Equatable {
+    var enabled = false
+    /// «Выравнивание громкости» 0–100.
+    var leveling: Double = 50
+    /// «Чистка шума» 0–100.
+    var noiseReduction: Double = 50
+    /// «Звонкость» 0–100.
+    var presence: Double = 50
+
+    /// Ключ варианта настроек для кэша (целые — чтобы флоат-шум не плодил файлы).
+    var cacheKey: String { "v1|\(Int(leveling))|\(Int(noiseReduction))|\(Int(presence))" }
+}
+
 struct Project: Identifiable, Codable {
     var id = UUID()
     var name: String
@@ -29,8 +43,28 @@ struct Project: Identifiable, Codable {
     var createdAt = Date()
     var updatedAt = Date()
     var detection = DetectionSettings()
+    var voiceEnhance = VoiceEnhanceSettings()
 
     var totalDuration: Double { clips.reduce(0) { $0 + $1.duration } }
+}
+
+// Свой распаковщик: старые файлы проектов без новых полей должны открываться как раньше.
+// (encode(to:) остаётся автоматическим; init(from:) в extension сохраняет обычный init.)
+extension Project {
+    private enum CodingKeys: String, CodingKey {
+        case id, name, clips, createdAt, updatedAt, detection, voiceEnhance
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        name = try c.decode(String.self, forKey: .name)
+        clips = try c.decodeIfPresent([Clip].self, forKey: .clips) ?? []
+        createdAt = try c.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
+        updatedAt = try c.decodeIfPresent(Date.self, forKey: .updatedAt) ?? Date()
+        detection = try c.decodeIfPresent(DetectionSettings.self, forKey: .detection) ?? DetectionSettings()
+        voiceEnhance = try c.decodeIfPresent(VoiceEnhanceSettings.self, forKey: .voiceEnhance) ?? VoiceEnhanceSettings()
+    }
 }
 
 /// Лёгкая карточка проекта для стартового экрана.

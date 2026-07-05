@@ -6,6 +6,11 @@ import CoreVideo
 enum TestVideoFactory {
     /// Участки звука: (длительность сек, громко ли).
     static func make(segments: [(duration: Double, loud: Bool)], to url: URL) async throws {
+        try await make(segments: segments.map { ($0.duration, $0.loud ? 0.4 : 0.0) }, to: url)
+    }
+
+    /// Участки звука с точной громкостью: (длительность сек, амплитуда синуса 0…1).
+    static func make(segments: [(duration: Double, amplitude: Double)], to url: URL) async throws {
         try? FileManager.default.removeItem(at: url)
         let writer = try AVAssetWriter(outputURL: url, fileType: .mov)
 
@@ -62,17 +67,13 @@ enum TestVideoFactory {
         memset(CVPixelBufferGetBaseAddress(frame), 0, CVPixelBufferGetDataSize(frame))
         CVPixelBufferUnlockBaseAddress(frame, [])
 
-        // Звук одним куском: синус 220 Гц для «речи», ноль для тишины
+        // Звук одним куском: синус 220 Гц заданной амплитуды («речь» громче, «шум» тише)
         var samples: [Int16] = []
         for segment in segments {
             let count = Int(segment.duration * sampleRate)
             for i in 0..<count {
-                if segment.loud {
-                    let value = sin(2.0 * .pi * 220.0 * Double(i) / sampleRate) * 0.4
-                    samples.append(Int16(value * 32767))
-                } else {
-                    samples.append(0)
-                }
+                let value = sin(2.0 * .pi * 220.0 * Double(i) / sampleRate) * segment.amplitude
+                samples.append(Int16(value * 32767))
             }
         }
         let audioSample = try makeAudioSampleBuffer(samples: samples, formatDesc: formatDesc!)

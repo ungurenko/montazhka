@@ -3,6 +3,13 @@ import AVFoundation
 import AppKit
 import SwiftUI
 
+/// Состояние обработки улучшенного звука.
+enum VoiceEnhanceStatus: Equatable {
+    case idle
+    case rendering(done: Int, total: Int)
+    case failed(String)
+}
+
 /// Сердце монтажки: держит проект, собирает предпросмотр, режет, отменяет, сохраняет.
 @MainActor
 final class EditorController: ObservableObject {
@@ -15,12 +22,15 @@ final class EditorController: ObservableObject {
     @Published var isDetecting = false
     @Published var waveformVersion = 0
     @Published var showPausePanel = false
+    @Published var showVoicePanel = false
+    @Published private(set) var voiceStatus: VoiceEnhanceStatus = .idle
     @Published var canUndo = false
     @Published var canRedo = false
     @Published var missingFilesMessage: String?
 
     let player = AVPlayer()
     let waveforms: WaveformStore
+    let voiceStore: VoiceEnhanceStore
     private let store: ProjectStore
 
     private var timeObserver: Any?
@@ -31,6 +41,9 @@ final class EditorController: ObservableObject {
     private var redoStack: [[Clip]] = []
     private var rebuildGeneration = 0
     private var saveTask: Task<Void, Never>?
+    private var enhancedAudioURLs: [String: URL] = [:]
+    private var enhanceDebounce: Task<Void, Never>?
+    private var enhanceGeneration = 0
 
     var duration: Double { project.totalDuration }
 
@@ -38,12 +51,16 @@ final class EditorController: ObservableObject {
         self.project = project
         self.store = store
         self.waveforms = WaveformStore(cacheDir: store.waveformsDir)
+        self.voiceStore = VoiceEnhanceStore(cacheDir: store.enhancedAudioDir)
         player.actionAtItemEnd = .pause
 
         checkMissingFiles()
         attachObservers()
         rebuildAndSeek(to: 0)
         warmUpWaveforms()
+        // Первый показ — с исходным звуком; улучшенный подменится, когда будет готов
+        // (при готовом кэше — почти сразу).
+        if project.voiceEnhance.enabled { refreshEnhancedAudio() }
     }
 
     deinit {
@@ -105,12 +122,37 @@ final class EditorController: ObservableObject {
     // MARK: - Сборка предпросмотра
 
     private func makeComposition() async -> AVMutableComposition {
-        await CompositionBuilder.build(clips: project.clips)
+        await CompositionBuilder.build(
+            clips: project.clips,
+            enhancedAudio: project.voiceEnhance.enabled ? enhancedAudioURLs : [:]
+        )
     }
 
-    /// Копия композиции для экспорта.
-    func compositionForExport() async -> AVMutableComposition {
-        await makeComposition()
+    /// Композиция для экспорта. Если улучшение включено — дожидается обработки всех
+    /// исходников; при неудаче отдаёт оригинальный звук и текст предупреждения.
+    func compositionForExport() async -> (composition: AVMutableComposition, audioWarning: String?) {
+        guard project.voiceEnhance.enabled else {
+            return (await makeComposition(), nil)
+        }
+        let settings = project.voiceEnhance
+        var ready: [String: URL] = [:]
+        var hadFailure = false
+        for path in Set(project.clips.map(\.sourcePath)) {
+            do {
+                ready[path] = try await voiceStore.ensure(source: path, settings: settings)
+            } catch is CancellationError {
+                hadFailure = true
+            } catch VoiceEnhanceError.noAudioTrack {
+                continue // без звуковой дорожки — просто нечего улучшать
+            } catch {
+                hadFailure = true
+            }
+        }
+        let composition = await CompositionBuilder.build(clips: project.clips, enhancedAudio: ready)
+        let warning = hadFailure
+            ? "Не получилось обработать звук — видео сохранится с исходной дорожкой."
+            : nil
+        return (composition, warning)
     }
 
     func rebuildAndSeek(to time: Double?) {
@@ -224,6 +266,7 @@ final class EditorController: ObservableObject {
             self.project.clips.append(contentsOf: newClips)
             self.afterEdit(seekTo: self.currentTime)
             self.warmUpWaveforms()
+            if self.project.voiceEnhance.enabled { self.refreshEnhancedAudio() }
         }
     }
 
@@ -295,6 +338,70 @@ final class EditorController: ObservableObject {
         guard settings != project.detection else { return }
         project.detection = settings
         scheduleSave()
+    }
+
+    // MARK: - Улучшение голоса
+
+    func updateVoiceSettings(_ settings: VoiceEnhanceSettings) {
+        guard settings != project.voiceEnhance else { return }
+        project.voiceEnhance = settings
+        scheduleSave()
+        // Пока крутят ползунки — ждём паузу 600 мс и только потом пересчитываем.
+        enhanceDebounce?.cancel()
+        enhanceDebounce = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 600_000_000)
+            guard !Task.isCancelled else { return }
+            self?.refreshEnhancedAudio()
+        }
+    }
+
+    /// Пересчитывает улучшенный звук для всех исходников и подменяет его в предпросмотре.
+    /// До готовности играет прежний звук.
+    private func refreshEnhancedAudio() {
+        enhanceGeneration += 1
+        let generation = enhanceGeneration
+        voiceStore.cancelAll()
+
+        guard project.voiceEnhance.enabled else {
+            enhancedAudioURLs = [:]
+            voiceStatus = .idle
+            rebuildAndSeek(to: currentTime)
+            return
+        }
+
+        let settings = project.voiceEnhance
+        let sources = Array(Set(project.clips.map(\.sourcePath)))
+        guard !sources.isEmpty else {
+            voiceStatus = .idle
+            return
+        }
+        voiceStatus = .rendering(done: 0, total: sources.count)
+
+        Task { [weak self] in
+            guard let self else { return }
+            var ready: [String: URL] = [:]
+            for (index, path) in sources.enumerated() {
+                do {
+                    let url = try await self.voiceStore.ensure(source: path, settings: settings)
+                    ready[path] = url
+                } catch is CancellationError {
+                    return // уже идёт новый пересчёт
+                } catch VoiceEnhanceError.noAudioTrack {
+                    // без звуковой дорожки — оставляем оригинал
+                } catch {
+                    guard generation == self.enhanceGeneration else { return }
+                    self.voiceStatus = .failed("Не удалось обработать звук. Предпросмотр и экспорт — с исходным звуком.")
+                    self.enhancedAudioURLs = [:]
+                    return
+                }
+                guard generation == self.enhanceGeneration else { return }
+                self.voiceStatus = .rendering(done: index + 1, total: sources.count)
+            }
+            guard generation == self.enhanceGeneration else { return }
+            self.enhancedAudioURLs = ready
+            self.voiceStatus = .idle
+            self.rebuildAndSeek(to: self.currentTime)
+        }
     }
 
     // MARK: - Поиск пауз

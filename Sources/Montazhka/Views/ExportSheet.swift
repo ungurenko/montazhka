@@ -6,6 +6,7 @@ struct ExportSheet: View {
     @ObservedObject var controller: EditorController
     @StateObject private var export = ExportModel()
     @State private var quality: ExportQuality = .high
+    @State private var audioWarning: String?
 
     var body: some View {
         VStack(spacing: 20) {
@@ -63,8 +64,20 @@ struct ExportSheet: View {
     private func startExport() {
         guard let url = export.chooseDestination(projectName: controller.project.name) else { return }
         Task {
-            let composition = await controller.compositionForExport()
+            let (composition, warning) = await controller.compositionForExport()
+            audioWarning = warning
             export.export(composition: composition, quality: quality, to: url)
+        }
+    }
+
+    private var audioWarningLine: some View {
+        Group {
+            if let audioWarning {
+                Label(audioWarning, systemImage: "exclamationmark.triangle.fill")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.orange)
+                    .multilineTextAlignment(.center)
+            }
         }
     }
 
@@ -81,6 +94,7 @@ struct ExportSheet: View {
             Text("\(Int(export.progress * 100))%")
                 .font(.system(size: 13, design: .monospaced))
                 .foregroundStyle(Theme.textSecondary)
+            audioWarningLine
             Button("Отменить") { export.cancel() }
                 .buttonStyle(.bordered)
         }
@@ -98,6 +112,7 @@ struct ExportSheet: View {
                 .font(.system(size: 13))
                 .foregroundStyle(Theme.textSecondary)
                 .lineLimit(1)
+            audioWarningLine
             HStack(spacing: 12) {
                 Button("Показать в Finder") { export.revealInFinder(url) }
                     .buttonStyle(.bordered)

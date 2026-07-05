@@ -19,7 +19,11 @@ struct EditorView: View {
                     playerArea
                     TransportBar(controller: controller)
                 }
-                if controller.showPausePanel {
+                if controller.showVoicePanel {
+                    VoicePanel(controller: controller)
+                        .frame(width: 300)
+                        .transition(.move(edge: .trailing).combined(with: .opacity))
+                } else if controller.showPausePanel {
                     PausePanel(controller: controller)
                         .frame(width: 300)
                         .transition(.move(edge: .trailing).combined(with: .opacity))
@@ -27,6 +31,7 @@ struct EditorView: View {
             }
             .padding(.horizontal, 16)
             .animation(.easeInOut(duration: 0.2), value: controller.showPausePanel)
+            .animation(.easeInOut(duration: 0.2), value: controller.showVoicePanel)
 
             TimelineView(controller: controller)
                 .frame(height: 168)
@@ -86,12 +91,26 @@ struct EditorView: View {
             .buttonStyle(.bordered)
 
             Button {
-                withAnimation { controller.showPausePanel.toggle() }
+                withAnimation {
+                    controller.showPausePanel.toggle()
+                    if controller.showPausePanel { controller.showVoicePanel = false }
+                }
             } label: {
                 Label("Найти паузы", systemImage: "waveform.badge.magnifyingglass")
             }
             .buttonStyle(.bordered)
             .tint(controller.showPausePanel ? Theme.accent : nil)
+
+            Button {
+                withAnimation {
+                    controller.showVoicePanel.toggle()
+                    if controller.showVoicePanel { controller.showPausePanel = false }
+                }
+            } label: {
+                Label("Улучшить голос", systemImage: "waveform.and.mic")
+            }
+            .buttonStyle(.bordered)
+            .tint(controller.showVoicePanel || controller.project.voiceEnhance.enabled ? Theme.accent : nil)
 
             Button {
                 controller.player.pause()

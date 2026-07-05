@@ -4,14 +4,17 @@ import Foundation
 final class ProjectStore {
     let projectsDir: URL
     let waveformsDir: URL
+    let enhancedAudioDir: URL
 
     init() {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Montazhka", isDirectory: true)
         projectsDir = base.appendingPathComponent("Projects", isDirectory: true)
         waveformsDir = base.appendingPathComponent("Waveforms", isDirectory: true)
+        enhancedAudioDir = base.appendingPathComponent("EnhancedAudio", isDirectory: true)
         try? FileManager.default.createDirectory(at: projectsDir, withIntermediateDirectories: true)
         try? FileManager.default.createDirectory(at: waveformsDir, withIntermediateDirectories: true)
+        try? FileManager.default.createDirectory(at: enhancedAudioDir, withIntermediateDirectories: true)
     }
 
     private func fileURL(for id: UUID) -> URL {
