@@ -42,6 +42,7 @@ enum SelfTest {
         testTimelineMath()
         await testAudioPipeline()
         await testVoiceEnhance()
+        await testBackgroundMusic()
     }
 
     /// Генерирует то же 12-секундное тестовое видео в указанный файл (для ручной проверки интерфейса).
@@ -163,7 +164,7 @@ enum SelfTest {
         clips = TimelineOps.removingRange(clips: clips, start: 3, end: 5)
         check(clips.count == 3, "после вырезки двух пауз осталось 3 куска")
 
-        let composition = await CompositionBuilder.build(clips: clips)
+        let (composition, _) = await CompositionBuilder.build(clips: clips)
         let duration = (try? await composition.load(.duration).seconds) ?? 0
         check(approx(duration, 8.5, 0.2), "длительность склейки 8.5 сек (получено \(String(format: "%.2f", duration)))")
 
@@ -296,8 +297,8 @@ enum SelfTest {
 
             // Склейка с улучшенным звуком: длительность верна, звук на месте
             let clip = Clip(sourcePath: url.path, start: 1.0, end: 11.0)
-            let composition = await CompositionBuilder.build(clips: [clip],
-                                                             enhancedAudio: [url.path: first])
+            let (composition, _) = await CompositionBuilder.build(clips: [clip],
+                                                                  enhancedAudio: [url.path: first])
             let compDuration = (try? await composition.load(.duration).seconds) ?? 0
             let compAudio = (try? await composition.loadTracks(withMediaType: .audio)) ?? []
             var audioDuration = 0.0
@@ -322,5 +323,110 @@ enum SelfTest {
         let decoded = try? decoder.decode(Project.self, from: Data(oldJSON.utf8))
         check(decoded != nil && decoded?.voiceEnhance == VoiceEnhanceSettings(),
               "старый проект без настроек голоса открывается с настройками по умолчанию")
+    }
+
+    // MARK: - Фоновая музыка
+
+    private static func testBackgroundMusic() async {
+        print("Фоновая музыка (видео 12 сек, мелодия 3 сек):")
+        // Видео: речь 0–3, тишина 3–6, речь 6–9, тишина 9–12 — в тишине слышно только музыку
+        let videoSegments: [(duration: Double, amplitude: Double)] = [
+            (3.0, 0.4), (3.0, 0.0), (3.0, 0.4), (3.0, 0.0)
+        ]
+        let videoURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("montazhka-selftest-music-video-\(UUID().uuidString).mov")
+        // «Мелодия» — 3 секунды ровного тона в контейнере .mov (звуковая дорожка оттуда)
+        let musicURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("montazhka-selftest-music-\(UUID().uuidString).mov")
+        defer {
+            try? FileManager.default.removeItem(at: videoURL)
+            try? FileManager.default.removeItem(at: musicURL)
+        }
+        do {
+            try await TestVideoFactory.make(segments: videoSegments, to: videoURL)
+            try await TestVideoFactory.make(segments: [(3.0, 0.3)], to: musicURL)
+        } catch {
+            check(false, "генерация тестовых файлов (\(error.localizedDescription))")
+            return
+        }
+
+        let clip = Clip(sourcePath: videoURL.path, start: 0, end: 12)
+        let music = MusicInput(url: musicURL, volume: 0.5)
+        let (composition, audioMix) = await CompositionBuilder.build(clips: [clip], music: music)
+
+        // Две звуковые дорожки, музыкальная покрывает всё видео (луп из 4 проигрышей)
+        let audioTracks = (try? await composition.loadTracks(withMediaType: .audio)) ?? []
+        check(audioTracks.count == 2, "в склейке две звуковые дорожки (получено \(audioTracks.count))")
+        var musicCoverage = 0.0
+        if audioTracks.count == 2,
+           let range = try? await audioTracks[1].load(.timeRange) {
+            musicCoverage = (range.start + range.duration).seconds
+        }
+        check(approx(musicCoverage, 12.0, 0.1),
+              "музыка по кругу покрывает всё видео (получено \(String(format: "%.2f", musicCoverage)))")
+        check(audioMix != nil && audioMix?.inputParameters.count == 1,
+              "микс громкости построен для музыкальной дорожки")
+
+        // Экспорт с музыкой и без — в «тишине» музыкальная версия заметно громче
+        func exportMP4(_ asset: AVMutableComposition, mix: AVAudioMix?) async -> URL? {
+            let out = FileManager.default.temporaryDirectory
+                .appendingPathComponent("montazhka-selftest-music-out-\(UUID().uuidString).mp4")
+            guard let session = AVAssetExportSession(asset: asset,
+                                                     presetName: AVAssetExportPreset1280x720) else { return nil }
+            session.outputURL = out
+            session.outputFileType = .mp4
+            session.audioMix = mix
+            await session.export()
+            return session.status == .completed ? out : nil
+        }
+
+        let (plainComposition, _) = await CompositionBuilder.build(clips: [clip])
+        guard let withMusic = await exportMP4(composition, mix: audioMix),
+              let withoutMusic = await exportMP4(plainComposition, mix: nil) else {
+            check(false, "экспорт с музыкой завершился")
+            return
+        }
+        defer {
+            try? FileManager.default.removeItem(at: withMusic)
+            try? FileManager.default.removeItem(at: withoutMusic)
+        }
+        check(true, "экспорт с музыкой завершился")
+
+        let cacheDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("montazhka-selftest-music-cache-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: cacheDir) }
+        let waveStore = WaveformStore(cacheDir: cacheDir)
+        guard let musicPeaks = await waveStore.ensure(path: withMusic.path),
+              let plainPeaks = await waveStore.ensure(path: withoutMusic.path) else {
+            check(false, "извлечение волны готовых файлов")
+            return
+        }
+        func rms(_ peaks: [Float], _ from: Double, _ to: Double) -> Double {
+            let a = max(0, Int(from * 100)), b = min(peaks.count, Int(to * 100))
+            guard b > a else { return 0 }
+            return Double(peaks[a..<b].reduce(0, +)) / Double(b - a)
+        }
+        // Окно тишины 3.5–5.5: без музыки почти ноль, с музыкой — слышный фон
+        let silenceWithMusic = rms(musicPeaks, 3.5, 5.5)
+        let silencePlain = rms(plainPeaks, 3.5, 5.5)
+        check(silenceWithMusic > max(silencePlain * 3, 0.01),
+              "музыка слышна в паузах речи (фон \(String(format: "%.4f", silenceWithMusic)) против \(String(format: "%.4f", silencePlain)))")
+        // Затухание: последние полсекунды тише середины паузы
+        let tail = rms(musicPeaks, 11.6, 11.95)
+        check(tail < silenceWithMusic * 0.6,
+              "в конце музыка затихает (хвост \(String(format: "%.4f", tail)))")
+
+        // Старый проект без поля музыки открывается с выключенной музыкой
+        let oldJSON = """
+        {"id":"\(UUID().uuidString)","name":"Старый проект","clips":[],
+         "createdAt":"2026-01-01T00:00:00Z","updatedAt":"2026-01-01T00:00:00Z",
+         "detection":{"thresholdDB":-40,"minPauseDuration":0.8,"paddingMS":150}}
+        """
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let decoded = try? decoder.decode(Project.self, from: Data(oldJSON.utf8))
+        check(decoded != nil && decoded?.music == MusicSettings(),
+              "старый проект без настроек музыки открывается с музыкой по умолчанию (выключена)")
     }
 }

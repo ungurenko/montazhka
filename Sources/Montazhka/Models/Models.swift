@@ -36,6 +36,17 @@ struct VoiceEnhanceSettings: Codable, Equatable {
     var cacheKey: String { "v1|\(Int(leveling))|\(Int(noiseReduction))|\(Int(presence))" }
 }
 
+/// Настройки фоновой музыки — сохраняются вместе с проектом.
+struct MusicSettings: Codable, Equatable {
+    var enabled = false
+    /// Идентификатор встроенной мелодии (имя файла без расширения).
+    var trackID: String?
+    /// Путь к своему аудиофайлу; если задан — важнее встроенной мелодии.
+    var customPath: String?
+    /// Громкость музыки 0–100 (голос всегда 100).
+    var volume: Double = 18
+}
+
 struct Project: Identifiable, Codable {
     var id = UUID()
     var name: String
@@ -44,6 +55,7 @@ struct Project: Identifiable, Codable {
     var updatedAt = Date()
     var detection = DetectionSettings()
     var voiceEnhance = VoiceEnhanceSettings()
+    var music = MusicSettings()
 
     var totalDuration: Double { clips.reduce(0) { $0 + $1.duration } }
 }
@@ -52,7 +64,7 @@ struct Project: Identifiable, Codable {
 // (encode(to:) остаётся автоматическим; init(from:) в extension сохраняет обычный init.)
 extension Project {
     private enum CodingKeys: String, CodingKey {
-        case id, name, clips, createdAt, updatedAt, detection, voiceEnhance
+        case id, name, clips, createdAt, updatedAt, detection, voiceEnhance, music
     }
 
     init(from decoder: Decoder) throws {
@@ -64,6 +76,7 @@ extension Project {
         updatedAt = try c.decodeIfPresent(Date.self, forKey: .updatedAt) ?? Date()
         detection = try c.decodeIfPresent(DetectionSettings.self, forKey: .detection) ?? DetectionSettings()
         voiceEnhance = try c.decodeIfPresent(VoiceEnhanceSettings.self, forKey: .voiceEnhance) ?? VoiceEnhanceSettings()
+        music = try c.decodeIfPresent(MusicSettings.self, forKey: .music) ?? MusicSettings()
     }
 }
 

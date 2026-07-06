@@ -57,7 +57,7 @@ final class ExportModel: ObservableObject {
         return panel.runModal() == .OK ? panel.url : nil
     }
 
-    func export(composition: AVAsset, quality: ExportQuality, to url: URL) {
+    func export(composition: AVAsset, audioMix: AVAudioMix? = nil, quality: ExportQuality, to url: URL) {
         guard let session = AVAssetExportSession(asset: composition, presetName: quality.preset) else {
             state = .failed("Не удалось подготовить экспорт для этого видео.")
             return
@@ -65,6 +65,7 @@ final class ExportModel: ObservableObject {
         try? FileManager.default.removeItem(at: url)
         session.outputURL = url
         session.outputFileType = .mp4
+        session.audioMix = audioMix
         self.session = session
         state = .exporting
         progress = 0

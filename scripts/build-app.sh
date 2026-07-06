@@ -25,6 +25,9 @@ cp Resources/Info.plist "$APP/Contents/Info.plist"
 if [ -f Resources/AppIcon.icns ]; then
   cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 fi
+if [ -d Resources/Music ]; then
+  cp -R Resources/Music "$APP/Contents/Resources/Music"
+fi
 
 codesign --force -s - "$APP" 2>/dev/null
 

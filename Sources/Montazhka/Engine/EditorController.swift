@@ -23,6 +23,7 @@ final class EditorController: ObservableObject {
     @Published var waveformVersion = 0
     @Published var showPausePanel = false
     @Published var showVoicePanel = false
+    @Published var showMusicPanel = false
     @Published private(set) var voiceStatus: VoiceEnhanceStatus = .idle
     @Published var canUndo = false
     @Published var canRedo = false
@@ -44,6 +45,7 @@ final class EditorController: ObservableObject {
     private var enhancedAudioURLs: [String: URL] = [:]
     private var enhanceDebounce: Task<Void, Never>?
     private var enhanceGeneration = 0
+    private var musicDebounce: Task<Void, Never>?
 
     var duration: Double { project.totalDuration }
 
@@ -121,18 +123,37 @@ final class EditorController: ObservableObject {
 
     // MARK: - Сборка предпросмотра
 
-    private func makeComposition() async -> AVMutableComposition {
+    /// Выбранная мелодия для микса: свой файл важнее встроенной. Если файла нет — музыки нет.
+    func resolvedMusic() -> MusicInput? {
+        let settings = project.music
+        guard settings.enabled else { return nil }
+        let volume = Float(settings.volume / 100)
+        if let path = settings.customPath {
+            guard FileManager.default.fileExists(atPath: path) else { return nil }
+            return MusicInput(url: URL(fileURLWithPath: path), volume: volume)
+        }
+        if let id = settings.trackID, let track = MusicLibrary.track(id: id) {
+            return MusicInput(url: track.url, volume: volume)
+        }
+        return nil
+    }
+
+    private func makeComposition() async -> (composition: AVMutableComposition, audioMix: AVAudioMix?) {
         await CompositionBuilder.build(
             clips: project.clips,
-            enhancedAudio: project.voiceEnhance.enabled ? enhancedAudioURLs : [:]
+            enhancedAudio: project.voiceEnhance.enabled ? enhancedAudioURLs : [:],
+            music: resolvedMusic()
         )
     }
 
     /// Композиция для экспорта. Если улучшение включено — дожидается обработки всех
     /// исходников; при неудаче отдаёт оригинальный звук и текст предупреждения.
-    func compositionForExport() async -> (composition: AVMutableComposition, audioWarning: String?) {
+    func compositionForExport() async -> (composition: AVMutableComposition,
+                                          audioMix: AVAudioMix?,
+                                          audioWarning: String?) {
         guard project.voiceEnhance.enabled else {
-            return (await makeComposition(), nil)
+            let (composition, audioMix) = await makeComposition()
+            return (composition, audioMix, nil)
         }
         let settings = project.voiceEnhance
         var ready: [String: URL] = [:]
@@ -148,11 +169,13 @@ final class EditorController: ObservableObject {
                 hadFailure = true
             }
         }
-        let composition = await CompositionBuilder.build(clips: project.clips, enhancedAudio: ready)
+        let (composition, audioMix) = await CompositionBuilder.build(clips: project.clips,
+                                                                     enhancedAudio: ready,
+                                                                     music: resolvedMusic())
         let warning = hadFailure
             ? "Не получилось обработать звук — видео сохранится с исходной дорожкой."
             : nil
-        return (composition, warning)
+        return (composition, audioMix, warning)
     }
 
     func rebuildAndSeek(to time: Double?) {
@@ -162,9 +185,11 @@ final class EditorController: ObservableObject {
         player.pause()
         Task { [weak self] in
             guard let self else { return }
-            let composition = await self.makeComposition()
+            let (composition, audioMix) = await self.makeComposition()
             guard generation == self.rebuildGeneration else { return }
-            self.player.replaceCurrentItem(with: AVPlayerItem(asset: composition))
+            let item = AVPlayerItem(asset: composition)
+            item.audioMix = audioMix
+            self.player.replaceCurrentItem(with: item)
             if let time {
                 let clamped = min(max(0, time), max(0, self.duration - 0.001))
                 await self.player.seek(to: CMTime(seconds: clamped, preferredTimescale: 600),
@@ -338,6 +363,26 @@ final class EditorController: ObservableObject {
         guard settings != project.detection else { return }
         project.detection = settings
         scheduleSave()
+    }
+
+    // MARK: - Фоновая музыка
+
+    func updateMusicSettings(_ settings: MusicSettings) {
+        guard settings != project.music else { return }
+        let onlyVolumeChanged = { var a = settings; var b = project.music; a.volume = 0; b.volume = 0; return a == b }()
+        project.music = settings
+        scheduleSave()
+        // Ползунок громкости шлёт значения непрерывно — пересобираем после паузы.
+        musicDebounce?.cancel()
+        if onlyVolumeChanged {
+            musicDebounce = Task { [weak self] in
+                try? await Task.sleep(nanoseconds: 250_000_000)
+                guard !Task.isCancelled else { return }
+                self?.rebuildAndSeek(to: self?.currentTime)
+            }
+        } else {
+            rebuildAndSeek(to: currentTime)
+        }
     }
 
     // MARK: - Улучшение голоса

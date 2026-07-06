@@ -19,7 +19,11 @@ struct EditorView: View {
                     playerArea
                     TransportBar(controller: controller)
                 }
-                if controller.showVoicePanel {
+                if controller.showMusicPanel {
+                    MusicPanel(controller: controller)
+                        .frame(width: 300)
+                        .transition(.move(edge: .trailing).combined(with: .opacity))
+                } else if controller.showVoicePanel {
                     VoicePanel(controller: controller)
                         .frame(width: 300)
                         .transition(.move(edge: .trailing).combined(with: .opacity))
@@ -32,6 +36,7 @@ struct EditorView: View {
             .padding(.horizontal, 16)
             .animation(.easeInOut(duration: 0.2), value: controller.showPausePanel)
             .animation(.easeInOut(duration: 0.2), value: controller.showVoicePanel)
+            .animation(.easeInOut(duration: 0.2), value: controller.showMusicPanel)
 
             TimelineView(controller: controller)
                 .frame(height: 168)
@@ -93,7 +98,10 @@ struct EditorView: View {
             Button {
                 withAnimation {
                     controller.showPausePanel.toggle()
-                    if controller.showPausePanel { controller.showVoicePanel = false }
+                    if controller.showPausePanel {
+                        controller.showVoicePanel = false
+                        controller.showMusicPanel = false
+                    }
                 }
             } label: {
                 Label("Найти паузы", systemImage: "waveform.badge.magnifyingglass")
@@ -104,13 +112,30 @@ struct EditorView: View {
             Button {
                 withAnimation {
                     controller.showVoicePanel.toggle()
-                    if controller.showVoicePanel { controller.showPausePanel = false }
+                    if controller.showVoicePanel {
+                        controller.showPausePanel = false
+                        controller.showMusicPanel = false
+                    }
                 }
             } label: {
                 Label("Улучшить голос", systemImage: "waveform.and.mic")
             }
             .buttonStyle(.bordered)
             .tint(controller.showVoicePanel || controller.project.voiceEnhance.enabled ? Theme.accent : nil)
+
+            Button {
+                withAnimation {
+                    controller.showMusicPanel.toggle()
+                    if controller.showMusicPanel {
+                        controller.showPausePanel = false
+                        controller.showVoicePanel = false
+                    }
+                }
+            } label: {
+                Label("Музыка", systemImage: "music.note")
+            }
+            .buttonStyle(.bordered)
+            .tint(controller.showMusicPanel || controller.project.music.enabled ? Theme.accent : nil)
 
             Button {
                 controller.player.pause()

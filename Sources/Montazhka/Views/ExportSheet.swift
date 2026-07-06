@@ -64,9 +64,9 @@ struct ExportSheet: View {
     private func startExport() {
         guard let url = export.chooseDestination(projectName: controller.project.name) else { return }
         Task {
-            let (composition, warning) = await controller.compositionForExport()
+            let (composition, audioMix, warning) = await controller.compositionForExport()
             audioWarning = warning
-            export.export(composition: composition, quality: quality, to: url)
+            export.export(composition: composition, audioMix: audioMix, quality: quality, to: url)
         }
     }
 
