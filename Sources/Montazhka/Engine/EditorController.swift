@@ -25,6 +25,7 @@ final class EditorController: ObservableObject {
     @Published var showVoicePanel = false
     @Published var showMusicPanel = false
     @Published private(set) var voiceStatus: VoiceEnhanceStatus = .idle
+    @Published private(set) var musicProcessing = false
     @Published var canUndo = false
     @Published var canRedo = false
     @Published var missingFilesMessage: String?
@@ -32,6 +33,7 @@ final class EditorController: ObservableObject {
     let player = AVPlayer()
     let waveforms: WaveformStore
     let voiceStore: VoiceEnhanceStore
+    let musicEQStore: MusicEQStore
     private let store: ProjectStore
 
     private var timeObserver: Any?
@@ -54,6 +56,7 @@ final class EditorController: ObservableObject {
         self.store = store
         self.waveforms = WaveformStore(cacheDir: store.waveformsDir)
         self.voiceStore = VoiceEnhanceStore(cacheDir: store.enhancedAudioDir)
+        self.musicEQStore = MusicEQStore(cacheDir: store.musicEQDir)
         player.actionAtItemEnd = .pause
 
         checkMissingFiles()
@@ -124,25 +127,35 @@ final class EditorController: ObservableObject {
     // MARK: - Сборка предпросмотра
 
     /// Выбранная мелодия для микса: свой файл важнее встроенной. Если файла нет — музыки нет.
-    func resolvedMusic() -> MusicInput? {
+    /// При включённой подстройке под голос отдаёт обработанную версию (кэш — мгновенно);
+    /// если обработка не удалась — оригинал.
+    func resolvedMusic() async -> MusicInput? {
         let settings = project.music
         guard settings.enabled else { return nil }
         let volume = Float(settings.volume / 100)
+        var url: URL?
         if let path = settings.customPath {
-            guard FileManager.default.fileExists(atPath: path) else { return nil }
-            return MusicInput(url: URL(fileURLWithPath: path), volume: volume)
+            url = FileManager.default.fileExists(atPath: path) ? URL(fileURLWithPath: path) : nil
+        } else if let id = settings.trackID, let track = MusicLibrary.track(id: id) {
+            url = track.url
         }
-        if let id = settings.trackID, let track = MusicLibrary.track(id: id) {
-            return MusicInput(url: track.url, volume: volume)
+        guard let url else { return nil }
+        guard settings.eqEnabled else { return MusicInput(url: url, volume: volume) }
+
+        musicProcessing = true
+        defer { musicProcessing = false }
+        if let processed = try? await musicEQStore.ensure(source: url.path) {
+            return MusicInput(url: processed, volume: volume)
         }
-        return nil
+        return MusicInput(url: url, volume: volume)
     }
 
     private func makeComposition() async -> (composition: AVMutableComposition, audioMix: AVAudioMix?) {
-        await CompositionBuilder.build(
+        let music = await resolvedMusic()
+        return await CompositionBuilder.build(
             clips: project.clips,
             enhancedAudio: project.voiceEnhance.enabled ? enhancedAudioURLs : [:],
-            music: resolvedMusic()
+            music: music
         )
     }
 
@@ -169,9 +182,10 @@ final class EditorController: ObservableObject {
                 hadFailure = true
             }
         }
+        let music = await resolvedMusic()
         let (composition, audioMix) = await CompositionBuilder.build(clips: project.clips,
                                                                      enhancedAudio: ready,
-                                                                     music: resolvedMusic())
+                                                                     music: music)
         let warning = hadFailure
             ? "Не получилось обработать звук — видео сохранится с исходной дорожкой."
             : nil

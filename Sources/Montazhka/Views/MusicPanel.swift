@@ -30,6 +30,7 @@ struct MusicPanel: View {
                     toggleBlock
                     tracksBlock
                     volumeBlock
+                    eqBlock
                     warningBlock
                 }
                 .padding(.horizontal, 16)
@@ -113,6 +114,28 @@ struct MusicPanel: View {
             range: 0...100, step: 1,
             display: { "\(Int($0)) %" }
         )
+        .disabled(!settings.enabled)
+        .opacity(settings.enabled ? 1 : 0.5)
+    }
+
+    private var eqBlock: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Toggle("Не мешать голосу", isOn: $settings.eqEnabled)
+                .toggleStyle(.checkbox)
+                .font(.system(size: 13, weight: .semibold, design: .rounded))
+                .foregroundStyle(Theme.textPrimary)
+            Text("Приглушает в музыке частоты, на которых звучит речь, и верхние частоты. Голос слышно чётче. Без галочки музыка играет как в оригинале.")
+                .font(.system(size: 11))
+                .foregroundStyle(Theme.textSecondary)
+            if controller.musicProcessing {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("Обрабатываю музыку…")
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.textSecondary)
+                }
+            }
+        }
         .disabled(!settings.enabled)
         .opacity(settings.enabled ? 1 : 0.5)
     }

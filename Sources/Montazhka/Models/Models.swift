@@ -45,6 +45,25 @@ struct MusicSettings: Codable, Equatable {
     var customPath: String?
     /// Громкость музыки 0–100 (голос всегда 100).
     var volume: Double = 18
+    /// Подстроить музыку под голос: срезать частоты, где звучит речь, и верха.
+    /// Выключено — играет оригинальное звучание.
+    var eqEnabled = true
+}
+
+// Проекты, сохранённые до появления галочки эквалайзера, открываются как раньше.
+extension MusicSettings {
+    private enum CodingKeys: String, CodingKey {
+        case enabled, trackID, customPath, volume, eqEnabled
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? false
+        trackID = try c.decodeIfPresent(String.self, forKey: .trackID)
+        customPath = try c.decodeIfPresent(String.self, forKey: .customPath)
+        volume = try c.decodeIfPresent(Double.self, forKey: .volume) ?? 18
+        eqEnabled = try c.decodeIfPresent(Bool.self, forKey: .eqEnabled) ?? true
+    }
 }
 
 struct Project: Identifiable, Codable {

@@ -43,6 +43,7 @@ enum SelfTest {
         await testAudioPipeline()
         await testVoiceEnhance()
         await testBackgroundMusic()
+        await testMusicEQ()
     }
 
     /// Генерирует то же 12-секундное тестовое видео в указанный файл (для ручной проверки интерфейса).
@@ -428,5 +429,69 @@ enum SelfTest {
         let decoded = try? decoder.decode(Project.self, from: Data(oldJSON.utf8))
         check(decoded != nil && decoded?.music == MusicSettings(),
               "старый проект без настроек музыки открывается с музыкой по умолчанию (выключена)")
+    }
+
+    // MARK: - Эквалайзер музыки («не мешать голосу»)
+
+    private static func testMusicEQ() async {
+        print("Эквалайзер музыки (тоны 2500 Гц и 220 Гц):")
+        let cacheDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("montazhka-selftest-eq-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: cacheDir) }
+
+        // Тон в зоне речи (2500 Гц) должен приглушиться примерно на 5 дБ,
+        // низкий тон (220 Гц) — почти не измениться.
+        func renderedRMS(frequency: Double) async -> (original: Double, processed: Double)? {
+            let src = cacheDir.appendingPathComponent("tone-\(Int(frequency)).mov")
+            let out = cacheDir.appendingPathComponent("tone-\(Int(frequency))-eq.caf")
+            do {
+                try await TestVideoFactory.make(segments: [(4.0, 0.3)], toneFrequency: frequency, to: src)
+                try await Task.detached {
+                    try MusicEQ.render(sourcePath: src.path, to: out, isCancelled: { false })
+                }.value
+            } catch {
+                return nil
+            }
+            let waveStore = WaveformStore(cacheDir: cacheDir)
+            guard let origPeaks = await waveStore.ensure(path: src.path),
+                  let eqPeaks = await waveStore.ensure(path: out.path) else { return nil }
+            func rms(_ peaks: [Float]) -> Double {
+                let inner = peaks.dropFirst(50).dropLast(50)
+                guard !inner.isEmpty else { return 0 }
+                return Double(inner.reduce(0, +)) / Double(inner.count)
+            }
+            return (rms(origPeaks), rms(eqPeaks))
+        }
+
+        guard let speech = await renderedRMS(frequency: 2500) else {
+            check(false, "обработка тона 2500 Гц")
+            return
+        }
+        check(speech.processed < speech.original * 0.75,
+              "зона речи приглушена (было \(String(format: "%.3f", speech.original)), стало \(String(format: "%.3f", speech.processed)))")
+
+        guard let low = await renderedRMS(frequency: 220) else {
+            check(false, "обработка тона 220 Гц")
+            return
+        }
+        check(low.processed > low.original * 0.55,
+              "низкий тон почти не тронут (было \(String(format: "%.3f", low.original)), стало \(String(format: "%.3f", low.processed)))")
+
+        // Кэш-хранилище: второй запрос отдаёт готовый файл
+        let store = MusicEQStore(cacheDir: cacheDir)
+        let src = cacheDir.appendingPathComponent("tone-2500.mov")
+        if let first = try? await store.ensure(source: src.path) {
+            let second = try? await store.ensure(source: src.path)
+            check(second == first, "повторная обработка музыки берётся из кэша")
+        } else {
+            check(false, "обработка через кэш-хранилище музыки")
+        }
+
+        // Настройки музыки без поля галочки читаются с включённой подстройкой
+        let json = #"{"enabled":true,"volume":18}"#
+        let decoded = try? JSONDecoder().decode(MusicSettings.self, from: Data(json.utf8))
+        check(decoded?.eqEnabled == true,
+              "настройки музыки без галочки читаются с включённой подстройкой под голос")
     }
 }

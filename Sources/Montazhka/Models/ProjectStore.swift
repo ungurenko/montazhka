@@ -5,6 +5,7 @@ final class ProjectStore {
     let projectsDir: URL
     let waveformsDir: URL
     let enhancedAudioDir: URL
+    let musicEQDir: URL
 
     init() {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -12,9 +13,11 @@ final class ProjectStore {
         projectsDir = base.appendingPathComponent("Projects", isDirectory: true)
         waveformsDir = base.appendingPathComponent("Waveforms", isDirectory: true)
         enhancedAudioDir = base.appendingPathComponent("EnhancedAudio", isDirectory: true)
+        musicEQDir = base.appendingPathComponent("MusicEQ", isDirectory: true)
         try? FileManager.default.createDirectory(at: projectsDir, withIntermediateDirectories: true)
         try? FileManager.default.createDirectory(at: waveformsDir, withIntermediateDirectories: true)
         try? FileManager.default.createDirectory(at: enhancedAudioDir, withIntermediateDirectories: true)
+        try? FileManager.default.createDirectory(at: musicEQDir, withIntermediateDirectories: true)
     }
 
     private func fileURL(for id: UUID) -> URL {

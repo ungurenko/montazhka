@@ -10,7 +10,10 @@ enum TestVideoFactory {
     }
 
     /// Участки звука с точной громкостью: (длительность сек, амплитуда синуса 0…1).
-    static func make(segments: [(duration: Double, amplitude: Double)], to url: URL) async throws {
+    /// `toneFrequency` — частота синуса в Гц (по умолчанию 220, «голосовая»).
+    static func make(segments: [(duration: Double, amplitude: Double)],
+                     toneFrequency: Double = 220,
+                     to url: URL) async throws {
         try? FileManager.default.removeItem(at: url)
         let writer = try AVAssetWriter(outputURL: url, fileType: .mov)
 
@@ -67,12 +70,12 @@ enum TestVideoFactory {
         memset(CVPixelBufferGetBaseAddress(frame), 0, CVPixelBufferGetDataSize(frame))
         CVPixelBufferUnlockBaseAddress(frame, [])
 
-        // Звук одним куском: синус 220 Гц заданной амплитуды («речь» громче, «шум» тише)
+        // Звук одним куском: синус заданной частоты и амплитуды («речь» громче, «шум» тише)
         var samples: [Int16] = []
         for segment in segments {
             let count = Int(segment.duration * sampleRate)
             for i in 0..<count {
-                let value = sin(2.0 * .pi * 220.0 * Double(i) / sampleRate) * segment.amplitude
+                let value = sin(2.0 * .pi * toneFrequency * Double(i) / sampleRate) * segment.amplitude
                 samples.append(Int16(value * 32767))
             }
         }

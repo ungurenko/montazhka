@@ -246,9 +246,9 @@ enum VoiceEnhancer {
         }
     }
 
-    // MARK: - Чтение исходника
+    // MARK: - Чтение исходника (используется и обработкой музыки — MusicEQ)
 
-    private static func loadAudioTrackSync(_ asset: AVURLAsset) -> AVAssetTrack? {
+    static func loadAudioTrackSync(_ asset: AVURLAsset) -> AVAssetTrack? {
         let semaphore = DispatchSemaphore(value: 0)
         nonisolated(unsafe) var track: AVAssetTrack?
         asset.loadTracks(withMediaType: .audio) { tracks, _ in
@@ -260,7 +260,7 @@ enum VoiceEnhancer {
     }
 
     /// Узнаёт частоту и число каналов, заглянув в первый кусок данных дорожки.
-    private static func pcmInfo(of track: AVAssetTrack, asset: AVURLAsset) -> (sampleRate: Double, channels: Int) {
+    static func pcmInfo(of track: AVAssetTrack, asset: AVURLAsset) -> (sampleRate: Double, channels: Int) {
         guard let reader = try? AVAssetReader(asset: asset) else { return (48000, 2) }
         let probe = AVAssetReaderTrackOutput(track: track, outputSettings: nil)
         guard reader.canAdd(probe) else { return (48000, 2) }
@@ -280,7 +280,7 @@ enum VoiceEnhancer {
 
 /// Кормит источник движка сэмплами из AVAssetReader.
 /// Зовётся синхронно внутри renderOffline — одного потока достаточно, замки не нужны.
-private final class ReaderFeeder {
+final class ReaderFeeder {
     private let reader: AVAssetReader
     private let output: AVAssetReaderTrackOutput
     private let channels: Int
