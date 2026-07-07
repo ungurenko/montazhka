@@ -7,6 +7,7 @@ struct ExportSheet: View {
     @StateObject private var export = ExportModel()
     @State private var quality: ExportQuality = .high
     @State private var audioWarning: String?
+    @State private var sourceSize: CGSize?
 
     var body: some View {
         VStack(spacing: 20) {
@@ -24,6 +25,7 @@ struct ExportSheet: View {
         .padding(28)
         .frame(width: 440)
         .background(Theme.background)
+        .task { sourceSize = await controller.sourceDisplaySize() }
     }
 
     // MARK: - Выбор качества
@@ -41,7 +43,11 @@ struct ExportSheet: View {
 
             VStack(spacing: 8) {
                 ForEach(ExportQuality.allCases) { q in
-                    QualityRow(quality: q, selected: quality == q) { quality = q }
+                    QualityRow(quality: q,
+                               estimate: q.estimateText(
+                                   duration: controller.duration,
+                                   displaySize: sourceSize ?? CGSize(width: 1920, height: 1080)),
+                               selected: quality == q) { quality = q }
                 }
             }
 
@@ -148,6 +154,7 @@ struct ExportSheet: View {
 
 private struct QualityRow: View {
     let quality: ExportQuality
+    let estimate: String
     let selected: Bool
     let select: () -> Void
 
@@ -166,6 +173,9 @@ private struct QualityRow: View {
                         .foregroundStyle(Theme.textSecondary)
                 }
                 Spacer()
+                Text(estimate)
+                    .font(.system(size: 12, design: .monospaced))
+                    .foregroundStyle(selected ? Theme.accent : Theme.textSecondary)
             }
             .padding(12)
             .background(Theme.card)

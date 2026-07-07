@@ -40,6 +40,7 @@ enum SelfTest {
 
     private static func runAll() async {
         testTimelineMath()
+        testExportEstimator()
         await testAudioPipeline()
         await testVoiceEnhance()
         await testBackgroundMusic()
@@ -106,6 +107,64 @@ enum SelfTest {
               "разрез у самого края отклоняется")
     }
 
+    // MARK: - Оценка размера экспорта
+
+    private static func testExportEstimator() {
+        print("Оценка размера экспорта:")
+        let fullHD = CGSize(width: 1920, height: 1080)
+
+        check(ExportQuality.compact.targetDimensions(forDisplaySize: fullHD) == CGSize(width: 1280, height: 720),
+              "компактное: 1920×1080 → 1280×720")
+        check(ExportQuality.compact.targetDimensions(forDisplaySize: CGSize(width: 1080, height: 1920))
+              == CGSize(width: 720, height: 1280),
+              "компактное: вертикальное 1080×1920 → 720×1280")
+        check(ExportQuality.medium.targetDimensions(forDisplaySize: CGSize(width: 3840, height: 2160))
+              == CGSize(width: 1920, height: 1080),
+              "среднее: 4K ужимается до Full HD")
+        check(ExportQuality.maximum.targetDimensions(forDisplaySize: CGSize(width: 3840, height: 2160))
+              == CGSize(width: 3840, height: 2160),
+              "максимальное: 4K остаётся как есть")
+        check(ExportQuality.compact.targetDimensions(forDisplaySize: CGSize(width: 320, height: 180))
+              == CGSize(width: 320, height: 180),
+              "маленькое видео не растягивается")
+        let odd = ExportQuality.medium.targetDimensions(forDisplaySize: CGSize(width: 1279, height: 717))
+        check(Int(odd.width) % 2 == 0 && Int(odd.height) % 2 == 0,
+              "стороны кадра всегда чётные (получено \(Int(odd.width))×\(Int(odd.height)))")
+
+        check(ExportQuality.compact.estimatedBytes(duration: 300, displaySize: fullHD) == 81_744_000,
+              "компактное, 5 мин Full HD: 81 744 000 байт (≈ 82 МБ)")
+        check(ExportQuality.medium.estimatedBytes(duration: 300, displaySize: fullHD) == 180_492_000,
+              "среднее, 5 мин Full HD: 180 492 000 байт (≈ 180 МБ)")
+        check(ExportQuality.compact.estimateText(duration: 300, displaySize: fullHD) == "≈ 82 МБ",
+              "подпись «≈ 82 МБ»")
+        check(ExportQuality.maximum.estimateText(duration: 1200, displaySize: fullHD) == "≈ 2.5 ГБ",
+              "длинное видео подписывается в гигабайтах")
+    }
+
+    /// Типы верхнеуровневых кусков MP4-файла по порядку — для проверки, что `moov`
+    /// (оглавление) записан раньше `mdat` (данных): такой файл стримится в мессенджерах.
+    private static func topLevelAtoms(of url: URL) -> [String] {
+        guard let data = try? Data(contentsOf: url) else { return [] }
+        var atoms: [String] = []
+        var offset = 0
+        while offset + 8 <= data.count {
+            var size = 0
+            for i in 0..<4 { size = size << 8 | Int(data[offset + i]) }
+            guard let type = String(bytes: data[(offset + 4)..<(offset + 8)], encoding: .ascii) else { break }
+            atoms.append(type)
+            if size == 1 { // 64-битный размер в следующих 8 байтах
+                guard offset + 16 <= data.count else { break }
+                size = 0
+                for i in 8..<16 { size = size << 8 | Int(data[offset + i]) }
+            } else if size == 0 {
+                break // кусок до конца файла
+            }
+            guard size >= 8 else { break }
+            offset += size
+        }
+        return atoms
+    }
+
     // MARK: - Звук, склейка, экспорт
 
     private static func testAudioPipeline() async {
@@ -169,20 +228,19 @@ enum SelfTest {
         let duration = (try? await composition.load(.duration).seconds) ?? 0
         check(approx(duration, 8.5, 0.2), "длительность склейки 8.5 сек (получено \(String(format: "%.2f", duration)))")
 
-        // Экспорт
+        // Экспорт собственным перекодировщиком (компактное качество)
         let out = FileManager.default.temporaryDirectory
             .appendingPathComponent("montazhka-selftest-\(UUID().uuidString).mp4")
         defer { try? FileManager.default.removeItem(at: out) }
-        guard let session = AVAssetExportSession(asset: composition,
-                                                 presetName: AVAssetExportPreset1280x720) else {
-            check(false, "создание сессии экспорта")
+        do {
+            let settings = try await Transcoder.settings(for: .compact, composition: composition)
+            try await Transcoder.export(composition: composition, audioMix: nil,
+                                        settings: settings, to: out) { _ in }
+            check(true, "экспорт завершился")
+        } catch {
+            check(false, "экспорт завершился (ошибка: \(error.localizedDescription))")
             return
         }
-        session.outputURL = out
-        session.outputFileType = .mp4
-        await session.export()
-        check(session.status == .completed,
-              "экспорт завершился (статус: \(session.status.rawValue), ошибка: \(session.error?.localizedDescription ?? "нет"))")
 
         let exported = AVURLAsset(url: out)
         let exportedDuration = (try? await exported.load(.duration).seconds) ?? 0
@@ -191,6 +249,21 @@ enum SelfTest {
         let videoTracks = (try? await exported.loadTracks(withMediaType: .video)) ?? []
         let audioTracks = (try? await exported.loadTracks(withMediaType: .audio)) ?? []
         check(!videoTracks.isEmpty && !audioTracks.isEmpty, "в готовом файле есть и видео, и звук")
+
+        // Размер не больше оценки с запасом (VBR может недобрать — это нормально)
+        let estimate = ExportQuality.compact.estimatedBytes(duration: 8.5,
+                                                            displaySize: CGSize(width: 320, height: 180))
+        let actualSize = (try? FileManager.default.attributesOfItem(atPath: out.path)[.size] as? Int64) ?? 0
+        check(actualSize > 0 && actualSize <= Int64(Double(estimate) * 1.4),
+              "размер файла в пределах оценки (\(actualSize) байт при оценке \(estimate))")
+
+        // moov раньше mdat — файл можно смотреть в мессенджере не скачивая целиком
+        let atoms = topLevelAtoms(of: out)
+        if let moov = atoms.firstIndex(of: "moov"), let mdat = atoms.firstIndex(of: "mdat") {
+            check(moov < mdat, "оглавление MP4 в начале файла (стриминг)")
+        } else {
+            check(false, "оглавление MP4 в начале файла (куски: \(atoms.joined(separator: ", ")))")
+        }
     }
 
     // MARK: - Улучшение голоса
@@ -368,17 +441,20 @@ enum SelfTest {
         check(audioMix != nil && audioMix?.inputParameters.count == 1,
               "микс громкости построен для музыкальной дорожки")
 
-        // Экспорт с музыкой и без — в «тишине» музыкальная версия заметно громче
+        // Экспорт с музыкой и без — в «тишине» музыкальная версия заметно громче.
+        // Идёт через собственный перекодировщик: заодно проверяем, что микс музыки
+        // (луп, громкость, затухание) переживает новый путь экспорта.
         func exportMP4(_ asset: AVMutableComposition, mix: AVAudioMix?) async -> URL? {
             let out = FileManager.default.temporaryDirectory
                 .appendingPathComponent("montazhka-selftest-music-out-\(UUID().uuidString).mp4")
-            guard let session = AVAssetExportSession(asset: asset,
-                                                     presetName: AVAssetExportPreset1280x720) else { return nil }
-            session.outputURL = out
-            session.outputFileType = .mp4
-            session.audioMix = mix
-            await session.export()
-            return session.status == .completed ? out : nil
+            do {
+                let settings = try await Transcoder.settings(for: .medium, composition: asset)
+                try await Transcoder.export(composition: asset, audioMix: mix,
+                                            settings: settings, to: out) { _ in }
+                return out
+            } catch {
+                return nil
+            }
         }
 
         let (plainComposition, _) = await CompositionBuilder.build(clips: [clip])

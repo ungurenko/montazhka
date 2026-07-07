@@ -50,8 +50,23 @@ final class EditorController: ObservableObject {
     private var musicDebounce: Task<Void, Never>?
     private var seekTask: Task<Void, Never>?
     private var latestSeekTarget: Double?
+    private var displaySizeCache: [String: CGSize] = [:]
 
     var duration: Double { project.totalDuration }
+
+    /// Размер кадра первого клипа с учётом поворота — для оценки размера файла в экспорте.
+    func sourceDisplaySize() async -> CGSize? {
+        guard let clip = project.clips.first else { return nil }
+        if let cached = displaySizeCache[clip.sourcePath] { return cached }
+        let asset = AVURLAsset(url: clip.url)
+        guard let track = try? await asset.loadTracks(withMediaType: .video).first,
+              let naturalSize = try? await track.load(.naturalSize),
+              let transform = try? await track.load(.preferredTransform) else { return nil }
+        let rect = CGRect(origin: .zero, size: naturalSize).applying(transform)
+        let display = CGSize(width: abs(rect.width), height: abs(rect.height))
+        displaySizeCache[clip.sourcePath] = display
+        return display
+    }
 
     init(project: Project, store: ProjectStore) {
         self.project = project
