@@ -48,6 +48,8 @@ final class EditorController: ObservableObject {
     private var enhanceDebounce: Task<Void, Never>?
     private var enhanceGeneration = 0
     private var musicDebounce: Task<Void, Never>?
+    private var seekTask: Task<Void, Never>?
+    private var latestSeekTarget: Double?
 
     var duration: Double { project.totalDuration }
 
@@ -229,9 +231,21 @@ final class EditorController: ObservableObject {
     func seek(to time: Double) {
         cancelPreviewStop()
         let clamped = min(max(0, time), max(0, duration - 0.001))
-        currentTime = clamped
-        player.seek(to: CMTime(seconds: clamped, preferredTimescale: 600),
+        currentTime = clamped          // курсор следует за мышью мгновенно
+        // Коалесинг: держим одну перемотку в полёте, цель — всегда самая свежая.
+        // Промежуточные цели при быстрой протяжке отбрасываются, картинка не копит отставание.
+        latestSeekTarget = clamped
+        guard seekTask == nil else { return }
+        seekTask = Task { [weak self] in
+            guard let self else { return }
+            while let target = self.latestSeekTarget {
+                self.latestSeekTarget = nil
+                await self.player.seek(
+                    to: CMTime(seconds: target, preferredTimescale: 600),
                     toleranceBefore: .zero, toleranceAfter: .zero)
+            }
+            self.seekTask = nil
+        }
     }
 
     func stepFrames(_ frames: Int) {
@@ -293,12 +307,21 @@ final class EditorController: ObservableObject {
         guard !urls.isEmpty else { return }
         Task { [weak self] in
             guard let self else { return }
-            var newClips: [Clip] = []
-            for url in urls {
-                let asset = AVURLAsset(url: url)
-                guard let duration = try? await asset.load(.duration),
-                      duration.seconds.isFinite, duration.seconds > 0.1 else { continue }
-                newClips.append(Clip(sourcePath: url.path, start: 0, end: duration.seconds))
+            // Длительности читаем параллельно; порядок восстанавливаем по индексу.
+            let loaded = await withTaskGroup(of: (Int, URL, Double?).self) { group in
+                for (i, url) in urls.enumerated() {
+                    group.addTask {
+                        let seconds = (try? await AVURLAsset(url: url).load(.duration))?.seconds
+                        let valid = (seconds?.isFinite == true && (seconds ?? 0) > 0.1) ? seconds : nil
+                        return (i, url, valid)
+                    }
+                }
+                var acc: [(Int, URL, Double?)] = []
+                for await result in group { acc.append(result) }
+                return acc.sorted { $0.0 < $1.0 }
+            }
+            let newClips = loaded.compactMap { _, url, seconds in
+                seconds.map { Clip(sourcePath: url.path, start: 0, end: $0) }
             }
             guard !newClips.isEmpty else { return }
             self.beginEdit()
@@ -472,8 +495,12 @@ final class EditorController: ObservableObject {
         let settings = project.detection
         Task { [weak self] in
             guard let self else { return }
-            for path in Set(clips.map(\.sourcePath)) {
-                await self.waveforms.ensure(path: path)
+            // Волны всех файлов считаем параллельно: ensure внутри распаковывает звук
+            // в отдельной задаче, поэтому последовательный await зря терял время.
+            await withTaskGroup(of: Void.self) { group in
+                for path in Set(clips.map(\.sourcePath)) {
+                    group.addTask { await self.waveforms.ensure(path: path) }
+                }
             }
             let found = SilenceDetector.findPauses(
                 clips: clips,
