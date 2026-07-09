@@ -40,6 +40,7 @@ enum SelfTest {
 
     private static func runAll() async {
         testTimelineMath()
+        testEditHistory()
         testExportEstimator()
         await testAudioPipeline()
         await testVoiceEnhance()
@@ -105,6 +106,41 @@ enum SelfTest {
         }
         check(TimelineOps.splitting(clips: [clip(0, 10)], at: 0, offset: 0.01) == nil,
               "разрез у самого края отклоняется")
+    }
+
+    // MARK: - История отмены
+
+    private static func testEditHistory() {
+        print("История отмены:")
+        var history = EditHistory<Int>(limit: 3)
+
+        check(!history.canUndo && !history.canRedo, "новая история пуста")
+        check(history.undo(current: 0) == nil && history.redo(current: 0) == nil,
+              "отмена и повтор на пустой истории ничего не возвращают")
+
+        // Правки: 1 → 2 → 3 (record сохраняет состояние ДО правки)
+        history.record(1)
+        history.record(2)
+        check(history.canUndo && !history.canRedo, "после записи есть отмена, повтора нет")
+
+        let undone = history.undo(current: 3)
+        check(undone == 2 && history.canRedo, "отмена возвращает предыдущий снимок (2)")
+        check(history.undo(current: 2) == 1, "вторая отмена возвращает первый снимок (1)")
+        check(history.redo(current: 1) == 2 && history.redo(current: 2) == 3,
+              "повтор проходит цепочку обратно (2, затем 3)")
+        check(!history.canRedo, "после полного повтора повторять нечего")
+
+        // Новая правка сбрасывает ветку повтора
+        _ = history.undo(current: 3)
+        history.record(3)
+        check(!history.canRedo, "новая запись сбрасывает ветку повтора")
+
+        // Лимит: старые снимки вытесняются
+        var capped = EditHistory<Int>(limit: 3)
+        for value in 1...5 { capped.record(value) }
+        check(capped.undo(current: 6) == 5 && capped.undo(current: 5) == 4
+              && capped.undo(current: 4) == 3 && !capped.canUndo,
+              "лимит 3: остаются только три последних снимка")
     }
 
     // MARK: - Оценка размера экспорта
