@@ -23,10 +23,14 @@ enum SelfTest {
     /// а тесты по завершении сами выходят из процесса.
     static func run() -> Never {
         setvbuf(stdout, nil, _IONBF, 0) // вывод без буферизации — виден сразу
-        // Сторожевой таймер: молчаливое зависание — тоже провал
+        // Сторожевой таймер: молчаливое зависание — тоже провал.
+        // Таймаут можно переопределить: MONTAZHKA_SELFTEST_TIMEOUT=<секунды>.
+        let timeout = ProcessInfo.processInfo.environment["MONTAZHKA_SELFTEST_TIMEOUT"]
+            .flatMap(UInt64.init) ?? 120
         Task.detached {
-            try? await Task.sleep(nanoseconds: 120_000_000_000)
-            print("\nТАЙМАУТ: самопроверка не уложилась в 120 сек")
+            try? await Task.sleep(nanoseconds: timeout * 1_000_000_000)
+            print("\nТАЙМАУТ: самопроверка не уложилась в \(timeout) сек")
+            dumpOwnStacks()
             exit(3)
         }
         Task.detached {
@@ -36,6 +40,27 @@ enum SelfTest {
         }
         RunLoop.main.run()
         exit(2)
+    }
+
+    /// Печатает стеки всех потоков через /usr/bin/sample — редкое зависание
+    /// (например, стопор системного видеокодировщика) само оставляет улики.
+    private static func dumpOwnStacks() {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/sample")
+        process.arguments = ["\(getpid())", "3"]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = pipe
+        guard (try? process.run()) != nil else {
+            print("(не удалось снять стеки: sample недоступен)")
+            return
+        }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        if let text = String(data: data, encoding: .utf8), !text.isEmpty {
+            print("--- Стеки потоков в момент таймаута ---")
+            print(text)
+        }
     }
 
     private static func runAll() async {
