@@ -428,7 +428,7 @@ final class EditorController: ObservableObject {
 
     func updateMusicSettings(_ settings: MusicSettings) {
         guard settings != project.music else { return }
-        let onlyVolumeChanged = { var a = settings; var b = project.music; a.volume = 0; b.volume = 0; return a == b }()
+        let onlyVolumeChanged = settings.differsOnlyByVolume(from: project.music)
         project.music = settings
         scheduleSave()
         // Ползунок громкости шлёт значения непрерывно — пересобираем после паузы.

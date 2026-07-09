@@ -605,5 +605,17 @@ enum SelfTest {
         let decoded = try? JSONDecoder().decode(MusicSettings.self, from: Data(json.utf8))
         check(decoded?.eqEnabled == true,
               "настройки музыки без галочки читаются с включённой подстройкой под голос")
+
+        // Сравнение настроек «изменилась только громкость»
+        var base = MusicSettings()
+        base.enabled = true
+        var volumeOnly = base
+        volumeOnly.volume = 55
+        var trackChanged = base
+        trackChanged.trackID = "calm"
+        check(volumeOnly.differsOnlyByVolume(from: base),
+              "сдвиг громкости распознаётся как «изменилась только громкость»")
+        check(!trackChanged.differsOnlyByVolume(from: base),
+              "смена мелодии — это не «только громкость»")
     }
 }

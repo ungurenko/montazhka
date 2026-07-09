@@ -48,6 +48,15 @@ struct MusicSettings: Codable, Equatable {
     /// Подстроить музыку под голос: срезать частоты, где звучит речь, и верха.
     /// Выключено — играет оригинальное звучание.
     var eqEnabled = true
+
+    /// Настройки совпадают во всём, кроме громкости.
+    func differsOnlyByVolume(from other: MusicSettings) -> Bool {
+        var a = self
+        var b = other
+        a.volume = 0
+        b.volume = 0
+        return a == b
+    }
 }
 
 // Проекты, сохранённые до появления галочки эквалайзера, открываются как раньше.
