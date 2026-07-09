@@ -482,29 +482,39 @@ final class EditorController: ObservableObject {
 
         Task { [weak self] in
             guard let self else { return }
-            var ready: [String: URL] = [:]
-            for (index, path) in sources.enumerated() {
-                do {
-                    let url = try await self.voiceStore.ensure(source: path, settings: settings)
-                    ready[path] = url
-                } catch is CancellationError {
-                    return // уже идёт новый пересчёт
-                } catch VoiceEnhanceError.noAudioTrack {
-                    // без звуковой дорожки — оставляем оригинал
-                } catch {
-                    guard self.enhanceGeneration.isCurrent(generation) else { return }
-                    self.voiceStatus = .failed("Не удалось обработать звук. Предпросмотр и экспорт — с исходным звуком.")
-                    self.enhancedAudioURLs = [:]
-                    return
-                }
-                guard self.enhanceGeneration.isCurrent(generation) else { return }
-                self.voiceStatus = .rendering(done: index + 1, total: sources.count)
-            }
-            guard self.enhanceGeneration.isCurrent(generation) else { return }
+            guard let ready = await self.renderEnhancedAudio(sources: sources,
+                                                             settings: settings,
+                                                             generation: generation) else { return }
             self.enhancedAudioURLs = ready
             self.voiceStatus = .idle
             self.rebuildAndSeek(to: self.currentTime)
         }
+    }
+
+    /// Прогоняет все исходники через обработку голоса, обновляя счётчик прогресса.
+    /// Возвращает nil, если пересчёт устарел, отменён или завершился ошибкой.
+    private func renderEnhancedAudio(sources: [String],
+                                     settings: VoiceEnhanceSettings,
+                                     generation: Int) async -> [String: URL]? {
+        var ready: [String: URL] = [:]
+        for (index, path) in sources.enumerated() {
+            do {
+                ready[path] = try await voiceStore.ensure(source: path, settings: settings)
+            } catch is CancellationError {
+                return nil // уже идёт новый пересчёт
+            } catch VoiceEnhanceError.noAudioTrack {
+                // без звуковой дорожки — оставляем оригинал
+            } catch {
+                guard enhanceGeneration.isCurrent(generation) else { return nil }
+                voiceStatus = .failed("Не удалось обработать звук. Предпросмотр и экспорт — с исходным звуком.")
+                enhancedAudioURLs = [:]
+                return nil
+            }
+            guard enhanceGeneration.isCurrent(generation) else { return nil }
+            voiceStatus = .rendering(done: index + 1, total: sources.count)
+        }
+        guard enhanceGeneration.isCurrent(generation) else { return nil }
+        return ready
     }
 
     // MARK: - Поиск пауз
