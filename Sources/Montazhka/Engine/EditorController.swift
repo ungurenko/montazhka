@@ -10,6 +10,19 @@ enum VoiceEnhanceStatus: Equatable {
     case failed(String)
 }
 
+/// Счётчик поколений асинхронной работы: результат устаревшего поколения отбрасывается.
+private struct Generation {
+    private var value = 0
+
+    /// Начинает новое поколение и возвращает его номер.
+    mutating func advance() -> Int {
+        value += 1
+        return value
+    }
+
+    func isCurrent(_ generation: Int) -> Bool { generation == value }
+}
+
 /// Сердце монтажки: держит проект, собирает предпросмотр, режет, отменяет, сохраняет.
 @MainActor
 final class EditorController: ObservableObject {
@@ -41,11 +54,11 @@ final class EditorController: ObservableObject {
     private var terminateObserver: NSObjectProtocol?
     private var previewBoundary: Any?
     private var history = EditHistory<[Clip]>()
-    private var rebuildGeneration = 0
+    private var rebuildGeneration = Generation()
     private var saveTask: Task<Void, Never>?
     private var enhancedAudioURLs: [String: URL] = [:]
     private var enhanceDebounce: Task<Void, Never>?
-    private var enhanceGeneration = 0
+    private var enhanceGeneration = Generation()
     private var musicDebounce: Task<Void, Never>?
     private var seekTask: Task<Void, Never>?
     private var latestSeekTarget: Double?
@@ -209,14 +222,13 @@ final class EditorController: ObservableObject {
     }
 
     func rebuildAndSeek(to time: Double?) {
-        rebuildGeneration += 1
-        let generation = rebuildGeneration
+        let generation = rebuildGeneration.advance()
         let wasPlaying = player.rate != 0
         player.pause()
         Task { [weak self] in
             guard let self else { return }
             let (composition, audioMix) = await self.makeComposition()
-            guard generation == self.rebuildGeneration else { return }
+            guard self.rebuildGeneration.isCurrent(generation) else { return }
             let item = AVPlayerItem(asset: composition)
             item.audioMix = audioMix
             self.player.replaceCurrentItem(with: item)
@@ -450,8 +462,7 @@ final class EditorController: ObservableObject {
     /// Пересчитывает улучшенный звук для всех исходников и подменяет его в предпросмотре.
     /// До готовности играет прежний звук.
     private func refreshEnhancedAudio() {
-        enhanceGeneration += 1
-        let generation = enhanceGeneration
+        let generation = enhanceGeneration.advance()
         voiceStore.cancelAll()
 
         guard project.voiceEnhance.enabled else {
@@ -481,15 +492,15 @@ final class EditorController: ObservableObject {
                 } catch VoiceEnhanceError.noAudioTrack {
                     // без звуковой дорожки — оставляем оригинал
                 } catch {
-                    guard generation == self.enhanceGeneration else { return }
+                    guard self.enhanceGeneration.isCurrent(generation) else { return }
                     self.voiceStatus = .failed("Не удалось обработать звук. Предпросмотр и экспорт — с исходным звуком.")
                     self.enhancedAudioURLs = [:]
                     return
                 }
-                guard generation == self.enhanceGeneration else { return }
+                guard self.enhanceGeneration.isCurrent(generation) else { return }
                 self.voiceStatus = .rendering(done: index + 1, total: sources.count)
             }
-            guard generation == self.enhanceGeneration else { return }
+            guard self.enhanceGeneration.isCurrent(generation) else { return }
             self.enhancedAudioURLs = ready
             self.voiceStatus = .idle
             self.rebuildAndSeek(to: self.currentTime)
