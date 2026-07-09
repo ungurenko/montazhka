@@ -40,8 +40,7 @@ final class EditorController: ObservableObject {
     private var endObserver: NSObjectProtocol?
     private var terminateObserver: NSObjectProtocol?
     private var previewBoundary: Any?
-    private var undoStack: [[Clip]] = []
-    private var redoStack: [[Clip]] = []
+    private var history = EditHistory<[Clip]>()
     private var rebuildGeneration = 0
     private var saveTask: Task<Void, Never>?
     private var enhancedAudioURLs: [String: URL] = [:]
@@ -286,15 +285,13 @@ final class EditorController: ObservableObject {
     // MARK: - Правки
 
     private func beginEdit() {
-        undoStack.append(project.clips)
-        if undoStack.count > 200 { undoStack.removeFirst() }
-        redoStack.removeAll()
+        history.record(project.clips)
         updateUndoFlags()
     }
 
     private func updateUndoFlags() {
-        canUndo = !undoStack.isEmpty
-        canRedo = !redoStack.isEmpty
+        canUndo = history.canUndo
+        canRedo = history.canRedo
     }
 
     private func afterEdit(seekTo time: Double?) {
@@ -305,15 +302,13 @@ final class EditorController: ObservableObject {
     }
 
     func undo() {
-        guard let previous = undoStack.popLast() else { return }
-        redoStack.append(project.clips)
+        guard let previous = history.undo(current: project.clips) else { return }
         project.clips = previous
         afterEdit(seekTo: min(currentTime, duration))
     }
 
     func redo() {
-        guard let next = redoStack.popLast() else { return }
-        undoStack.append(project.clips)
+        guard let next = history.redo(current: project.clips) else { return }
         project.clips = next
         afterEdit(seekTo: min(currentTime, duration))
     }
