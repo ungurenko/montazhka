@@ -66,6 +66,9 @@ final class EditorController: ObservableObject {
 
     var duration: Double { project.totalDuration }
 
+    /// Уникальные пути исходных файлов на ленте.
+    private var uniqueSourcePaths: Set<String> { Set(project.clips.map(\.sourcePath)) }
+
     /// Размер кадра первого клипа с учётом поворота — для оценки размера файла в экспорте.
     func sourceDisplaySize() async -> CGSize? {
         guard let clip = project.clips.first else { return nil }
@@ -133,7 +136,7 @@ final class EditorController: ObservableObject {
     }
 
     private func checkMissingFiles() {
-        let missing = Set(project.clips.map(\.sourcePath))
+        let missing = uniqueSourcePaths
             .filter { !FileManager.default.fileExists(atPath: $0) }
         guard !missing.isEmpty else { return }
         project.clips.removeAll { missing.contains($0.sourcePath) }
@@ -143,7 +146,7 @@ final class EditorController: ObservableObject {
     }
 
     private func warmUpWaveforms() {
-        for path in Set(project.clips.map(\.sourcePath)) {
+        for path in uniqueSourcePaths {
             Task { [weak self] in
                 guard let self else { return }
                 if await self.waveforms.ensure(path: path) != nil {
@@ -200,7 +203,7 @@ final class EditorController: ObservableObject {
         let settings = project.voiceEnhance
         var ready: [String: URL] = [:]
         var hadFailure = false
-        for path in Set(project.clips.map(\.sourcePath)) {
+        for path in uniqueSourcePaths {
             do {
                 ready[path] = try await voiceStore.ensure(source: path, settings: settings)
             } catch is CancellationError {
@@ -473,7 +476,7 @@ final class EditorController: ObservableObject {
         }
 
         let settings = project.voiceEnhance
-        let sources = Array(Set(project.clips.map(\.sourcePath)))
+        let sources = Array(uniqueSourcePaths)
         guard !sources.isEmpty else {
             voiceStatus = .idle
             return
