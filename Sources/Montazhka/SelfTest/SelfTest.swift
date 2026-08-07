@@ -120,12 +120,19 @@ enum SelfTest {
               "вырезка целого клипа убирает его совсем")
 
         // Разрез
-        if let split = TimelineOps.splitting(clips: [clip(2, 12)], at: 0, offset: 4) {
+        let sourceClip = clip(2, 12)
+        if let split = TimelineOps.splitting(clips: [sourceClip], at: 0, offset: 4) {
             check(split.count == 2
+                  && split[0].id != split[1].id
+                  && split[0].id == sourceClip.id
+                  && approx(split[0].start, 2, 0.001)
                   && approx(split[0].duration, 4, 0.001)
+                  && approx(split[0].end, 6, 0.001)
+                  && approx(split[1].start, 6, 0.001)
                   && approx(split[1].duration, 6, 0.001)
-                  && approx(split[1].start, 6, 0.001),
-                  "разрез даёт два куска без потери длительности")
+                  && approx(split[1].end, 12, 0.001)
+                  && approx(split[0].duration + split[1].duration, sourceClip.duration, 0.001),
+                  "разрез даёт два самостоятельных куска с точными границами")
         } else {
             check(false, "разрез даёт два куска без потери длительности")
         }

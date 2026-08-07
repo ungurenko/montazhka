@@ -285,7 +285,7 @@ private struct TransportBar: View {
 
             Divider().frame(height: 22)
 
-            ControlButton(icon: "scissors", help: "Разрезать по курсору (S)") {
+            ControlButton(icon: "scissors", help: "Разрезать в позиции ползунка (S)") {
                 controller.splitAtPlayhead()
             }
             ControlButton(icon: "trash", help: "Удалить выбранный клип (Delete)") {

@@ -358,13 +358,14 @@ final class EditorController: ObservableObject {
     }
 
     func splitAtPlayhead() {
+        let splitTime = currentTime
         guard let (index, offset) = clipPosition(at: currentTime),
               let newClips = TimelineOps.splitting(clips: project.clips, at: index, offset: offset)
         else { return }
         beginEdit()
         project.clips = newClips
-        selectedClipID = newClips[index + 1].id
-        afterEdit(seekTo: currentTime)
+        selectedClipID = nil
+        afterEdit(seekTo: splitTime)
     }
 
     func deleteClip(id: UUID) {
