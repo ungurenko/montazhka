@@ -71,8 +71,12 @@ enum CompositionBuilder {
         var cursor = CMTime.zero
         var transformSet = false
         var warnings: [CompositionWarning] = []
+        var voiceJoints: [(time: CMTime, leftDuration: CMTime, rightDuration: CMTime)] = []
+        var previousAudioInserted = false
+        var previousDuration = CMTime.zero
         for clip in loaded {
             let range = clip.range
+            let clipStart = cursor
             if let video = clip.video {
                 do {
                     try videoTrack.insertTimeRange(range, of: video, at: cursor)
@@ -99,14 +103,49 @@ enum CompositionBuilder {
                     warnings.append(.audioInsertFailed(clip.name))
                 }
             }
+            if previousAudioInserted, audioInserted {
+                voiceJoints.append((time: clipStart,
+                                    leftDuration: previousDuration,
+                                    rightDuration: range.duration))
+            }
+            previousAudioInserted = audioInserted
+            previousDuration = range.duration
             cursor = cursor + range.duration
         }
 
-        var audioMix: AVAudioMix?
-        if let music, cursor > .zero {
-            audioMix = await addMusicTrack(music, to: composition, totalDuration: cursor)
+        var mixParameters: [AVAudioMixInputParameters] = []
+        if let voice = voiceMixParameters(track: audioTrack, joints: voiceJoints) {
+            mixParameters.append(voice)
         }
+        if let music, cursor > .zero {
+            if let musicParameters = await addMusicTrack(music, to: composition, totalDuration: cursor) {
+                mixParameters.append(musicParameters)
+            }
+        }
+        let audioMix: AVAudioMix? = mixParameters.isEmpty ? nil : {
+            let mix = AVMutableAudioMix()
+            mix.inputParameters = mixParameters
+            return mix
+        }()
         return CompositionBuildResult(composition: composition, audioMix: audioMix, warnings: warnings)
+    }
+
+    private static func voiceMixParameters(
+        track: AVCompositionTrack,
+        joints: [(time: CMTime, leftDuration: CMTime, rightDuration: CMTime)]
+    ) -> AVMutableAudioMixInputParameters? {
+        let fade = CMTime(seconds: 0.008, preferredTimescale: 48_000)
+        let safeJoints = joints.filter { $0.leftDuration.seconds >= 0.016 && $0.rightDuration.seconds >= 0.016 }
+        guard !safeJoints.isEmpty else { return nil }
+        let params = AVMutableAudioMixInputParameters(track: track)
+        params.setVolume(1, at: .zero)
+        for joint in safeJoints {
+            params.setVolumeRamp(fromStartVolume: 1, toEndVolume: 0,
+                                 timeRange: CMTimeRange(start: joint.time - fade, duration: fade))
+            params.setVolumeRamp(fromStartVolume: 0, toEndVolume: 1,
+                                 timeRange: CMTimeRange(start: joint.time, duration: fade))
+        }
+        return params
     }
 
     /// Готовые дорожки одного клипа — грузятся заранее и параллельно, вставляются по порядку.
@@ -171,7 +210,7 @@ enum CompositionBuilder {
     /// плавный вход в начале, ровный тихий уровень, затухание в конце.
     private static func addMusicTrack(_ music: MusicInput,
                                       to composition: AVMutableComposition,
-                                      totalDuration: CMTime) async -> AVAudioMix? {
+                                      totalDuration: CMTime) async -> AVMutableAudioMixInputParameters? {
         let asset = AVURLAsset(url: music.url)
         guard let source = try? await asset.loadTracks(withMediaType: .audio).first,
               let sourceRange = try? await source.load(.timeRange),
@@ -203,8 +242,6 @@ enum CompositionBuilder {
         params.setVolumeRamp(fromStartVolume: level, toEndVolume: 0,
                              timeRange: CMTimeRange(start: CMTime(seconds: total - fadeOut, preferredTimescale: 600),
                                                     duration: CMTime(seconds: fadeOut, preferredTimescale: 600)))
-        let mix = AVMutableAudioMix()
-        mix.inputParameters = [params]
-        return mix
+        return params
     }
 }

@@ -28,8 +28,6 @@
 	<string>public.app-category.video</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
-	<key>NSSpeechRecognitionUsageDescription</key>
-	<string>Монтажка распознаёт речь на этом Mac, чтобы найти слова-паразиты для вырезки.</string>
 	<key>NSHumanReadableCopyright</key>
 	<string>© Александр Унгуренко</string>
 </dict>

@@ -3,6 +3,15 @@ import XCTest
 @testable import Montazhka
 
 final class ProjectStoreTests: XCTestCase {
+    func testStoreCreatesDedicatedModelsDirectory() {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("montazhka-models-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = ProjectStore(baseDirectory: root)
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: store.modelsDir.path))
+    }
+
     func testLegacyProjectLoadsWithCurrentSchemaAndMediaReference() throws {
         let id = UUID()
         let json = """

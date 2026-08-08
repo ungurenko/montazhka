@@ -17,9 +17,10 @@ enum ProjectSaveStatus: Equatable {
     case failed(String)
 }
 
-enum FillerDetectionStatus: Equatable {
-    case idle
-    case transcribing(done: Int, total: Int)
+enum OpenRouterKeyStatus: Equatable {
+    case missing
+    case checking
+    case saved
     case failed(String)
 }
 
@@ -52,7 +53,7 @@ final class EditorController: ObservableObject {
     @Published var showPausePanel = false
     @Published var showVoicePanel = false
     @Published var showMusicPanel = false
-    @Published var showFillerPanel = false
+    @Published var showSmartEditPanel = false
     @Published private(set) var voiceStatus: VoiceEnhanceStatus = .idle
     @Published private(set) var musicProcessing = false
     @Published var canUndo = false
@@ -61,8 +62,12 @@ final class EditorController: ObservableObject {
     @Published private(set) var missingSources: [MediaReference] = []
     @Published private(set) var saveStatus: ProjectSaveStatus = .idle
     @Published private(set) var renderWarnings: [CompositionWarning] = []
-    @Published var fillerCandidates: [FillerCandidate] = []
-    @Published private(set) var fillerStatus: FillerDetectionStatus = .idle
+    @Published var smartEditCandidates: [SmartEditCandidate] = []
+    @Published private(set) var smartEditStatus: SmartEditStatus = .idle
+    @Published private(set) var openRouterKeyStatus: OpenRouterKeyStatus = .missing
+    @Published var smartEditModel: SmartEditModel = .saved {
+        didSet { SmartEditModel.saved = smartEditModel }
+    }
 
     let player = AVPlayer()
     let waveforms: WaveformStore
@@ -71,6 +76,8 @@ final class EditorController: ObservableObject {
     private let store: ProjectStore
     private let mediaPipeline: MediaPipeline
     private let transcriptStore: TranscriptStore
+    private let smartEditService: SmartEditService
+    private let openRouterKeyStore = OpenRouterKeyStore()
 
     private var timeObserver: Any?
     private var endObserver: NSObjectProtocol?
@@ -88,8 +95,9 @@ final class EditorController: ObservableObject {
     private var seekTask: Task<Void, Never>?
     private var latestSeekTarget: Double?
     private var displaySizeCache: [String: CGSize] = [:]
-    private var fillerTask: Task<Void, Never>?
-    private var fillerGeneration = Generation()
+    private var smartEditTask: Task<Void, Never>?
+    private var smartEditGeneration = Generation()
+    private var smartEditSnapshotID: String?
 
     var duration: Double { project.totalDuration }
     var timelineSelection: TimelineSelection? {
@@ -124,11 +132,19 @@ final class EditorController: ObservableObject {
         self.voiceStore = voiceStore
         self.musicEQStore = musicEQStore
         self.mediaPipeline = MediaPipeline(voiceStore: voiceStore, musicEQStore: musicEQStore)
-        self.transcriptStore = TranscriptStore(cacheDir: store.transcriptsDir)
+        let transcriptStore = TranscriptStore(cacheDir: store.transcriptsDir,
+                                              modelsDir: store.modelsDir)
+        self.transcriptStore = transcriptStore
+        self.smartEditService = SmartEditService(
+            transcriptStore: transcriptStore,
+            openRouter: OpenRouterClient(),
+            waveforms: self.waveforms
+        )
         player.actionAtItemEnd = .pause
 
         checkMissingFiles()
         attachObservers()
+        refreshOpenRouterKeyState()
         rebuildAndSeek(to: 0)
         warmUpWaveforms()
         // Первый показ — с исходным звуком; улучшенный подменится, когда будет готов
@@ -142,7 +158,7 @@ final class EditorController: ObservableObject {
 
     func shutdown() {
         player.pause()
-        cancelFillerDetection()
+        cancelSmartEdit()
         if let endObserver { NotificationCenter.default.removeObserver(endObserver) }
         if let terminateObserver { NotificationCenter.default.removeObserver(terminateObserver) }
         saveNow()
@@ -362,7 +378,7 @@ final class EditorController: ObservableObject {
 
     private func afterEdit(seekTo time: Double?) {
         candidates = []
-        cancelFillerDetection()
+        cancelSmartEdit()
         clearSelection()
         scheduleSave()
         updateUndoFlags()
@@ -385,7 +401,7 @@ final class EditorController: ObservableObject {
         project = snapshot
         checkMissingFiles()
         candidates = []
-        cancelFillerDetection()
+        cancelSmartEdit()
         clearSelection()
         scheduleSave()
         updateUndoFlags()
@@ -469,6 +485,7 @@ final class EditorController: ObservableObject {
         guard draggedID != targetID,
               let from = project.clips.firstIndex(where: { $0.id == draggedID }),
               let to = project.clips.firstIndex(where: { $0.id == targetID }) else { return }
+        if !smartEditCandidates.isEmpty || smartEditTask != nil { cancelSmartEdit() }
         var clips = project.clips
         clips.move(fromOffsets: IndexSet(integer: from), toOffset: to > from ? to + 1 : to)
         withAnimation(.easeInOut(duration: 0.15)) {
@@ -687,84 +704,187 @@ final class EditorController: ObservableObject {
         afterEdit(seekTo: min(currentTime, duration))
     }
 
-    // MARK: - Слова-паразиты
+    // MARK: - Умный монтаж
 
-    func detectFillers() {
-        guard !project.clips.isEmpty else { return }
-        fillerTask?.cancel()
-        let generation = fillerGeneration.advance()
-        var seen = Set<UUID>()
-        let sources = project.clips.compactMap { clip in
-            seen.insert(clip.source.id).inserted ? clip.source : nil
+    func refreshOpenRouterKeyState() {
+        do {
+            openRouterKeyStatus = try openRouterKeyStore.load() == nil ? .missing : .saved
+        } catch {
+            openRouterKeyStatus = .failed(error.localizedDescription)
         }
-        fillerCandidates = []
-        fillerStatus = .transcribing(done: 0, total: sources.count)
-        fillerTask = Task { [weak self] in
+    }
+
+    func saveAndValidateOpenRouterKey(_ key: String) async {
+        let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            openRouterKeyStatus = .failed("Вставь ключ OpenRouter.")
+            return
+        }
+        openRouterKeyStatus = .checking
+        do {
+            try await OpenRouterClient().validateKey(trimmed)
+            try openRouterKeyStore.save(trimmed)
+            openRouterKeyStatus = .saved
+        } catch {
+            openRouterKeyStatus = .failed(error.localizedDescription)
+        }
+    }
+
+    func validateSavedOpenRouterKey() async {
+        do {
+            guard let key = try openRouterKeyStore.load() else {
+                openRouterKeyStatus = .missing
+                return
+            }
+            openRouterKeyStatus = .checking
+            try await OpenRouterClient().validateKey(key)
+            openRouterKeyStatus = .saved
+        } catch {
+            openRouterKeyStatus = .failed(error.localizedDescription)
+        }
+    }
+
+    func deleteOpenRouterKey() {
+        do {
+            try openRouterKeyStore.delete()
+            openRouterKeyStatus = .missing
+            cancelSmartEdit()
+        } catch {
+            openRouterKeyStatus = .failed(error.localizedDescription)
+        }
+    }
+
+    func analyzeSmartEdits() {
+        guard !project.clips.isEmpty else { return }
+        let apiKey: String
+        do {
+            guard let stored = try openRouterKeyStore.load() else {
+                smartEditStatus = .failed("Сначала сохрани ключ OpenRouter.")
+                return
+            }
+            apiKey = stored
+        } catch {
+            smartEditStatus = .failed(error.localizedDescription)
+            return
+        }
+
+        smartEditTask?.cancel()
+        let generation = smartEditGeneration.advance()
+        let clips = project.clips
+        let threshold = project.detection.thresholdDB
+        let model = smartEditModel
+        smartEditCandidates = []
+        smartEditSnapshotID = nil
+        smartEditStatus = .preparingModel(progress: nil)
+        smartEditTask = Task { [weak self] in
             guard let self else { return }
-            var tokens: [TranscriptToken] = []
             do {
-                for (index, source) in sources.enumerated() {
-                    try Task.checkCancellation()
-                    tokens.append(contentsOf: try await self.transcriptStore.ensure(source: source))
-                    guard self.fillerGeneration.isCurrent(generation) else { return }
-                    self.fillerStatus = .transcribing(done: index + 1, total: sources.count)
-                }
-                guard self.fillerGeneration.isCurrent(generation) else { return }
-                self.fillerCandidates = FillerDetector.findCandidates(clips: self.project.clips,
-                                                                      tokens: tokens)
-                self.fillerStatus = .idle
+                let result = try await self.smartEditService.analyze(
+                    clips: clips, projectThresholdDB: threshold,
+                    model: model, apiKey: apiKey,
+                    status: { status in
+                        await self.receiveSmartEditStatus(status, generation: generation)
+                    })
+                guard self.smartEditGeneration.isCurrent(generation) else { return }
+                self.smartEditSnapshotID = result.snapshot.id
+                self.smartEditCandidates = result.candidates
+                self.smartEditStatus = .ready
             } catch is CancellationError {
-                if self.fillerGeneration.isCurrent(generation) { self.fillerStatus = .idle }
+                if self.smartEditGeneration.isCurrent(generation) { self.smartEditStatus = .idle }
             } catch {
-                guard self.fillerGeneration.isCurrent(generation) else { return }
-                self.fillerStatus = .failed(error.localizedDescription)
+                guard self.smartEditGeneration.isCurrent(generation) else { return }
+                self.smartEditStatus = .failed(error.localizedDescription)
             }
         }
     }
 
-    func cancelFillerDetection() {
-        _ = fillerGeneration.advance()
-        fillerTask?.cancel()
-        fillerTask = nil
-        fillerCandidates = []
-        fillerStatus = .idle
+    func cancelSmartEdit() {
+        _ = smartEditGeneration.advance()
+        smartEditTask?.cancel()
+        smartEditTask = nil
+        smartEditSnapshotID = nil
+        smartEditCandidates = []
+        smartEditStatus = .idle
     }
 
-    func toggleFillerCandidate(_ id: UUID) {
-        guard let index = fillerCandidates.firstIndex(where: { $0.id == id }) else { return }
-        fillerCandidates[index].enabled.toggle()
+    private func receiveSmartEditStatus(_ status: SmartEditStatus, generation: Int) {
+        guard smartEditGeneration.isCurrent(generation) else { return }
+        smartEditStatus = status
     }
 
-    func setAllFillerCandidates(enabled: Bool) {
-        for index in fillerCandidates.indices { fillerCandidates[index].enabled = enabled }
+    func toggleSmartEditCandidate(_ id: UUID) {
+        guard let index = smartEditCandidates.firstIndex(where: { $0.id == id }) else { return }
+        smartEditCandidates[index].enabled.toggle()
     }
 
-    func previewFillerCandidate(_ candidate: FillerCandidate) {
-        previewRange(start: max(0, candidate.start - 0.7),
-                     end: min(duration, candidate.end + 0.7))
+    func setAllObviousSmartEdits(enabled: Bool) {
+        for index in smartEditCandidates.indices where smartEditCandidates[index].kind != .semanticRepeat {
+            smartEditCandidates[index].enabled = enabled
+        }
     }
 
-    func cutEnabledFillers() {
-        let ranges = mergedRanges(fillerCandidates.filter(\.enabled).map { ($0.start, $0.end) })
+    func previewSmartEditOriginal(_ candidate: SmartEditCandidate) {
+        previewRange(start: max(0, candidate.timelineStart - 0.7),
+                     end: min(duration, candidate.timelineEnd + 0.7))
+    }
+
+    func previewSmartEditJoin(_ candidate: SmartEditCandidate) {
+        let expectedSnapshot = SmartEditSnapshot(clips: project.clips).id
+        guard smartEditSnapshotID == expectedSnapshot else {
+            smartEditStatus = .failed(SmartEditError.staleAnalysis.localizedDescription)
+            return
+        }
+        var previewProject = project
+        previewProject.clips = TimelineOps.removingRange(
+            clips: previewProject.clips,
+            start: candidate.timelineStart,
+            end: candidate.timelineEnd)
+        let start = max(0, candidate.timelineStart - 0.7)
+        let end = min(previewProject.totalDuration, candidate.timelineStart + 0.7)
+        cancelPreviewStop()
+        player.pause()
+        let generation = rebuildGeneration.advance()
+        let readyEnhancedAudio = enhancedAudioURLs
+        Task { [weak self] in
+            guard let self else { return }
+            let result = await self.mediaPipeline.render(MediaRenderRequest(
+                project: previewProject, mode: .preview,
+                readyEnhancedAudio: readyEnhancedAudio))
+            guard self.rebuildGeneration.isCurrent(generation) else { return }
+            let item = AVPlayerItem(asset: result.composition)
+            item.audioMix = result.audioMix
+            self.player.replaceCurrentItem(with: item)
+            await self.player.seek(to: CMTime(seconds: start, preferredTimescale: 600),
+                                   toleranceBefore: .zero, toleranceAfter: .zero)
+            self.player.play()
+            let stop = NSValue(time: CMTime(seconds: end, preferredTimescale: 600))
+            self.previewBoundary = self.player.addBoundaryTimeObserver(forTimes: [stop], queue: .main) { [weak self] in
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    self.player.pause()
+                    self.cancelPreviewStop()
+                    self.rebuildAndSeek(to: candidate.timelineStart)
+                }
+            }
+        }
+    }
+
+    func applySmartEdits() {
+        let expectedSnapshot = SmartEditSnapshot(clips: project.clips).id
+        guard smartEditSnapshotID == expectedSnapshot else {
+            smartEditStatus = .failed(SmartEditError.staleAnalysis.localizedDescription)
+            return
+        }
+        let ranges = SmartEditRanges.merged(smartEditCandidates.filter(\.enabled).map {
+            (start: $0.timelineStart, end: $0.timelineEnd)
+        })
         guard !ranges.isEmpty else { return }
+        let seekTarget = ranges.first?.start ?? currentTime
         beginEdit()
         for range in ranges.reversed() {
             removeTimelineRange(start: range.start, end: range.end)
         }
-        afterEdit(seekTo: min(currentTime, duration))
-    }
-
-    private func mergedRanges(_ ranges: [(Double, Double)]) -> [(start: Double, end: Double)] {
-        let sorted = ranges.sorted { $0.0 < $1.0 }
-        var result: [(start: Double, end: Double)] = []
-        for range in sorted {
-            if let last = result.last, range.0 <= last.end {
-                result[result.count - 1].end = max(last.end, range.1)
-            } else {
-                result.append((range.0, range.1))
-            }
-        }
-        return result
+        afterEdit(seekTo: min(seekTarget, duration))
     }
 
     /// Проиграть кусок вокруг паузы: чуть до и чуть после.

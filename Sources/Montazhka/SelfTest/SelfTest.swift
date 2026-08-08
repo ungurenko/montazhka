@@ -67,6 +67,7 @@ enum SelfTest {
     private static func runAll() async {
         testTimelineMath()
         testEditHistory()
+        failures += SmartEditSelfTest.run()
         testExportEstimator()
         await testAudioPipeline()
         await testVoiceEnhance()
@@ -293,9 +294,11 @@ enum SelfTest {
         clips = TimelineOps.removingRange(clips: clips, start: 3, end: 5)
         check(clips.count == 3, "после вырезки двух пауз осталось 3 куска")
 
-        let (composition, _) = await CompositionBuilder.build(clips: clips)
+        let (composition, voiceMix) = await CompositionBuilder.build(clips: clips)
         let duration = (try? await composition.load(.duration).seconds) ?? 0
         check(approx(duration, 8.5, 0.2), "длительность склейки 8.5 сек (получено \(String(format: "%.2f", duration)))")
+        check(voiceMix != nil && voiceMix?.inputParameters.count == 1,
+              "на голосовых стыках построены микрозатухания по 8 мс")
 
         // Экспорт собственным перекодировщиком (компактное качество)
         let out = FileManager.default.temporaryDirectory
@@ -303,7 +306,7 @@ enum SelfTest {
         defer { try? FileManager.default.removeItem(at: out) }
         do {
             let settings = try await Transcoder.settings(for: .compact, composition: composition)
-            try await Transcoder.export(composition: composition, audioMix: nil,
+            try await Transcoder.export(composition: composition, audioMix: voiceMix,
                                         settings: settings, to: out) { _ in }
             check(true, "экспорт завершился")
         } catch {

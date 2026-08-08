@@ -59,8 +59,8 @@ struct TimelineView: View {
                     .font(.system(size: 12))
                     .foregroundStyle(Theme.pauseHighlight)
             }
-            if !controller.fillerCandidates.isEmpty {
-                Label("\(controller.fillerCandidates.filter(\.enabled).count) слов к вырезке", systemImage: "text.badge.minus")
+            if !controller.smartEditCandidates.isEmpty {
+                Label("\(controller.smartEditCandidates.filter(\.enabled).count) умных правок", systemImage: "wand.and.sparkles")
                     .font(.system(size: 12))
                     .foregroundStyle(.orange)
             }
@@ -137,17 +137,17 @@ struct TimelineView: View {
                         .allowsHitTesting(false)
                 }
 
-                // Подсветка найденных пауз
-                ForEach(controller.fillerCandidates) { candidate in
+                // Подсветка предложений умного монтажа
+                ForEach(controller.smartEditCandidates) { candidate in
                     RoundedRectangle(cornerRadius: 4, style: .continuous)
                         .fill(Color.orange.opacity(candidate.enabled ? 0.28 : 0.08))
                         .overlay(
                             RoundedRectangle(cornerRadius: 4, style: .continuous)
                                 .stroke(Color.orange.opacity(candidate.enabled ? 0.8 : 0.2), lineWidth: 1)
                         )
-                        .frame(width: max(2, CGFloat(candidate.end - candidate.start) * pps),
+                        .frame(width: max(2, CGFloat(candidate.timelineEnd - candidate.timelineStart) * pps),
                                height: clipHeight)
-                        .offset(x: CGFloat(candidate.start) * pps)
+                        .offset(x: CGFloat(candidate.timelineStart) * pps)
                         .allowsHitTesting(false)
                 }
 

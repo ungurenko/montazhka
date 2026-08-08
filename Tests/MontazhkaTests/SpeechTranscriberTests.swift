@@ -2,11 +2,20 @@ import XCTest
 @testable import Montazhka
 
 final class SpeechTranscriberTests: XCTestCase {
-    func testLongAudioIsSplitIntoBoundedOverlappingChunks() {
-        let chunks = SpeechChunkPlanner.make(duration: 121, maximumDuration: 50, overlap: 1)
+    func testTranscriptWordKeepsExactEndTime() {
+        let word = TranscriptWord(sourceID: UUID(), text: "Привет", start: 1.25,
+                                  end: 1.8, confidence: 0.9)
+        XCTAssertEqual(word.duration, 0.55, accuracy: 0.0001)
+    }
 
-        XCTAssertEqual(chunks.map(\.start), [0, 49, 98])
-        XCTAssertEqual(chunks.map(\.duration), [50, 50, 23])
-        XCTAssertTrue(chunks.allSatisfy { $0.duration <= 50 })
+    func testTranscriptDocumentRoundTripsWithVersionAndRussianModel() throws {
+        let words = [TranscriptWord(sourceID: UUID(), text: "Привет", start: 0,
+                                    end: 0.5, confidence: 0.98)]
+        let data = try JSONEncoder().encode(TranscriptDocument(words: words))
+        let decoded = try JSONDecoder().decode(TranscriptDocument.self, from: data)
+
+        XCTAssertEqual(decoded.schemaVersion, 2)
+        XCTAssertEqual(decoded.language, "ru")
+        XCTAssertEqual(decoded.words, words)
     }
 }

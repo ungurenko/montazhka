@@ -37,6 +37,7 @@ final class ProjectStore {
     let enhancedAudioDir: URL
     let musicEQDir: URL
     let transcriptsDir: URL
+    let modelsDir: URL
 
     private let baseDirectory: URL
 
@@ -49,6 +50,7 @@ final class ProjectStore {
         enhancedAudioDir = base.appendingPathComponent("EnhancedAudio", isDirectory: true)
         musicEQDir = base.appendingPathComponent("MusicEQ", isDirectory: true)
         transcriptsDir = base.appendingPathComponent("Transcripts", isDirectory: true)
+        modelsDir = base.appendingPathComponent("Models", isDirectory: true)
         try? prepareDirectories()
     }
 
@@ -63,6 +65,7 @@ final class ProjectStore {
             try FileManager.default.createDirectory(at: enhancedAudioDir, withIntermediateDirectories: true)
             try FileManager.default.createDirectory(at: musicEQDir, withIntermediateDirectories: true)
             try FileManager.default.createDirectory(at: transcriptsDir, withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(at: modelsDir, withIntermediateDirectories: true)
         } catch {
             throw ProjectStoreError.prepareDirectory(error.localizedDescription)
         }

@@ -19,9 +19,9 @@ struct EditorView: View {
                     playerArea
                     TransportBar(controller: controller)
                 }
-                if controller.showFillerPanel {
-                    FillerPanel(controller: controller)
-                        .frame(width: 300)
+                if controller.showSmartEditPanel {
+                    SmartEditPanel(controller: controller)
+                        .frame(width: 340)
                         .transition(.move(edge: .trailing).combined(with: .opacity))
                 } else if controller.showMusicPanel {
                     MusicPanel(controller: controller)
@@ -41,7 +41,7 @@ struct EditorView: View {
             .animation(.easeInOut(duration: 0.2), value: controller.showPausePanel)
             .animation(.easeInOut(duration: 0.2), value: controller.showVoicePanel)
             .animation(.easeInOut(duration: 0.2), value: controller.showMusicPanel)
-            .animation(.easeInOut(duration: 0.2), value: controller.showFillerPanel)
+            .animation(.easeInOut(duration: 0.2), value: controller.showSmartEditPanel)
 
             TimelineView(controller: controller)
                 .frame(height: 168)
@@ -142,7 +142,7 @@ struct EditorView: View {
                 Button {
                     withAnimation {
                         controller.showPausePanel = true
-                        controller.showFillerPanel = false
+                        controller.showSmartEditPanel = false
                         controller.showVoicePanel = false
                         controller.showMusicPanel = false
                     }
@@ -151,13 +151,13 @@ struct EditorView: View {
                 }
                 Button {
                     withAnimation {
-                        controller.showFillerPanel = true
+                        controller.showSmartEditPanel = true
                         controller.showPausePanel = false
                         controller.showVoicePanel = false
                         controller.showMusicPanel = false
                     }
                 } label: {
-                    Label("Слова-паразиты", systemImage: "text.magnifyingglass")
+                    Label("Умный монтаж", systemImage: "wand.and.sparkles")
                 }
             } label: {
                 Label("Чистка", systemImage: "wand.and.stars")
@@ -171,7 +171,7 @@ struct EditorView: View {
                     if controller.showVoicePanel {
                         controller.showPausePanel = false
                         controller.showMusicPanel = false
-                        controller.showFillerPanel = false
+                        controller.showSmartEditPanel = false
                     }
                 }
             } label: {
@@ -186,7 +186,7 @@ struct EditorView: View {
                     if controller.showMusicPanel {
                         controller.showPausePanel = false
                         controller.showVoicePanel = false
-                        controller.showFillerPanel = false
+                        controller.showSmartEditPanel = false
                     }
                 }
             } label: {
