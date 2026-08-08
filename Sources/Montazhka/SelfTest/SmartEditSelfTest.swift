@@ -28,13 +28,26 @@ enum SmartEditSelfTest {
         {"schema_version":1,"edits":[{"id":"e1","kind":"false_start","first_word_id":"w000001","last_word_id":"w000002","reason":"Фраза начата заново","confidence":0.96}]}
         """
         do {
-            let proposals = try OpenRouterClient.decodeProposals(proposalJSON)
+            let payloadWords = map.words.map(\.publicPayload)
+            let proposals = try OpenRouterClient.decodeProposals(proposalJSON, words: payloadWords)
             let reviewJSON = """
             {"schema_version":1,"decisions":[{"edit_id":"e1","decision":"accept","first_word_id":"w000001","last_word_id":"w000002","reason":"Смысл сохраняется","confidence":0.94}]}
             """
-            let reviews = try OpenRouterClient.decodeReviews(reviewJSON, proposals: proposals)
+            let reviews = try OpenRouterClient.decodeReviews(
+                reviewJSON, proposals: proposals, words: payloadWords)
             check(proposals.edits.count == 1 && reviews.decisions.first?.decision == .accept,
                   "оба JSON-контракта проходят строгую локальную проверку")
+
+            let expandedReviewJSON = """
+            {"schema_version":1,"decisions":[{"edit_id":"e1","decision":"accept","first_word_id":"w000001","last_word_id":"w000003","reason":"слишком широко","confidence":0.94}]}
+            """
+            do {
+                _ = try OpenRouterClient.decodeReviews(
+                    expandedReviewJSON, proposals: proposals, words: payloadWords)
+                check(false, "второй ИИ-проход не может расширить диапазон вырезки")
+            } catch {
+                check(true, "второй ИИ-проход не может расширить диапазон вырезки")
+            }
         } catch {
             check(false, "оба JSON-контракта проходят строгую локальную проверку")
         }
@@ -57,6 +70,10 @@ enum SmartEditSelfTest {
               !SmartEditSelection.shouldEnable(kind: .semanticRepeat, confidence: 0.99, hasSafeBoundary: true) &&
               !SmartEditSelection.shouldEnable(kind: .duplicateTake, confidence: 0.89, hasSafeBoundary: true),
               "бережный режим включает только уверенные явные исправления")
+        check(SmartEditStatus.idle.allowsAnalysisStart &&
+              SmartEditStatus.failed("ошибка").allowsAnalysisStart &&
+              !SmartEditStatus.proposing.allowsAnalysisStart,
+              "после ошибки анализ можно запустить повторно")
 
         let merged = SmartEditRanges.merged([(1, 2), (1.5, 3), (3, 4)])
         check(merged.count == 2 && merged[0].start == 1 && merged[0].end == 3,

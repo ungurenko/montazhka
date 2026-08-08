@@ -150,7 +150,7 @@ struct SmartEditPanel: View {
 
             keyControls
 
-            Label("В OpenRouter уходит только текст. Звук и видео остаются на Mac.",
+            Label("В OpenRouter уходит текст расшифровки — он может содержать произнесённые личные данные. Звук, видео и пути файлов остаются на Mac.",
                   systemImage: "lock.shield.fill")
                 .font(.system(size: 10.5))
                 .foregroundStyle(Theme.textSecondary)
@@ -257,11 +257,11 @@ struct SmartEditPanel: View {
             .padding(12)
             .background(Theme.accent.opacity(0.07))
             .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-        } else if activeStage == .editing && controller.smartEditStatus == .idle {
+        } else if activeStage == .editing && controller.smartEditStatus.allowsAnalysisStart {
             Button {
                 controller.analyzeSmartEdits()
             } label: {
-                Label("Проанализировать речь", systemImage: "sparkles")
+                Label(analysisButtonTitle, systemImage: "sparkles")
                     .font(.system(size: 13, weight: .semibold, design: .rounded))
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 8)
@@ -271,6 +271,11 @@ struct SmartEditPanel: View {
             .disabled(controller.openRouterKeyStatus != .saved ||
                       controller.project.clips.isEmpty || !SmartEditPlatform.isSupported)
         }
+    }
+
+    private var analysisButtonTitle: String {
+        if case .failed = controller.smartEditStatus { return "Повторить анализ" }
+        return "Проанализировать речь"
     }
 
     private var shouldExpandConnection: Bool {
@@ -376,13 +381,15 @@ struct SmartEditPanel: View {
                     Text("\(controller.smartEditCandidates.count) предложений · экономия \(TimeFormat.spoken(selectedDuration))")
                         .font(.system(size: 11, weight: .semibold))
                     Spacer()
-                    Button(obvious.allSatisfy(\.enabled) ? "Снять явные" : "Выбрать явные") {
-                        controller.setAllObviousSmartEdits(enabled: !obvious.allSatisfy(\.enabled))
+                    if !obvious.isEmpty {
+                        Button(obvious.allSatisfy(\.enabled) ? "Снять явные" : "Выбрать явные") {
+                            controller.setAllObviousSmartEdits(enabled: !obvious.allSatisfy(\.enabled))
+                        }
+                        .buttonStyle(.link)
+                        .font(.system(size: 10))
                     }
-                    .buttonStyle(.link)
-                    .font(.system(size: 10))
                 }
-                candidateGroup("Явные исправления", candidates: obvious)
+                if !obvious.isEmpty { candidateGroup("Явные исправления", candidates: obvious) }
                 if !semantic.isEmpty { candidateGroup("Смысловые повторы", candidates: semantic) }
             }
         }

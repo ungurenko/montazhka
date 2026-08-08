@@ -99,13 +99,13 @@ actor OpenRouterClient {
         let content = try await chat(model: model, apiKey: apiKey,
                                      system: SmartEditPrompts.editorSystem,
                                      user: user, schema: .proposals)
-        do { return try Self.decodeProposals(content) }
+        do { return try Self.decodeProposals(content, words: words) }
         catch where model == .qwen {
             let repaired = try await chat(model: model, apiKey: apiKey,
                                           system: "Ты исправляешь только JSON-формат.",
                                           user: SmartEditPrompts.repairUser(content, contract: "proposal_schema_v1"),
                                           schema: .jsonObject)
-            return try Self.decodeProposals(repaired)
+            return try Self.decodeProposals(repaired, words: words)
         }
     }
 
@@ -115,13 +115,13 @@ actor OpenRouterClient {
         let content = try await chat(model: model, apiKey: apiKey,
                                      system: SmartEditPrompts.reviewerSystem,
                                      user: user, schema: .reviews)
-        do { return try Self.decodeReviews(content, proposals: proposals) }
+        do { return try Self.decodeReviews(content, proposals: proposals, words: words) }
         catch where model == .qwen {
             let repaired = try await chat(model: model, apiKey: apiKey,
                                           system: "Ты исправляешь только JSON-формат.",
                                           user: SmartEditPrompts.repairUser(content, contract: "review_schema_v1"),
                                           schema: .jsonObject)
-            return try Self.decodeReviews(repaired, proposals: proposals)
+            return try Self.decodeReviews(repaired, proposals: proposals, words: words)
         }
     }
 
@@ -195,29 +195,76 @@ actor OpenRouterClient {
         }
     }
 
-    static func decodeProposals(_ content: String) throws -> ProposalEnvelope {
+    static func decodeProposals(_ content: String,
+                                words: [OpenRouterTranscriptWord]) throws -> ProposalEnvelope {
         let decoder = JSONDecoder()
+        let wordIndices = try validatedWordIndices(words)
         guard let data = content.data(using: .utf8),
               let envelope = try? decoder.decode(ProposalEnvelope.self, from: data),
               envelope.schemaVersion == 1,
               Set(envelope.edits.map(\.id)).count == envelope.edits.count,
-              envelope.edits.allSatisfy({ !$0.id.isEmpty && !$0.reason.isEmpty && (0...1).contains($0.confidence) })
+              envelope.edits.allSatisfy({
+                  !$0.id.isEmpty && !$0.reason.isEmpty && (0...1).contains($0.confidence) &&
+                      validRange(first: $0.firstWordID, last: $0.lastWordID,
+                                 wordIndices: wordIndices) != nil
+              })
         else { throw OpenRouterError.damagedResponse }
         return envelope
     }
 
     static func decodeReviews(_ content: String,
-                              proposals: ProposalEnvelope) throws -> ReviewEnvelope {
+                              proposals: ProposalEnvelope,
+                              words: [OpenRouterTranscriptWord]) throws -> ReviewEnvelope {
         let decoder = JSONDecoder()
-        let proposalIDs = Set(proposals.edits.map(\.id))
+        let wordIndices = try validatedWordIndices(words)
+        guard Set(proposals.edits.map(\.id)).count == proposals.edits.count else {
+            throw OpenRouterError.damagedResponse
+        }
+        let proposalsByID = Dictionary(uniqueKeysWithValues: proposals.edits.map { ($0.id, $0) })
         guard let data = content.data(using: .utf8),
               let envelope = try? decoder.decode(ReviewEnvelope.self, from: data),
               envelope.schemaVersion == 1,
               Set(envelope.decisions.map(\.editID)).count == envelope.decisions.count,
-              envelope.decisions.allSatisfy({ proposalIDs.contains($0.editID) &&
-                  !$0.reason.isEmpty && (0...1).contains($0.confidence) })
+              envelope.decisions.allSatisfy({ review in
+                  guard let proposal = proposalsByID[review.editID],
+                        !review.reason.isEmpty,
+                        (0...1).contains(review.confidence),
+                        let proposalRange = validRange(
+                            first: proposal.firstWordID, last: proposal.lastWordID,
+                            wordIndices: wordIndices),
+                        let reviewRange = validRange(
+                            first: review.firstWordID, last: review.lastWordID,
+                            wordIndices: wordIndices)
+                  else { return false }
+                  return reviewRange.lowerBound >= proposalRange.lowerBound &&
+                      reviewRange.upperBound <= proposalRange.upperBound
+              })
         else { throw OpenRouterError.damagedResponse }
         return envelope
+    }
+
+    private static func validatedWordIndices(
+        _ words: [OpenRouterTranscriptWord]
+    ) throws -> [String: Int] {
+        guard !words.isEmpty else { throw OpenRouterError.damagedResponse }
+        var indices: [String: Int] = [:]
+        for (index, word) in words.enumerated() {
+            guard !word.id.isEmpty, indices.updateValue(index, forKey: word.id) == nil else {
+                throw OpenRouterError.damagedResponse
+            }
+        }
+        return indices
+    }
+
+    private static func validRange(
+        first: String,
+        last: String,
+        wordIndices: [String: Int]
+    ) -> ClosedRange<Int>? {
+        guard let firstIndex = wordIndices[first],
+              let lastIndex = wordIndices[last],
+              firstIndex <= lastIndex else { return nil }
+        return firstIndex...lastIndex
     }
 
     private func responseFormat(for schema: OutputSchema, strict: Bool) -> ResponseFormat {

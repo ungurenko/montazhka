@@ -49,6 +49,13 @@ final class SmartEditDomainTests: XCTestCase {
         XCTAssertEqual(merged[0].end, 3)
     }
 
+    func testAnalysisCanRestartAfterFailureButNotWhileWorking() {
+        XCTAssertTrue(SmartEditStatus.idle.allowsAnalysisStart)
+        XCTAssertTrue(SmartEditStatus.failed("Сеть недоступна").allowsAnalysisStart)
+        XCTAssertFalse(SmartEditStatus.proposing.allowsAnalysisStart)
+        XCTAssertFalse(SmartEditStatus.ready.allowsAnalysisStart)
+    }
+
     func testBoundaryResolverRejectsLoudJoin() {
         let source = MediaReference(path: "/tmp/a.mov")
         let clip = Clip(source: source, start: 0, end: 5)

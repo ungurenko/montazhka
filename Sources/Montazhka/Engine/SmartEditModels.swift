@@ -69,6 +69,13 @@ enum SmartEditStatus: Equatable {
     case preparingCuts
     case ready
     case failed(String)
+
+    var allowsAnalysisStart: Bool {
+        switch self {
+        case .idle, .failed: return true
+        default: return false
+        }
+    }
 }
 
 struct SmartEditSnapshot: Equatable, Sendable {
