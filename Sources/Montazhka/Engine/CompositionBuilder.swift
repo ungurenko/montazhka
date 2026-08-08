@@ -7,6 +7,32 @@ struct MusicInput {
     let volume: Float
 }
 
+enum CompositionWarning: Equatable {
+    case missingVideo(String)
+    case videoInsertFailed(String)
+    case audioInsertFailed(String)
+    case musicUnavailable(String)
+    case musicEQFallback(String)
+    case voiceFallback(String)
+
+    var message: String {
+        switch self {
+        case .missingVideo(let name): return "В файле «\(name)» не найдена видеодорожка."
+        case .videoInsertFailed(let name): return "Не удалось вставить видео «\(name)» в монтаж."
+        case .audioInsertFailed(let name): return "Не удалось вставить звук «\(name)» в монтаж."
+        case .musicUnavailable(let name): return "Музыка «\(name)» недоступна — видео будет без неё."
+        case .musicEQFallback(let name): return "Не удалось настроить музыку «\(name)» под голос — используется исходная мелодия."
+        case .voiceFallback(let name): return "Не удалось обработать голос в «\(name)» — используется исходный звук."
+        }
+    }
+}
+
+struct CompositionBuildResult: @unchecked Sendable {
+    let composition: AVMutableComposition
+    let audioMix: AVAudioMix?
+    let warnings: [CompositionWarning]
+}
+
 /// Склеивает клипы ленты в одно видео для предпросмотра и экспорта.
 enum CompositionBuilder {
     /// `enhancedAudio` — готовые файлы улучшенного звука по пути исходника:
@@ -16,12 +42,19 @@ enum CompositionBuilder {
     static func build(clips: [Clip],
                       enhancedAudio: [String: URL] = [:],
                       music: MusicInput? = nil) async -> (composition: AVMutableComposition, audioMix: AVAudioMix?) {
+        let result = await buildResult(clips: clips, enhancedAudio: enhancedAudio, music: music)
+        return (result.composition, result.audioMix)
+    }
+
+    static func buildResult(clips: [Clip],
+                            enhancedAudio: [String: URL] = [:],
+                            music: MusicInput? = nil) async -> CompositionBuildResult {
         let composition = AVMutableComposition()
         guard let videoTrack = composition.addMutableTrack(withMediaType: .video,
                                                            preferredTrackID: kCMPersistentTrackID_Invalid),
               let audioTrack = composition.addMutableTrack(withMediaType: .audio,
                                                            preferredTrackID: kCMPersistentTrackID_Invalid)
-        else { return (composition, nil) }
+        else { return CompositionBuildResult(composition: composition, audioMix: nil, warnings: []) }
 
         // Фаза 1 — открыть исходники и загрузить дорожки всех клипов параллельно.
         // Порядок восстанавливаем по индексу: вставка ниже строго упорядочена.
@@ -37,14 +70,21 @@ enum CompositionBuilder {
         // Фаза 2 — вставка по порядку. Мутируем общие треки, поэтому строго последовательно.
         var cursor = CMTime.zero
         var transformSet = false
+        var warnings: [CompositionWarning] = []
         for clip in loaded {
             let range = clip.range
             if let video = clip.video {
-                try? videoTrack.insertTimeRange(range, of: video, at: cursor)
-                if !transformSet, let transform = clip.transform {
-                    videoTrack.preferredTransform = transform
-                    transformSet = true
+                do {
+                    try videoTrack.insertTimeRange(range, of: video, at: cursor)
+                    if !transformSet, let transform = clip.transform {
+                        videoTrack.preferredTransform = transform
+                        transformSet = true
+                    }
+                } catch {
+                    warnings.append(.videoInsertFailed(clip.name))
                 }
+            } else {
+                warnings.append(.missingVideo(clip.name))
             }
             var audioInserted = false
             if let enhanced = clip.enhancedAudio,
@@ -52,7 +92,12 @@ enum CompositionBuilder {
                 audioInserted = true
             }
             if !audioInserted, let audio = clip.originalAudio {
-                try? audioTrack.insertTimeRange(range, of: audio, at: cursor)
+                do {
+                    try audioTrack.insertTimeRange(range, of: audio, at: cursor)
+                    audioInserted = true
+                } catch {
+                    warnings.append(.audioInsertFailed(clip.name))
+                }
             }
             cursor = cursor + range.duration
         }
@@ -61,11 +106,12 @@ enum CompositionBuilder {
         if let music, cursor > .zero {
             audioMix = await addMusicTrack(music, to: composition, totalDuration: cursor)
         }
-        return (composition, audioMix)
+        return CompositionBuildResult(composition: composition, audioMix: audioMix, warnings: warnings)
     }
 
     /// Готовые дорожки одного клипа — грузятся заранее и параллельно, вставляются по порядку.
     private struct LoadedClip {
+        let name: String
         let range: CMTimeRange
         let video: AVAssetTrack?
         let transform: CGAffineTransform?
@@ -93,7 +139,7 @@ enum CompositionBuilder {
         let (video, transform) = await videoLoad
         let enhancedResult = await enhanced
         return LoadedClip(
-            range: range, video: video, transform: transform,
+            name: clip.fileName, range: range, video: video, transform: transform,
             enhancedAudio: enhancedResult.map { ($0.track, $0.range) },
             originalAudio: await originalAudio,
             sourceAsset: asset,

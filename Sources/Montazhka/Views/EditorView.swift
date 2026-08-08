@@ -19,7 +19,11 @@ struct EditorView: View {
                     playerArea
                     TransportBar(controller: controller)
                 }
-                if controller.showMusicPanel {
+                if controller.showFillerPanel {
+                    FillerPanel(controller: controller)
+                        .frame(width: 300)
+                        .transition(.move(edge: .trailing).combined(with: .opacity))
+                } else if controller.showMusicPanel {
                     MusicPanel(controller: controller)
                         .frame(width: 300)
                         .transition(.move(edge: .trailing).combined(with: .opacity))
@@ -37,6 +41,7 @@ struct EditorView: View {
             .animation(.easeInOut(duration: 0.2), value: controller.showPausePanel)
             .animation(.easeInOut(duration: 0.2), value: controller.showVoicePanel)
             .animation(.easeInOut(duration: 0.2), value: controller.showMusicPanel)
+            .animation(.easeInOut(duration: 0.2), value: controller.showFillerPanel)
 
             TimelineView(controller: controller)
                 .frame(height: 168)
@@ -47,9 +52,20 @@ struct EditorView: View {
             ExportSheet(controller: controller)
         }
         .alert("Файлы не найдены", isPresented: missingAlertBinding) {
-            Button("Понятно", role: .cancel) {}
+            if let source = controller.missingSources.first {
+                Button("Указать файл…") { chooseReplacement(for: source) }
+            }
+            Button("Позже", role: .cancel) {}
         } message: {
             Text(controller.missingFilesMessage ?? "")
+        }
+        .alert("Не удалось сохранить проект", isPresented: saveErrorBinding) {
+            Button("Повторить") { controller.saveNow() }
+            Button("Закрыть", role: .cancel) { controller.dismissSaveError() }
+        } message: {
+            if case let .failed(message) = controller.saveStatus {
+                Text(message)
+            }
         }
         .onAppear {
             projectName = controller.project.name
@@ -58,10 +74,35 @@ struct EditorView: View {
         .onDisappear { removeKeyMonitor() }
     }
 
+    private func chooseReplacement(for source: MediaReference) {
+        let panel = NSOpenPanel()
+        panel.title = "Указать файл «\(source.displayName)»"
+        panel.prompt = "Переподключить"
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.allowedContentTypes = [.movie, .mpeg4Movie, .quickTimeMovie]
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        Task {
+            if let message = await controller.relinkSource(id: source.id, to: url) {
+                controller.missingFilesMessage = message
+            }
+        }
+    }
+
     private var missingAlertBinding: Binding<Bool> {
         Binding(
             get: { controller.missingFilesMessage != nil },
             set: { if !$0 { controller.missingFilesMessage = nil } }
+        )
+    }
+
+    private var saveErrorBinding: Binding<Bool> {
+        Binding(
+            get: {
+                if case .failed = controller.saveStatus { return true }
+                return false
+            },
+            set: { if !$0 { controller.dismissSaveError() } }
         )
     }
 
@@ -85,6 +126,8 @@ struct EditorView: View {
                 .frame(maxWidth: 260)
                 .onSubmit { controller.renameProject(projectName) }
 
+            saveStatusView
+
             Spacer()
 
             Button {
@@ -95,19 +138,32 @@ struct EditorView: View {
             }
             .buttonStyle(.bordered)
 
-            Button {
-                withAnimation {
-                    controller.showPausePanel.toggle()
-                    if controller.showPausePanel {
+            Menu {
+                Button {
+                    withAnimation {
+                        controller.showPausePanel = true
+                        controller.showFillerPanel = false
                         controller.showVoicePanel = false
                         controller.showMusicPanel = false
                     }
+                } label: {
+                    Label("Найти паузы", systemImage: "waveform.badge.magnifyingglass")
+                }
+                Button {
+                    withAnimation {
+                        controller.showFillerPanel = true
+                        controller.showPausePanel = false
+                        controller.showVoicePanel = false
+                        controller.showMusicPanel = false
+                    }
+                } label: {
+                    Label("Слова-паразиты", systemImage: "text.magnifyingglass")
                 }
             } label: {
-                Label("Найти паузы", systemImage: "waveform.badge.magnifyingglass")
+                Label("Чистка", systemImage: "wand.and.stars")
             }
-            .buttonStyle(.bordered)
-            .tint(controller.showPausePanel ? Theme.accent : nil)
+            .menuStyle(.borderlessButton)
+            .fixedSize()
 
             Button {
                 withAnimation {
@@ -115,6 +171,7 @@ struct EditorView: View {
                     if controller.showVoicePanel {
                         controller.showPausePanel = false
                         controller.showMusicPanel = false
+                        controller.showFillerPanel = false
                     }
                 }
             } label: {
@@ -129,6 +186,7 @@ struct EditorView: View {
                     if controller.showMusicPanel {
                         controller.showPausePanel = false
                         controller.showVoicePanel = false
+                        controller.showFillerPanel = false
                     }
                 }
             } label: {
@@ -151,6 +209,26 @@ struct EditorView: View {
         .padding(.leading, 84) // место под «светофор» окна
         .padding(.trailing, 16)
         .padding(.vertical, 12)
+    }
+
+    @ViewBuilder
+    private var saveStatusView: some View {
+        switch controller.saveStatus {
+        case .idle:
+            EmptyView()
+        case .saving:
+            ProgressView()
+                .controlSize(.small)
+                .help("Сохраняю проект")
+        case .saved:
+            Image(systemName: "checkmark.circle.fill")
+                .foregroundStyle(Theme.accent)
+                .help("Проект сохранён")
+        case .failed:
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+                .help("Проект не сохранился")
+        }
     }
 
     // MARK: - Плеер
@@ -233,6 +311,15 @@ struct EditorView: View {
                 case 1: // S / Ы — разрезать
                     controller.splitAtPlayhead()
                     return true
+                case 34: // I / Ш — начало выделения
+                    controller.markSelectionStart()
+                    return true
+                case 31: // O / Щ — конец выделения
+                    controller.markSelectionEnd()
+                    return true
+                case 7: // X / Ч — вырезать выделение
+                    controller.cutSelection()
+                    return true
                 case 51, 117: // Backspace / Delete — удалить выбранный клип
                     controller.deleteSelectedClip()
                     return true
@@ -288,6 +375,20 @@ private struct TransportBar: View {
             ControlButton(icon: "scissors", help: "Разрезать в позиции ползунка (S)") {
                 controller.splitAtPlayhead()
             }
+            ControlButton(icon: "inset.filled.leadinghalf.rectangle", help: "Начало выделения (I)") {
+                controller.markSelectionStart()
+            }
+            ControlButton(icon: "inset.filled.trailinghalf.rectangle", help: "Конец выделения (O)") {
+                controller.markSelectionEnd()
+            }
+            ControlButton(icon: "selection.pin.in.out", help: "Прослушать выделение") {
+                controller.previewSelection()
+            }
+            .disabled(controller.timelineSelection == nil)
+            ControlButton(icon: "scissors.badge.ellipsis", help: "Вырезать выделение (X)") {
+                controller.cutSelection()
+            }
+            .disabled(controller.timelineSelection == nil)
             ControlButton(icon: "trash", help: "Удалить выбранный клип (Delete)") {
                 controller.deleteSelectedClip()
             }

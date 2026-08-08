@@ -4,7 +4,8 @@ import AVFoundation
 /// Самопроверка движка: математика ленты, извлечение волны, поиск пауз, склейка, экспорт.
 /// Запуск: `.build/debug/Montazhka --selftest`
 enum SelfTest {
-    private static var failures = 0
+    // Все записи идут последовательно из единственной задачи runAll.
+    private nonisolated(unsafe) static var failures = 0
 
     private static func check(_ condition: Bool, _ label: String) {
         if condition {

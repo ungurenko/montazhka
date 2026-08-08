@@ -94,7 +94,7 @@ struct MusicPanel: View {
 
             Button {
                 if let url = pickAudioFile() {
-                    settings.customPath = url.path
+                    settings.customMedia = MediaReference(url: url)
                 }
             } label: {
                 Label("Выбрать свой файл…", systemImage: "folder")

@@ -43,6 +43,7 @@ final class AppModel: ObservableObject {
     let store = ProjectStore()
     @Published var editor: EditorController?
     @Published var recents: [ProjectMeta] = []
+    @Published var storeErrorMessage: String?
 
     init() {
         refreshRecents()
@@ -53,12 +54,29 @@ final class AppModel: ObservableObject {
     }
 
     func refreshRecents() {
-        recents = store.listProjects()
+        do {
+            let listing = try store.listProjects()
+            recents = listing.projects
+            if listing.issues.isEmpty {
+                storeErrorMessage = nil
+            } else {
+                let count = listing.issues.count
+                let names = listing.issues.prefix(3).map(\.fileName).joined(separator: ", ")
+                storeErrorMessage = "Не удалось открыть \(count) \(count == 1 ? "проект" : "проекта"): \(names). Остальные проекты доступны."
+            }
+        } catch {
+            storeErrorMessage = error.localizedDescription
+        }
     }
 
     func newProject(with urls: [URL]) {
         var project = Project(name: ProjectStore.defaultProjectName())
-        store.save(project)
+        do {
+            try store.save(project)
+        } catch {
+            storeErrorMessage = error.localizedDescription
+            return
+        }
         project.updatedAt = Date()
         let controller = EditorController(project: project, store: store)
         controller.addClips(urls: urls)
@@ -66,13 +84,21 @@ final class AppModel: ObservableObject {
     }
 
     func openProject(id: UUID) {
-        guard let project = store.load(id: id) else { return }
-        editor = EditorController(project: project, store: store)
+        do {
+            let project = try store.load(id: id)
+            editor = EditorController(project: project, store: store)
+        } catch {
+            storeErrorMessage = error.localizedDescription
+        }
     }
 
     func deleteProject(id: UUID) {
-        store.delete(id: id)
-        refreshRecents()
+        do {
+            try store.delete(id: id)
+            refreshRecents()
+        } catch {
+            storeErrorMessage = error.localizedDescription
+        }
     }
 
     func closeProject() {
@@ -108,5 +134,17 @@ struct RootView: View {
             }
         }
         .animation(.easeInOut(duration: 0.2), value: app.editor == nil)
+        .alert("Ошибка проекта", isPresented: storeErrorBinding) {
+            Button("Понятно", role: .cancel) {}
+        } message: {
+            Text(app.storeErrorMessage ?? "")
+        }
+    }
+
+    private var storeErrorBinding: Binding<Bool> {
+        Binding(
+            get: { app.storeErrorMessage != nil },
+            set: { if !$0 { app.storeErrorMessage = nil } }
+        )
     }
 }

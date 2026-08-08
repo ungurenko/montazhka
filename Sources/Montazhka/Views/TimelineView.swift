@@ -59,6 +59,16 @@ struct TimelineView: View {
                     .font(.system(size: 12))
                     .foregroundStyle(Theme.pauseHighlight)
             }
+            if !controller.fillerCandidates.isEmpty {
+                Label("\(controller.fillerCandidates.filter(\.enabled).count) слов к вырезке", systemImage: "text.badge.minus")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.orange)
+            }
+            if let selection = controller.timelineSelection {
+                Label("\(TimeFormat.short(selection.duration)) выделено", systemImage: "selection.pin.in.out")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.accent)
+            }
             Spacer()
             ZoomButton(icon: "arrow.right.to.line", help: "Показать курсор воспроизведения") {
                 jumpToPlayheadRequest += 1
@@ -115,6 +125,33 @@ struct TimelineView: View {
                 }
 
                 // Подсветка найденных пауз
+                if let selection = controller.timelineSelection {
+                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                        .fill(Theme.accent.opacity(0.18))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                                .stroke(Theme.accent.opacity(0.8), lineWidth: 1.5)
+                        )
+                        .frame(width: max(2, CGFloat(selection.duration) * pps), height: clipHeight)
+                        .offset(x: CGFloat(selection.start) * pps)
+                        .allowsHitTesting(false)
+                }
+
+                // Подсветка найденных пауз
+                ForEach(controller.fillerCandidates) { candidate in
+                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                        .fill(Color.orange.opacity(candidate.enabled ? 0.28 : 0.08))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                                .stroke(Color.orange.opacity(candidate.enabled ? 0.8 : 0.2), lineWidth: 1)
+                        )
+                        .frame(width: max(2, CGFloat(candidate.end - candidate.start) * pps),
+                               height: clipHeight)
+                        .offset(x: CGFloat(candidate.start) * pps)
+                        .allowsHitTesting(false)
+                }
+
+                // Подсветка найденных пауз
                 ForEach(controller.candidates) { candidate in
                     RoundedRectangle(cornerRadius: 4, style: .continuous)
                         .fill(Theme.pauseHighlight.opacity(candidate.enabled ? 0.32 : 0.10))
@@ -155,7 +192,12 @@ struct TimelineView: View {
         DragGesture(minimumDistance: 0)
             .onChanged { value in
                 controller.player.pause()
-                controller.seek(to: Double(value.location.x / pps))
+                if abs(value.translation.width) < 3 {
+                    controller.seek(to: Double(value.location.x / pps))
+                } else {
+                    controller.setSelection(start: Double(value.startLocation.x / pps),
+                                            end: Double(value.location.x / pps))
+                }
             }
     }
 
