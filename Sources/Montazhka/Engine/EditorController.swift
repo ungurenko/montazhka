@@ -2,6 +2,22 @@ import Foundation
 import AVFoundation
 import AppKit
 import SwiftUI
+import Observation
+
+func uniqueMediaSources(in clips: [Clip]) -> [MediaReference] {
+    var seen = Set<UUID>()
+    return clips.compactMap { clip in
+        seen.insert(clip.source.id).inserted ? clip.source : nil
+    }
+}
+
+func unavailableMediaSources(_ sources: [MediaReference]) -> [MediaReference] {
+    sources.filter { $0.resolvedURL == nil }
+}
+
+func resolvedMediaPaths(_ sources: [MediaReference]) -> [String] {
+    sources.compactMap { $0.resolvedURL?.path }
+}
 
 /// Состояние обработки улучшенного звука.
 enum VoiceEnhanceStatus: Equatable {
@@ -17,7 +33,7 @@ enum ProjectSaveStatus: Equatable {
     case failed(String)
 }
 
-enum OpenRouterKeyStatus: Equatable {
+enum OpenRouterKeyStatus: Equatable, Sendable {
     case missing
     case checking
     case saved
@@ -25,7 +41,7 @@ enum OpenRouterKeyStatus: Equatable {
 }
 
 /// Счётчик поколений асинхронной работы: результат устаревшего поколения отбрасывается.
-private struct Generation {
+struct Generation {
     private var value = 0
 
     /// Начинает новое поколение и возвращает его номер.
@@ -39,33 +55,34 @@ private struct Generation {
 
 /// Сердце монтажки: держит проект, собирает предпросмотр, режет, отменяет, сохраняет.
 @MainActor
-final class EditorController: ObservableObject {
-    @Published private(set) var project: Project
-    @Published var currentTime: Double = 0
-    @Published var isPlaying = false
-    @Published var selectedClipID: UUID?
-    @Published var selectionStart: Double?
-    @Published var selectionEnd: Double?
-    @Published var pixelsPerSecond: CGFloat = 24
-    @Published var candidates: [PauseCandidate] = []
-    @Published var isDetecting = false
-    @Published var waveformVersion = 0
-    @Published var showPausePanel = false
-    @Published var showVoicePanel = false
-    @Published var showMusicPanel = false
-    @Published var showSmartEditPanel = false
-    @Published private(set) var voiceStatus: VoiceEnhanceStatus = .idle
-    @Published private(set) var musicProcessing = false
-    @Published var canUndo = false
-    @Published var canRedo = false
-    @Published var missingFilesMessage: String?
-    @Published private(set) var missingSources: [MediaReference] = []
-    @Published private(set) var saveStatus: ProjectSaveStatus = .idle
-    @Published private(set) var renderWarnings: [CompositionWarning] = []
-    @Published var smartEditCandidates: [SmartEditCandidate] = []
-    @Published private(set) var smartEditStatus: SmartEditStatus = .idle
-    @Published private(set) var openRouterKeyStatus: OpenRouterKeyStatus = .missing
-    @Published var smartEditModel: SmartEditModel = .saved {
+@Observable
+final class EditorController {
+    private(set) var project: Project
+    var currentTime: Double = 0
+    var isPlaying = false
+    var selectedClipID: UUID?
+    var selectionStart: Double?
+    var selectionEnd: Double?
+    var pixelsPerSecond: CGFloat = 24
+    var candidates: [PauseCandidate] = []
+    var isDetecting = false
+    var waveformVersion = 0
+    var showPausePanel = false
+    var showVoicePanel = false
+    var showMusicPanel = false
+    var showSmartEditPanel = false
+    private(set) var voiceStatus: VoiceEnhanceStatus = .idle
+    private(set) var musicProcessing = false
+    var canUndo = false
+    var canRedo = false
+    var missingFilesMessage: String?
+    private(set) var missingSources: [MediaReference] = []
+    private(set) var saveStatus: ProjectSaveStatus = .idle
+    private(set) var renderWarnings: [CompositionWarning] = []
+    var smartEditCandidates: [SmartEditCandidate] = []
+    private(set) var smartEditStatus: SmartEditStatus = .idle
+    private(set) var openRouterKeyStatus: OpenRouterKeyStatus = .missing
+    var smartEditModel: SmartEditModel = .saved {
         didSet { SmartEditModel.saved = smartEditModel }
     }
 
@@ -79,34 +96,35 @@ final class EditorController: ObservableObject {
     private let smartEditService: SmartEditService
     private let openRouterKeyStore = OpenRouterKeyStore()
 
-    private var timeObserver: Any?
-    private var endObserver: NSObjectProtocol?
-    private var terminateObserver: NSObjectProtocol?
-    private var previewBoundary: Any?
-    private var projectEditor: ProjectEditor
-    private var coalescedEditKind: String?
-    private var coalescedEditReset: Task<Void, Never>?
-    private var rebuildGeneration = Generation()
-    private var saveTask: Task<Void, Never>?
-    private var enhancedAudioURLs: [String: URL] = [:]
-    private var enhanceDebounce: Task<Void, Never>?
-    private var enhanceGeneration = Generation()
-    private var musicDebounce: Task<Void, Never>?
-    private var seekTask: Task<Void, Never>?
-    private var latestSeekTarget: Double?
-    private var displaySizeCache: [String: CGSize] = [:]
-    private var smartEditTask: Task<Void, Never>?
-    private var smartEditGeneration = Generation()
-    private var smartEditSnapshotID: String?
+    @ObservationIgnored private var timeObserver: Any?
+    @ObservationIgnored private var endObserver: NSObjectProtocol?
+    @ObservationIgnored private var terminateObserver: NSObjectProtocol?
+    @ObservationIgnored private var previewBoundary: Any?
+    @ObservationIgnored private var projectEditor: ProjectEditor
+    @ObservationIgnored private var coalescedEditKind: String?
+    @ObservationIgnored private var coalescedEditReset: Task<Void, Never>?
+    @ObservationIgnored private var rebuildGeneration = Generation()
+    @ObservationIgnored private var saveTask: Task<Void, Never>?
+    @ObservationIgnored private var enhancedAudioURLs: [String: URL] = [:]
+    @ObservationIgnored private var enhanceDebounce: Task<Void, Never>?
+    @ObservationIgnored private var enhanceGeneration = Generation()
+    @ObservationIgnored private var musicDebounce: Task<Void, Never>?
+    @ObservationIgnored private var seekTask: Task<Void, Never>?
+    @ObservationIgnored private var latestSeekTarget: Double?
+    @ObservationIgnored private var displaySizeCache: [String: CGSize] = [:]
+    @ObservationIgnored private var smartEditTask: Task<Void, Never>?
+    @ObservationIgnored private var smartEditGeneration = Generation()
+    @ObservationIgnored private var smartEditSnapshotID: String?
+    @ObservationIgnored private var keyStateTask: Task<Void, Never>?
+    @ObservationIgnored private var missingFilesTask: Task<Void, Never>?
+    @ObservationIgnored private var missingFilesGeneration = Generation()
+    @ObservationIgnored private var waveformWarmupTask: Task<Void, Never>?
 
     var duration: Double { project.totalDuration }
     var timelineSelection: TimelineSelection? {
         guard let selectionStart, let selectionEnd else { return nil }
         return TimelineSelection(start: selectionStart, end: selectionEnd, duration: duration)
     }
-
-    /// Уникальные пути исходных файлов на ленте.
-    private var uniqueSourcePaths: Set<String> { Set(project.clips.map(\.sourcePath)) }
 
     /// Размер кадра первого клипа с учётом поворота — для оценки размера файла в экспорте.
     func sourceDisplaySize() async -> CGSize? {
@@ -159,6 +177,10 @@ final class EditorController: ObservableObject {
     func shutdown() {
         player.pause()
         cancelSmartEdit()
+        keyStateTask?.cancel()
+        missingFilesTask?.cancel()
+        waveformWarmupTask?.cancel()
+        _ = missingFilesGeneration.advance()
         if let endObserver { NotificationCenter.default.removeObserver(endObserver) }
         if let terminateObserver { NotificationCenter.default.removeObserver(terminateObserver) }
         saveNow()
@@ -189,17 +211,24 @@ final class EditorController: ObservableObject {
     }
 
     private func checkMissingFiles() {
-        var seen = Set<UUID>()
-        missingSources = project.clips.compactMap { clip in
-            guard clip.source.resolvedURL == nil, seen.insert(clip.source.id).inserted else { return nil }
-            return clip.source
+        missingFilesTask?.cancel()
+        let generation = missingFilesGeneration.advance()
+        let sources = uniqueMediaSources(in: project.clips)
+        missingSources = []
+        missingFilesMessage = nil
+
+        missingFilesTask = Task { [weak self] in
+            let missing = await Task.detached(priority: .utility) {
+                unavailableMediaSources(sources)
+            }.value
+            guard let self,
+                  !Task.isCancelled,
+                  self.missingFilesGeneration.isCurrent(generation) else { return }
+            self.missingSources = missing
+            guard !missing.isEmpty else { return }
+            let names = missing.map(\.displayName).joined(separator: ", ")
+            self.missingFilesMessage = "Не нашёл исходные файлы: \(names). Клипы сохранены — укажи, где теперь лежат файлы."
         }
-        guard !missingSources.isEmpty else {
-            missingFilesMessage = nil
-            return
-        }
-        let names = missingSources.map(\.displayName).joined(separator: ", ")
-        missingFilesMessage = "Не нашёл исходные файлы: \(names). Клипы сохранены — укажи, где теперь лежат файлы."
     }
 
     /// Переподключает все клипы одного исходника, сохраняя границы монтажа.
@@ -216,18 +245,29 @@ final class EditorController: ObservableObject {
         var replacement = affected[0].source
         replacement.relink(to: url)
         applyProjectEdit(.relink(sourceID: id, to: replacement))
-        checkMissingFiles()
-        warmUpWaveforms()
         afterEdit(seekTo: currentTime)
         return nil
     }
 
     private func warmUpWaveforms() {
-        for path in uniqueSourcePaths {
-            Task { [weak self] in
-                guard let self else { return }
-                if await self.waveforms.ensure(path: path) != nil {
-                    self.waveformVersion += 1
+        waveformWarmupTask?.cancel()
+        let sources = uniqueMediaSources(in: project.clips)
+        let waveforms = self.waveforms
+        waveformWarmupTask = Task { [weak self] in
+            let paths = await Task.detached(priority: .utility) {
+                Array(Set(resolvedMediaPaths(sources)))
+            }.value
+            guard !Task.isCancelled else { return }
+            await withTaskGroup(of: Bool.self) { group in
+                for path in paths {
+                    group.addTask { await waveforms.ensure(path: path) != nil }
+                }
+                for await ready in group {
+                    guard !Task.isCancelled else {
+                        group.cancelAll()
+                        return
+                    }
+                    if ready { self?.waveformVersion += 1 }
                 }
             }
         }
@@ -372,8 +412,14 @@ final class EditorController: ObservableObject {
     }
 
     private func applyProjectEdit(_ edit: ProjectEdit) {
+        let previousSources = Set(uniqueMediaSources(in: project.clips))
         projectEditor.apply(edit, recordHistory: false)
         project = projectEditor.project
+        let currentSources = Set(uniqueMediaSources(in: project.clips))
+        if currentSources != previousSources {
+            checkMissingFiles()
+            warmUpWaveforms()
+        }
     }
 
     private func afterEdit(seekTo time: Double?) {
@@ -400,6 +446,7 @@ final class EditorController: ObservableObject {
     private func restoreProject(_ snapshot: Project) {
         project = snapshot
         checkMissingFiles()
+        warmUpWaveforms()
         candidates = []
         cancelSmartEdit()
         clearSelection()
@@ -438,7 +485,6 @@ final class EditorController: ObservableObject {
             self.beginEdit()
             self.applyProjectEdit(.replaceClips(self.project.clips + newClips))
             self.afterEdit(seekTo: self.currentTime)
-            self.warmUpWaveforms()
             if self.project.voiceEnhance.enabled { self.refreshEnhancedAudio() }
         }
     }
@@ -612,15 +658,24 @@ final class EditorController: ObservableObject {
         }
 
         let settings = project.voiceEnhance
-        let sources = Array(uniqueSourcePaths)
-        guard !sources.isEmpty else {
+        let mediaSources = uniqueMediaSources(in: project.clips)
+        guard !mediaSources.isEmpty else {
             voiceStatus = .idle
             return
         }
-        voiceStatus = .rendering(done: 0, total: sources.count)
+        voiceStatus = .rendering(done: 0, total: mediaSources.count)
 
         Task { [weak self] in
             guard let self else { return }
+            let sources = await Task.detached(priority: .utility) {
+                Array(Set(resolvedMediaPaths(mediaSources)))
+            }.value
+            guard self.enhanceGeneration.isCurrent(generation) else { return }
+            guard !sources.isEmpty else {
+                self.voiceStatus = .idle
+                return
+            }
+            self.voiceStatus = .rendering(done: 0, total: sources.count)
             guard let ready = await self.renderEnhancedAudio(sources: sources,
                                                              settings: settings,
                                                              generation: generation) else { return }
@@ -707,10 +762,21 @@ final class EditorController: ObservableObject {
     // MARK: - Умный монтаж
 
     func refreshOpenRouterKeyState() {
-        do {
-            openRouterKeyStatus = try openRouterKeyStore.load() == nil ? .missing : .saved
-        } catch {
-            openRouterKeyStatus = .failed(error.localizedDescription)
+        keyStateTask?.cancel()
+        openRouterKeyStatus = .checking
+        let keyStore = openRouterKeyStore
+        keyStateTask = Task { [weak self] in
+            let status = await Task.detached(priority: .utility) {
+                do {
+                    return try keyStore.load() == nil
+                        ? OpenRouterKeyStatus.missing
+                        : OpenRouterKeyStatus.saved
+                } catch {
+                    return OpenRouterKeyStatus.failed(error.localizedDescription)
+                }
+            }.value
+            guard !Task.isCancelled else { return }
+            self?.openRouterKeyStatus = status
         }
     }
 

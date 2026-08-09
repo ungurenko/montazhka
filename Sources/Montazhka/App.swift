@@ -40,32 +40,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 /// Навигация приложения: стартовый экран или монтажный стол.
 @MainActor
 final class AppModel: ObservableObject {
-    let store = ProjectStore()
+    let store: ProjectStore
     @Published var editor: EditorController?
     @Published var recents: [ProjectMeta] = []
     @Published var storeErrorMessage: String?
+    private var recentsTask: Task<Void, Never>?
+    private var recentsGeneration = 0
 
-    init() {
-        refreshRecents()
-        // Отладочный режим: сразу открыть последний проект
-        if CommandLine.arguments.contains("--open-latest"), let latest = recents.first {
-            openProject(id: latest.id)
-        }
+    init(store: ProjectStore = ProjectStore()) {
+        self.store = store
+        refreshRecents(openLatestAfterLoad: CommandLine.arguments.contains("--open-latest"))
     }
 
-    func refreshRecents() {
-        do {
-            let listing = try store.listProjects()
-            recents = listing.projects
-            if listing.issues.isEmpty {
-                storeErrorMessage = nil
-            } else {
-                let count = listing.issues.count
-                let names = listing.issues.prefix(3).map(\.fileName).joined(separator: ", ")
-                storeErrorMessage = "Не удалось открыть \(count) \(count == 1 ? "проект" : "проекта"): \(names). Остальные проекты доступны."
+    func refreshRecents(openLatestAfterLoad: Bool = false) {
+        recentsTask?.cancel()
+        recentsGeneration += 1
+        let generation = recentsGeneration
+        recentsTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                let listing = try await store.listProjects()
+                guard !Task.isCancelled, generation == recentsGeneration else { return }
+                recents = listing.projects
+                if listing.issues.isEmpty {
+                    storeErrorMessage = nil
+                } else {
+                    let count = listing.issues.count
+                    let names = listing.issues.prefix(3).map(\.fileName).joined(separator: ", ")
+                    storeErrorMessage = "Не удалось открыть \(count) \(count == 1 ? "проект" : "проекта"): \(names). Остальные проекты доступны."
+                }
+                if openLatestAfterLoad, editor == nil, let latest = recents.first {
+                    openProject(id: latest.id)
+                }
+            } catch {
+                guard !Task.isCancelled, generation == recentsGeneration else { return }
+                storeErrorMessage = error.localizedDescription
             }
-        } catch {
-            storeErrorMessage = error.localizedDescription
         }
     }
 

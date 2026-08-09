@@ -3,7 +3,7 @@ import SwiftUI
 /// Окно сохранения готового видео.
 struct ExportSheet: View {
     @Environment(\.dismiss) private var dismiss
-    @ObservedObject var controller: EditorController
+    var controller: EditorController
     @StateObject private var export = ExportModel()
     @State private var quality: ExportQuality = .high
     @State private var audioWarning: String?

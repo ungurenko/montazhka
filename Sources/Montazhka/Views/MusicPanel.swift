@@ -4,7 +4,7 @@ import UniformTypeIdentifiers
 
 /// Панель фоновой музыки: тумблер, список встроенных мелодий, свой файл, громкость.
 struct MusicPanel: View {
-    @ObservedObject var controller: EditorController
+    var controller: EditorController
     @State private var settings = MusicSettings()
 
     var body: some View {

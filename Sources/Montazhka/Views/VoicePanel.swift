@@ -2,7 +2,7 @@ import SwiftUI
 
 /// Панель улучшения голоса: тумблер и три ползунка.
 struct VoicePanel: View {
-    @ObservedObject var controller: EditorController
+    var controller: EditorController
     @State private var settings = VoiceEnhanceSettings()
 
     var body: some View {

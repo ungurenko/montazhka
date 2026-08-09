@@ -6,7 +6,7 @@ import UniformTypeIdentifiers
 /// Монтажный стол: плеер сверху, лента снизу, справа — панель поиска пауз.
 struct EditorView: View {
     @EnvironmentObject private var app: AppModel
-    @ObservedObject var controller: EditorController
+    var controller: EditorController
     @State private var projectName: String = ""
     @State private var showExport = false
     @State private var keyMonitor: Any?
@@ -348,24 +348,18 @@ struct EditorView: View {
 // MARK: - Нижняя панель управления
 
 private struct TransportBar: View {
-    @ObservedObject var controller: EditorController
+    var controller: EditorController
 
     var body: some View {
         HStack(spacing: 18) {
-            Text(TimeFormat.short(controller.currentTime))
-                .font(.system(size: 15, weight: .semibold, design: .monospaced))
-                .foregroundStyle(Theme.textPrimary)
-                .frame(width: 84, alignment: .leading)
+            PlaybackTimeLabel(controller: controller)
 
             Spacer()
 
             ControlButton(icon: "backward.frame.fill", help: "Кадр назад (←)") {
                 controller.stepFrames(-1)
             }
-            ControlButton(icon: controller.isPlaying ? "pause.fill" : "play.fill",
-                          help: "Плей/пауза (пробел)", size: 22, prominent: true) {
-                controller.togglePlay()
-            }
+            PlayPauseControl(controller: controller)
             ControlButton(icon: "forward.frame.fill", help: "Кадр вперёд (→)") {
                 controller.stepFrames(1)
             }
@@ -404,6 +398,30 @@ private struct TransportBar: View {
         .padding(.horizontal, 18)
         .padding(.vertical, 10)
         .cardStyle()
+    }
+}
+
+/// Единственный текст в панели, который обновляется вместе с позицией плеера.
+private struct PlaybackTimeLabel: View {
+    var controller: EditorController
+
+    var body: some View {
+        Text(TimeFormat.short(controller.currentTime))
+            .font(.system(size: 15, weight: .semibold, design: .monospaced))
+            .foregroundStyle(Theme.textPrimary)
+            .frame(width: 84, alignment: .leading)
+    }
+}
+
+/// Кнопка изолирует частые изменения состояния Play/Pause от остальной панели.
+private struct PlayPauseControl: View {
+    var controller: EditorController
+
+    var body: some View {
+        ControlButton(icon: controller.isPlaying ? "pause.fill" : "play.fill",
+                      help: "Плей/пауза (пробел)", size: 22, prominent: true) {
+            controller.togglePlay()
+        }
     }
 }
 

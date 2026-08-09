@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct SmartEditPanel: View {
-    @ObservedObject var controller: EditorController
+    @Bindable var controller: EditorController
     @State private var keyInput = ""
     @State private var replacingKey = false
 

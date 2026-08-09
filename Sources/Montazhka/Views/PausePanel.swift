@@ -2,7 +2,7 @@ import SwiftUI
 
 /// Панель поиска пауз: настройки, список найденного, вырезка.
 struct PausePanel: View {
-    @ObservedObject var controller: EditorController
+    var controller: EditorController
     @State private var settings = DetectionSettings()
 
     var body: some View {
@@ -208,4 +208,3 @@ private struct CandidateRow: View {
         )
     }
 }
-

@@ -20,12 +20,12 @@ enum ProjectStoreError: LocalizedError {
     }
 }
 
-struct ProjectListIssue: Equatable {
+struct ProjectListIssue: Equatable, Sendable {
     let fileName: String
     let message: String
 }
 
-struct ProjectListing {
+struct ProjectListing: Sendable {
     let projects: [ProjectMeta]
     let issues: [ProjectListIssue]
 }
@@ -101,16 +101,35 @@ final class ProjectStore {
         catch { throw ProjectStoreError.delete(error.localizedDescription) }
     }
 
-    func listProjects() throws -> ProjectListing {
-        try prepareDirectories()
+    func listProjects() async throws -> ProjectListing {
+        let directory = projectsDir
+        let task = Task.detached(priority: .userInitiated) {
+            try Self.listProjects(in: directory)
+        }
+        return try await withTaskCancellationHandler {
+            try await task.value
+        } onCancel: {
+            task.cancel()
+        }
+    }
+
+    /// Полная проверка каждого JSON выполняется вне главного потока.
+    private static func listProjects(in directory: URL) throws -> ProjectListing {
+        try Task.checkCancellation()
+        do {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        } catch {
+            throw ProjectStoreError.prepareDirectory(error.localizedDescription)
+        }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         let files: [URL]
-        do { files = try FileManager.default.contentsOfDirectory(at: projectsDir, includingPropertiesForKeys: nil) }
+        do { files = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) }
         catch { throw ProjectStoreError.read(error.localizedDescription) }
         var projects: [ProjectMeta] = []
         var issues: [ProjectListIssue] = []
         for url in files where url.pathExtension == "json" {
+            try Task.checkCancellation()
             do {
                 let data = try Data(contentsOf: url)
                 let project = try decoder.decode(Project.self, from: data)

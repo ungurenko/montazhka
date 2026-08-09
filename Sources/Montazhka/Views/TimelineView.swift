@@ -1,9 +1,31 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
+struct TimelineLayoutItem: Identifiable, Equatable {
+    let clip: Clip
+    let start: Double
+
+    var id: UUID { clip.id }
+}
+
+/// Готовые координаты клипов: один линейный проход без повторных поисков.
+struct TimelineLayout: Equatable {
+    let items: [TimelineLayoutItem]
+    let duration: Double
+
+    init(clips: [Clip]) {
+        var cursor = 0.0
+        items = clips.map { clip in
+            defer { cursor += clip.duration }
+            return TimelineLayoutItem(clip: clip, start: cursor)
+        }
+        duration = cursor
+    }
+}
+
 /// Лента клипов: волны звука, линейка времени, курсор, зум, перетаскивание.
 struct TimelineView: View {
-    @ObservedObject var controller: EditorController
+    var controller: EditorController
     @State private var draggedClipID: UUID?
     @State private var orderAtDragStart: [Clip]?
     @State private var zoomAtPinchStart: CGFloat?
@@ -14,18 +36,22 @@ struct TimelineView: View {
     private let rulerHeight: CGFloat = 20
 
     private var pps: CGFloat { controller.pixelsPerSecond }
-    private var totalWidth: CGFloat { max(CGFloat(controller.duration) * pps + 40, viewportWidth - 24) }
+    private func totalWidth(for duration: Double) -> CGFloat {
+        max(CGFloat(duration) * pps + 40, viewportWidth - 24)
+    }
 
     var body: some View {
+        let layout = TimelineLayout(clips: controller.project.clips)
+
         VStack(spacing: 6) {
-            header
+            header(duration: layout.duration)
             GeometryReader { geo in
                 ScrollViewReader { proxy in
                     // Лента НИКОГДА не прокручивается сама: на Mac нельзя надёжно понять,
                     // листает ли пользователь прямо сейчас, и любая автоподкрутка дерётся с ним.
                     // Вернуться к курсору можно кнопкой в шапке ленты.
                     ScrollView(.horizontal, showsIndicators: true) {
-                        timelineContent
+                        timelineContent(layout: layout)
                             .padding(.horizontal, 12)
                     }
                     .onAppear { viewportWidth = geo.size.width }
@@ -49,7 +75,7 @@ struct TimelineView: View {
 
     // MARK: - Шапка ленты
 
-    private var header: some View {
+    private func header(duration: Double) -> some View {
         HStack(spacing: 10) {
             Text("Лента")
                 .font(.system(size: 13, weight: .semibold, design: .rounded))
@@ -78,8 +104,8 @@ struct TimelineView: View {
                 controller.pixelsPerSecond = max(3, pps / 1.4)
             }
             ZoomButton(icon: "arrow.left.and.right.square", help: "Вся лента целиком") {
-                guard controller.duration > 0 else { return }
-                controller.pixelsPerSecond = max(3, (viewportWidth - 64) / CGFloat(controller.duration))
+                guard duration > 0 else { return }
+                controller.pixelsPerSecond = max(3, (viewportWidth - 64) / CGFloat(duration))
             }
             ZoomButton(icon: "plus.magnifyingglass", help: "Приблизить") {
                 controller.pixelsPerSecond = min(240, pps * 1.4)
@@ -89,32 +115,33 @@ struct TimelineView: View {
 
     // MARK: - Содержимое
 
-    private var timelineContent: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            RulerView(duration: controller.duration, pps: pps)
-                .frame(width: totalWidth, height: rulerHeight)
+    private func timelineContent(layout: TimelineLayout) -> some View {
+        let width = totalWidth(for: layout.duration)
+
+        return VStack(alignment: .leading, spacing: 4) {
+            RulerView(duration: layout.duration, pps: pps)
+                .frame(width: width, height: rulerHeight)
                 .contentShape(Rectangle())
                 .gesture(scrubGesture)
 
             ZStack(alignment: .topLeading) {
-                if controller.project.clips.isEmpty {
+                if layout.items.isEmpty {
                     Text("Здесь появятся клипы")
                         .font(.system(size: 13, design: .rounded))
                         .foregroundStyle(Theme.textSecondary)
-                        .frame(width: totalWidth, height: clipHeight)
+                        .frame(width: width, height: clipHeight)
                 } else {
                     HStack(spacing: 0) {
-                        ForEach(controller.project.clips) { clip in
+                        ForEach(layout.items) { item in
                             ClipCell(
-                                clip: clip,
-                                width: max(3, CGFloat(clip.duration) * pps),
+                                clip: item.clip,
+                                width: max(3, CGFloat(item.clip.duration) * pps),
                                 height: clipHeight,
-                                selected: controller.selectedClipID == clip.id,
+                                selected: controller.selectedClipID == item.clip.id,
                                 waveforms: controller.waveforms,
                                 waveformVersion: controller.waveformVersion,
-                                isDragged: draggedClipID == clip.id,
-                                timelineStart: controller.timelineStart(
-                                    of: controller.project.clips.firstIndex(where: { $0.id == clip.id }) ?? 0),
+                                isDragged: draggedClipID == item.clip.id,
+                                timelineStart: item.start,
                                 controller: controller,
                                 draggedClipID: $draggedClipID,
                                 orderAtDragStart: $orderAtDragStart
@@ -165,25 +192,14 @@ struct TimelineView: View {
                         .allowsHitTesting(false)
                 }
             }
-            .frame(width: totalWidth, alignment: .topLeading)
+            .frame(width: width, alignment: .topLeading)
         }
-        .overlay(alignment: .topLeading) { playhead }
-    }
-
-    private var playhead: some View {
-        VStack(spacing: 0) {
-            Image(systemName: "arrowtriangle.down.fill")
-                .font(.system(size: 9))
-                .foregroundStyle(Theme.accent)
-                .offset(y: 1)
-            Rectangle()
-                .fill(Theme.accent)
-                .frame(width: 2)
+        .overlay(alignment: .topLeading) {
+            TimelinePlayhead(controller: controller,
+                             pps: pps,
+                             height: rulerHeight + 4 + clipHeight)
+                .id("playhead-marker")
         }
-        .frame(height: rulerHeight + 4 + clipHeight)
-        .offset(x: CGFloat(controller.currentTime) * pps - 4.5)
-        .allowsHitTesting(false)
-        .id("playhead-marker")
     }
 
     // MARK: - Жесты
@@ -218,6 +234,28 @@ struct TimelineView: View {
         }
         draggedClipID = nil
         orderAtDragStart = nil
+    }
+}
+
+/// Частые обновления позиции плеера ограничены этим маленьким представлением.
+private struct TimelinePlayhead: View {
+    var controller: EditorController
+    let pps: CGFloat
+    let height: CGFloat
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Image(systemName: "arrowtriangle.down.fill")
+                .font(.system(size: 9))
+                .foregroundStyle(Theme.accent)
+                .offset(y: 1)
+            Rectangle()
+                .fill(Theme.accent)
+                .frame(width: 2)
+        }
+        .frame(height: height)
+        .offset(x: CGFloat(controller.currentTime) * pps - 4.5)
+        .allowsHitTesting(false)
     }
 }
 

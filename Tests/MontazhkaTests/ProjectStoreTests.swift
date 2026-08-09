@@ -118,22 +118,41 @@ final class ProjectStoreTests: XCTestCase {
         XCTAssertEqual(loaded.schemaVersion, Project.currentSchemaVersion)
     }
 
-    func testListingKeepsValidProjectsWhenAnotherFileIsDamaged() throws {
+    func testListingKeepsValidProjectsWhenAnotherFileIsDamaged() async throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("montazhka-list-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let store = ProjectStore(baseDirectory: root)
         let valid = Project(name: "Исправный")
+        let legacyID = UUID()
         try store.save(valid)
+        let legacy = """
+        {
+          "id":"\(legacyID.uuidString)",
+          "name":"Старый проект",
+          "clips":[],
+          "createdAt":"2026-01-01T00:00:00Z",
+          "updatedAt":"2026-01-01T00:00:00Z"
+        }
+        """
+        try Data(legacy.utf8).write(
+            to: store.projectsDir.appendingPathComponent("legacy.json")
+        )
         try Data("{broken-json".utf8).write(
             to: store.projectsDir.appendingPathComponent("damaged.json")
         )
+        let newer = """
+        {"id":"\(UUID().uuidString)","schemaVersion":999,"name":"Из будущего","clips":[]}
+        """
+        try Data(newer.utf8).write(
+            to: store.projectsDir.appendingPathComponent("newer.json")
+        )
 
-        let listing = try store.listProjects()
+        let listing = try await store.listProjects()
 
-        XCTAssertEqual(listing.projects.map(\.id), [valid.id])
-        XCTAssertEqual(listing.issues.count, 1)
-        XCTAssertEqual(listing.issues.first?.fileName, "damaged.json")
+        XCTAssertEqual(Set(listing.projects.map(\.id)), Set([valid.id, legacyID]))
+        XCTAssertEqual(listing.issues.count, 2)
+        XCTAssertEqual(Set(listing.issues.map(\.fileName)), Set(["damaged.json", "newer.json"]))
     }
 
     func testSaveReportsDirectoryFailure() throws {

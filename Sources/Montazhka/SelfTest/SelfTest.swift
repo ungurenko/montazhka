@@ -1,5 +1,6 @@
 import Foundation
 import AVFoundation
+import Observation
 
 /// Самопроверка движка: математика ленты, извлечение волны, поиск пауз, склейка, экспорт.
 /// Запуск: `.build/debug/Montazhka --selftest`
@@ -66,6 +67,9 @@ enum SelfTest {
 
     private static func runAll() async {
         testTimelineMath()
+        await testObservationIsolation()
+        await testMissingSourceInvalidation()
+        await testProjectListing()
         testEditHistory()
         failures += SmartEditSelfTest.run()
         testExportEstimator()
@@ -121,6 +125,44 @@ enum SelfTest {
         check(result.count == 1 && approx(result[0].duration, 6, 0.001),
               "вырезка целого клипа убирает его совсем")
 
+        let layoutClips = [clip(0, 2), clip(4, 7), clip(10, 14)]
+        let layout = TimelineLayout(clips: layoutClips)
+        check(layout.items.map(\.start) == [0, 2, 5]
+              && layout.items.map(\.clip.id) == layoutClips.map(\.id)
+              && approx(layout.duration, 9, 0.001),
+              "раскладка ленты одним проходом сохраняет порядок и начала")
+
+        let sharedSource = MediaReference(path: "/tmp/shared.mov")
+        let repeated = (0..<78).map { index in
+            Clip(source: sharedSource, start: Double(index), end: Double(index + 1))
+        }
+        check(uniqueMediaSources(in: repeated).map(\.id) == [sharedSource.id],
+              "78 фрагментов одного файла дают одну проверку исходника")
+
+        let availableURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("montazhka-available-\(UUID().uuidString).mov")
+        try? Data("video".utf8).write(to: availableURL)
+        let availableSource = MediaReference(path: availableURL.path)
+        let missingSource = MediaReference(path: "/tmp/montazhka-missing-\(UUID().uuidString).mov")
+        let mixedSources = uniqueMediaSources(in: [
+            Clip(source: availableSource, start: 0, end: 1),
+            Clip(source: missingSource, start: 0, end: 1),
+            Clip(source: missingSource, start: 1, end: 2)
+        ])
+        let missing = unavailableMediaSources(mixedSources)
+        let paths = resolvedMediaPaths(mixedSources)
+        check(missing.map(\.id) == [missingSource.id]
+              && paths == [availableURL.path],
+              "проверка путей в фоне пропускает доступный и объединяет отсутствующий исходник")
+        try? FileManager.default.removeItem(at: availableURL)
+
+        var sourceCheckGeneration = Generation()
+        let staleCheck = sourceCheckGeneration.advance()
+        let currentCheck = sourceCheckGeneration.advance()
+        check(!sourceCheckGeneration.isCurrent(staleCheck)
+              && sourceCheckGeneration.isCurrent(currentCheck),
+              "поздний результат проверки исходников не заменяет новое состояние")
+
         // Разрез
         let sourceClip = clip(2, 12)
         if let split = TimelineOps.splitting(clips: [sourceClip], at: 0, offset: 4) {
@@ -140,6 +182,105 @@ enum SelfTest {
         }
         check(TimelineOps.splitting(clips: [clip(0, 10)], at: 0, offset: 0.01) == nil,
               "разрез у самого края отклоняется")
+    }
+
+    private final class ObservationProbe: @unchecked Sendable {
+        var playbackChanged = false
+        var projectChanged = false
+    }
+
+    private static func testObservationIsolation() async {
+        print("Observation интерфейса:")
+        let result = await MainActor.run { () -> (playback: Bool, project: Bool) in
+            let root = FileManager.default.temporaryDirectory
+                .appendingPathComponent("montazhka-observation-\(UUID().uuidString)", isDirectory: true)
+            defer { try? FileManager.default.removeItem(at: root) }
+            let controller = EditorController(project: Project(name: "Observation"),
+                                              store: ProjectStore(baseDirectory: root))
+            let probe = ObservationProbe()
+
+            withObservationTracking {
+                _ = controller.currentTime
+            } onChange: {
+                probe.playbackChanged = true
+            }
+            withObservationTracking {
+                _ = controller.project
+            } onChange: {
+                probe.projectChanged = true
+            }
+
+            controller.currentTime = 1
+            controller.shutdown()
+            return (probe.playbackChanged, probe.projectChanged)
+        }
+        check(result.playback && !result.project,
+              "время воспроизведения обновляется без инвалидации проекта")
+    }
+
+    private static func testMissingSourceInvalidation() async {
+        let result = await Task { @MainActor in
+            let root = FileManager.default.temporaryDirectory
+                .appendingPathComponent("montazhka-missing-race-\(UUID().uuidString)", isDirectory: true)
+            let missing = MediaReference(path: "/tmp/montazhka-stale-\(UUID().uuidString).mov")
+            let clip = Clip(source: missing, start: 0, end: 1)
+            let controller = EditorController(project: Project(name: "Гонка", clips: [clip]),
+                                              store: ProjectStore(baseDirectory: root))
+            controller.deleteClip(id: clip.id)
+            try? await Task.sleep(nanoseconds: 100_000_000)
+            let isClean = controller.missingSources.isEmpty
+                && controller.missingFilesMessage == nil
+            controller.shutdown()
+            try? FileManager.default.removeItem(at: root)
+            return isClean
+        }.value
+        check(result,
+              "поздняя проверка удалённого исходника не возвращает предупреждение")
+    }
+
+    private static func testProjectListing() async {
+        print("Список проектов:")
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("montazhka-listing-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = ProjectStore(baseDirectory: root)
+        let valid = Project(name: "Исправный", clips: [
+            Clip(sourcePath: "/tmp/video.mov", start: 2, end: 7)
+        ])
+        let legacyID = UUID()
+
+        do {
+            try store.save(valid)
+            let legacy = """
+            {
+              "id":"\(legacyID.uuidString)",
+              "name":"Старый проект",
+              "clips":[],
+              "createdAt":"2026-01-01T00:00:00Z",
+              "updatedAt":"2026-01-01T00:00:00Z"
+            }
+            """
+            try Data(legacy.utf8).write(
+                to: store.projectsDir.appendingPathComponent("legacy.json")
+            )
+            try Data("{broken-json".utf8).write(
+                to: store.projectsDir.appendingPathComponent("damaged.json")
+            )
+            let newer = """
+            {"id":"\(UUID().uuidString)","schemaVersion":999,"name":"Из будущего","clips":[]}
+            """
+            try Data(newer.utf8).write(
+                to: store.projectsDir.appendingPathComponent("newer.json")
+            )
+
+            let listing = try await store.listProjects()
+            check(Set(listing.projects.map(\.id)) == Set([valid.id, legacyID])
+                  && listing.projects.first?.duration == 5
+                  && listing.issues.count == 2,
+                  "фоновый список сохраняет текущую, старую, новую и повреждённую схемы")
+        } catch {
+            check(false, "фоновый список сохраняет текущую, старую, новую и повреждённую схемы")
+        }
     }
 
     // MARK: - История отмены
