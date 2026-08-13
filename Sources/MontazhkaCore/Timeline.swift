@@ -16,7 +16,36 @@ public struct TimelineSelection: Equatable {
     }
 }
 
+public enum TimelineTrimEdge: Equatable, Sendable {
+    case start
+    case end
+}
+
 public enum TimelineOps {
+    public static func shorteningClip(
+        clips: [Clip],
+        id: UUID,
+        edge: TimelineTrimEdge,
+        sourceTime: Double,
+        minimumDuration: Double = 0.1
+    ) -> [Clip] {
+        guard let index = clips.firstIndex(where: { $0.id == id }) else { return clips }
+        var clip = clips[index]
+        switch edge {
+        case .start:
+            guard sourceTime > clip.start,
+                  sourceTime <= clip.end - minimumDuration else { return clips }
+            clip.start = sourceTime
+        case .end:
+            guard sourceTime < clip.end,
+                  sourceTime >= clip.start + minimumDuration else { return clips }
+            clip.end = sourceTime
+        }
+        var result = clips
+        result[index] = clip
+        return result
+    }
+
     public static func removingRange(clips: [Clip], start: Double, end: Double) -> [Clip] {
         var result: [Clip] = []
         var acc = 0.0

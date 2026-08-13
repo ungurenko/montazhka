@@ -33,6 +33,48 @@ struct CompositionBuildResult: @unchecked Sendable {
     let warnings: [CompositionWarning]
 }
 
+/// План открытия медиа: каждый исходник и его обработанный звук загружаются один раз.
+struct MediaSourceLoadPlan {
+    struct Source {
+        let sourceURL: URL
+        let enhancedURL: URL?
+        let displayName: String
+    }
+
+    let sources: [Source]
+    let clipSourceIndices: [Int]
+
+    init(clips: [Clip], enhancedAudio: [String: URL]) {
+        struct Key: Hashable {
+            let sourcePath: String
+            let enhancedPath: String?
+        }
+
+        var sourceIndices: [Key: Int] = [:]
+        var plannedSources: [Source] = []
+        var plannedClipIndices: [Int] = []
+
+        for clip in clips {
+            let sourceURL = clip.url.standardizedFileURL
+            let enhancedURL = enhancedAudio[clip.sourcePath]?.standardizedFileURL
+            let key = Key(sourcePath: sourceURL.path, enhancedPath: enhancedURL?.path)
+            if let existing = sourceIndices[key] {
+                plannedClipIndices.append(existing)
+                continue
+            }
+            let index = plannedSources.count
+            sourceIndices[key] = index
+            plannedSources.append(Source(sourceURL: sourceURL,
+                                         enhancedURL: enhancedURL,
+                                         displayName: clip.fileName))
+            plannedClipIndices.append(index)
+        }
+
+        sources = plannedSources
+        clipSourceIndices = plannedClipIndices
+    }
+}
+
 /// Склеивает клипы ленты в одно видео для предпросмотра и экспорта.
 enum CompositionBuilder {
     /// `enhancedAudio` — готовые файлы улучшенного звука по пути исходника:
@@ -56,15 +98,23 @@ enum CompositionBuilder {
                                                            preferredTrackID: kCMPersistentTrackID_Invalid)
         else { return CompositionBuildResult(composition: composition, audioMix: nil, warnings: []) }
 
-        // Фаза 1 — открыть исходники и загрузить дорожки всех клипов параллельно.
-        // Порядок восстанавливаем по индексу: вставка ниже строго упорядочена.
-        let loaded = await withTaskGroup(of: (Int, LoadedClip).self) { group -> [LoadedClip] in
-            for (index, clip) in clips.enumerated() {
-                group.addTask { (index, await loadClip(clip, enhancedURL: enhancedAudio[clip.sourcePath])) }
+        // Фаза 1 — каждый уникальный исходник открываем один раз.
+        // Группы по четыре не дают большому проекту забить AVFoundation сотнями задач.
+        let plan = MediaSourceLoadPlan(clips: clips, enhancedAudio: enhancedAudio)
+        var loadedSources = Array<LoadedSource?>(repeating: nil, count: plan.sources.count)
+        for batchStart in stride(from: 0, to: plan.sources.count, by: 4) {
+            guard !Task.isCancelled else { break }
+            let batchEnd = min(batchStart + 4, plan.sources.count)
+            let batch = await withTaskGroup(of: (Int, LoadedSource).self) { group in
+                for index in batchStart..<batchEnd {
+                    let source = plan.sources[index]
+                    group.addTask { (index, await loadSource(source)) }
+                }
+                var results: [(Int, LoadedSource)] = []
+                for await result in group { results.append(result) }
+                return results
             }
-            var acc: [(Int, LoadedClip)] = []
-            for await result in group { acc.append(result) }
-            return acc.sorted { $0.0 < $1.0 }.map(\.1)
+            for (index, source) in batch { loadedSources[index] = source }
         }
 
         // Фаза 2 — вставка по порядку. Мутируем общие треки, поэтому строго последовательно.
@@ -74,33 +124,41 @@ enum CompositionBuilder {
         var voiceJoints: [(time: CMTime, leftDuration: CMTime, rightDuration: CMTime)] = []
         var previousAudioInserted = false
         var previousDuration = CMTime.zero
-        for clip in loaded {
-            let range = clip.range
+        for (clipIndex, clip) in clips.enumerated() {
+            guard !Task.isCancelled,
+                  plan.clipSourceIndices.indices.contains(clipIndex),
+                  let source = loadedSources[plan.clipSourceIndices[clipIndex]] else { break }
+            let rangeStart = CMTime(seconds: clip.start, preferredTimescale: 60_000)
+            let rangeEnd = CMTime(seconds: clip.end, preferredTimescale: 60_000)
+            let range = CMTimeRange(start: rangeStart, duration: rangeEnd - rangeStart)
             let clipStart = cursor
-            if let video = clip.video {
+            if let video = source.video {
                 do {
                     try videoTrack.insertTimeRange(range, of: video, at: cursor)
-                    if !transformSet, let transform = clip.transform {
+                    if !transformSet, let transform = source.transform {
                         videoTrack.preferredTransform = transform
                         transformSet = true
                     }
                 } catch {
-                    warnings.append(.videoInsertFailed(clip.name))
+                    warnings.append(.videoInsertFailed(source.name))
                 }
             } else {
-                warnings.append(.missingVideo(clip.name))
+                warnings.append(.missingVideo(source.name))
             }
             var audioInserted = false
-            if let enhanced = clip.enhancedAudio,
-               (try? audioTrack.insertTimeRange(enhanced.range, of: enhanced.track, at: cursor)) != nil {
-                audioInserted = true
+            if let enhanced = source.enhancedAudio {
+                let clamped = range.intersection(enhanced.range)
+                if clamped.duration.seconds > 0,
+                   (try? audioTrack.insertTimeRange(clamped, of: enhanced.track, at: cursor)) != nil {
+                    audioInserted = true
+                }
             }
-            if !audioInserted, let audio = clip.originalAudio {
+            if !audioInserted, let audio = source.originalAudio {
                 do {
                     try audioTrack.insertTimeRange(range, of: audio, at: cursor)
                     audioInserted = true
                 } catch {
-                    warnings.append(.audioInsertFailed(clip.name))
+                    warnings.append(.audioInsertFailed(source.name))
                 }
             }
             if previousAudioInserted, audioInserted {
@@ -148,37 +206,27 @@ enum CompositionBuilder {
         return params
     }
 
-    /// Готовые дорожки одного клипа — грузятся заранее и параллельно, вставляются по порядку.
-    private struct LoadedClip {
+    /// Готовые дорожки одного исходника переиспользуются всеми его фрагментами.
+    private struct LoadedSource: @unchecked Sendable {
         let name: String
-        let range: CMTimeRange
         let video: AVAssetTrack?
         let transform: CGAffineTransform?
-        /// Улучшенный звук с уже обрезанным по клипу диапазоном (если есть).
         let enhancedAudio: (track: AVAssetTrack, range: CMTimeRange)?
-        /// Запасная оригинальная дорожка — если улучшенной нет или её вставка не удалась.
         let originalAudio: AVAssetTrack?
-        /// Держим исходники живыми до вставки: AVAssetTrack не удерживает свой asset,
-        /// а без живого asset вставка молча даёт пустой трек.
         let sourceAsset: AVURLAsset
         let enhancedAsset: AVURLAsset?
     }
 
-    /// Открывает исходник и грузит видео, оригинальный и улучшенный звук параллельно.
-    private static func loadClip(_ clip: Clip, enhancedURL: URL?) async -> LoadedClip {
-        let asset = AVURLAsset(url: clip.url)
-        let range = CMTimeRange(
-            start: CMTime(seconds: clip.start, preferredTimescale: 600),
-            duration: CMTime(seconds: clip.duration, preferredTimescale: 600)
-        )
+    private static func loadSource(_ source: MediaSourceLoadPlan.Source) async -> LoadedSource {
+        let asset = AVURLAsset(url: source.sourceURL)
         async let videoLoad = loadVideo(from: asset)
         async let originalAudio = firstAudioTrack(of: asset)
-        async let enhanced = loadEnhancedAudio(url: enhancedURL, clipRange: range)
+        async let enhanced = loadEnhancedAudio(url: source.enhancedURL)
 
         let (video, transform) = await videoLoad
         let enhancedResult = await enhanced
-        return LoadedClip(
-            name: clip.fileName, range: range, video: video, transform: transform,
+        return LoadedSource(
+            name: source.displayName, video: video, transform: transform,
             enhancedAudio: enhancedResult.map { ($0.track, $0.range) },
             originalAudio: await originalAudio,
             sourceAsset: asset,
@@ -195,15 +243,12 @@ enum CompositionBuilder {
         (try? await asset.loadTracks(withMediaType: .audio))?.first
     }
 
-    private static func loadEnhancedAudio(url: URL?, clipRange: CMTimeRange) async -> (track: AVAssetTrack, range: CMTimeRange, asset: AVURLAsset)? {
+    private static func loadEnhancedAudio(url: URL?) async -> (track: AVAssetTrack, range: CMTimeRange, asset: AVURLAsset)? {
         guard let url else { return nil }
         let asset = AVURLAsset(url: url)
         guard let audio = try? await asset.loadTracks(withMediaType: .audio).first,
               let trackRange = try? await audio.load(.timeRange) else { return nil }
-        // Декодер мог дать ±пару мс на хвосте — обрезаем, иначе вставка молча падает.
-        let clamped = clipRange.intersection(trackRange)
-        guard clamped.duration.seconds > 0 else { return nil }
-        return (audio, clamped, asset)
+        return (audio, trackRange, asset)
     }
 
     /// Вставляет мелодию по кругу на всю длительность и строит микс:

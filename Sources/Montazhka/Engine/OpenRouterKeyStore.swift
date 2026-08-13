@@ -9,8 +9,16 @@ enum OpenRouterKeyStoreError: LocalizedError {
     }
 }
 
-struct OpenRouterKeyStore: Sendable {
-    private let service = "ru.ungurenko.montazhka"
+protocol OpenRouterKeyStoring: Sendable {
+    func load() throws -> String?
+    func save(_ key: String) throws
+    func delete() throws
+}
+
+struct OpenRouterKeyStore: OpenRouterKeyStoring, Sendable {
+    // Новое имя отделяет ключ от записей, созданных временно подписанными сборками.
+    // После первого сохранения доступ сохраняется и для следующих обновлений приложения.
+    private let service = "ru.ungurenko.montazhka.openrouter.v2"
     private let account = "openrouter-api-key"
 
     func load() throws -> String? {
@@ -58,4 +66,11 @@ struct OpenRouterKeyStore: Sendable {
             kSecAttrAccount as String: account
         ]
     }
+}
+
+/// Хранилище без доступа к связке ключей — для тестов и встроенной самопроверки.
+struct EmptyOpenRouterKeyStore: OpenRouterKeyStoring, Sendable {
+    func load() throws -> String? { nil }
+    func save(_ key: String) throws {}
+    func delete() throws {}
 }

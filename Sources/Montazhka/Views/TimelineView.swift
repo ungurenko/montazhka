@@ -23,19 +23,48 @@ struct TimelineLayout: Equatable {
     }
 }
 
+enum TimelineDragPreviewMath {
+    static func width(forClipWidth width: CGFloat) -> CGFloat {
+        min(240, max(80, width))
+    }
+}
+
+private struct TimelineTrimPreview: Equatable {
+    let originalClip: Clip
+    let edge: TimelineTrimEdge
+    var sourceTime: Double
+
+    var clip: Clip {
+        var result = originalClip
+        if edge == .start {
+            result.start = sourceTime
+        } else {
+            result.end = sourceTime
+        }
+        return result
+    }
+}
+
 /// Лента клипов: волны звука, линейка времени, курсор, зум, перетаскивание.
 struct TimelineView: View {
     var controller: EditorController
     @State private var draggedClipID: UUID?
     @State private var orderAtDragStart: [Clip]?
-    @State private var zoomAtPinchStart: CGFloat?
     @State private var viewportWidth: CGFloat = 800
-    @State private var jumpToPlayheadRequest = 0
+    @State private var viewportProxy = TimelineViewportProxy()
+    @State private var handToolLatched = false
+    @State private var handKeyHeld = false
+    @State private var followPlayback = false
+    @State private var pointerX: CGFloat?
+    @State private var trimPreview: TimelineTrimPreview?
+    @State private var trimWasCancelled = false
 
     private let clipHeight: CGFloat = 92
     private let rulerHeight: CGFloat = 20
+    private let timelineInset: CGFloat = 12
 
     private var pps: CGFloat { controller.pixelsPerSecond }
+    private var handToolActive: Bool { handToolLatched || handKeyHeld }
     private func totalWidth(for duration: Double) -> CGFloat {
         max(CGFloat(duration) * pps + 40, viewportWidth - 24)
     }
@@ -46,30 +75,47 @@ struct TimelineView: View {
         VStack(spacing: 6) {
             header(duration: layout.duration)
             GeometryReader { geo in
-                ScrollViewReader { proxy in
-                    // Лента НИКОГДА не прокручивается сама: на Mac нельзя надёжно понять,
-                    // листает ли пользователь прямо сейчас, и любая автоподкрутка дерётся с ним.
-                    // Вернуться к курсору можно кнопкой в шапке ленты.
-                    ScrollView(.horizontal, showsIndicators: true) {
-                        timelineContent(layout: layout)
-                            .padding(.horizontal, 12)
-                    }
-                    .onAppear { viewportWidth = geo.size.width }
-                    .onChange(of: geo.size.width) { _, w in viewportWidth = w }
-                    .onChange(of: jumpToPlayheadRequest) { _, _ in
-                        withAnimation(.easeOut(duration: 0.25)) {
-                            proxy.scrollTo("playhead-marker", anchor: UnitPoint(x: 0.3, y: 0.5))
+                ScrollView(.horizontal, showsIndicators: true) {
+                    timelineContent(layout: layout)
+                        .padding(.horizontal, timelineInset)
+                        .background(TimelineScrollResolver(proxy: viewportProxy))
+                }
+                .overlay {
+                    TimelineInputMonitor(
+                        onHandKeyChanged: { handKeyHeld = $0 },
+                        onZoom: { factor, anchor in
+                            zoom(by: factor, anchorX: anchor >= 0 ? anchor : nil)
+                        },
+                        onFit: { fitTimeline(duration: layout.duration) },
+                        onEscape: cancelTransientInteraction,
+                        onManualScroll: manualViewportInteraction,
+                        onPointerChanged: { pointerX = $0 }
+                    )
+                }
+                .overlay {
+                    if handToolActive {
+                        TimelineHandPanOverlay(proxy: viewportProxy) {
+                            manualViewportInteraction()
                         }
                     }
                 }
+                .onAppear {
+                    viewportWidth = geo.size.width
+                    viewportProxy.onManualScroll = manualViewportInteraction
+                }
+                .onChange(of: geo.size.width) { _, w in viewportWidth = w }
             }
         }
         .padding(12)
         .cardStyle()
-        .simultaneousGesture(pinchGesture)
         .onDrop(of: [.text], isTargeted: nil) { _ in
             finishReorder()
             return true
+        }
+        .onChange(of: controller.currentTime) { _, _ in followPlayheadIfNeeded() }
+        .onDisappear {
+            handKeyHeld = false
+            viewportProxy.onManualScroll = nil
         }
     }
 
@@ -97,18 +143,32 @@ struct TimelineView: View {
             }
             Spacer()
             ZoomButton(icon: "arrow.right.to.line", help: "Показать курсор воспроизведения") {
-                jumpToPlayheadRequest += 1
+                viewportProxy.center(on: playheadContentX, anchorFraction: 0.3)
+            }
+            Divider().frame(height: 14)
+            ToolButton(
+                icon: handToolActive ? "hand.raised.fill" : "hand.raised",
+                help: "Двигать ленту мышью (удерживай H)",
+                active: handToolActive
+            ) {
+                handToolLatched.toggle()
+            }
+            ToolButton(
+                icon: followPlayback ? "location.fill" : "location",
+                help: "Следить за воспроизведением",
+                active: followPlayback
+            ) {
+                toggleFollowPlayback()
             }
             Divider().frame(height: 14)
             ZoomButton(icon: "minus.magnifyingglass", help: "Отдалить") {
-                controller.pixelsPerSecond = max(3, pps / 1.4)
+                zoom(by: 1 / 1.4, anchorX: pointerX)
             }
             ZoomButton(icon: "arrow.left.and.right.square", help: "Вся лента целиком") {
-                guard duration > 0 else { return }
-                controller.pixelsPerSecond = max(3, (viewportWidth - 64) / CGFloat(duration))
+                fitTimeline(duration: duration)
             }
             ZoomButton(icon: "plus.magnifyingglass", help: "Приблизить") {
-                controller.pixelsPerSecond = min(240, pps * 1.4)
+                zoom(by: 1.4, anchorX: pointerX)
             }
         }
     }
@@ -131,28 +191,12 @@ struct TimelineView: View {
                         .foregroundStyle(Theme.textSecondary)
                         .frame(width: width, height: clipHeight)
                 } else {
-                    HStack(spacing: 0) {
-                        ForEach(layout.items) { item in
-                            ClipCell(
-                                clip: item.clip,
-                                width: max(3, CGFloat(item.clip.duration) * pps),
-                                height: clipHeight,
-                                selected: controller.selectedClipID == item.clip.id,
-                                waveforms: controller.waveforms,
-                                waveformVersion: controller.waveformVersion,
-                                isDragged: draggedClipID == item.clip.id,
-                                timelineStart: item.start,
-                                controller: controller,
-                                draggedClipID: $draggedClipID,
-                                orderAtDragStart: $orderAtDragStart
-                            )
-                            .equatable()
-                        }
+                    ForEach(layout.items) { item in
+                        timelineClip(item)
                     }
                 }
 
-                // Подсветка найденных пауз
-                if let selection = controller.timelineSelection {
+                if trimPreview == nil, let selection = controller.timelineSelection {
                     RoundedRectangle(cornerRadius: 4, style: .continuous)
                         .fill(Theme.accent.opacity(0.18))
                         .overlay(
@@ -165,7 +209,7 @@ struct TimelineView: View {
                 }
 
                 // Подсветка предложений умного монтажа
-                ForEach(controller.smartEditCandidates) { candidate in
+                ForEach(trimPreview == nil ? controller.smartEditCandidates : []) { candidate in
                     RoundedRectangle(cornerRadius: 4, style: .continuous)
                         .fill(Color.orange.opacity(candidate.enabled ? 0.28 : 0.08))
                         .overlay(
@@ -179,7 +223,7 @@ struct TimelineView: View {
                 }
 
                 // Подсветка найденных пауз
-                ForEach(controller.candidates) { candidate in
+                ForEach(trimPreview == nil ? controller.candidates : []) { candidate in
                     RoundedRectangle(cornerRadius: 4, style: .continuous)
                         .fill(Theme.pauseHighlight.opacity(candidate.enabled ? 0.32 : 0.10))
                         .overlay(
@@ -198,7 +242,6 @@ struct TimelineView: View {
             TimelinePlayhead(controller: controller,
                              pps: pps,
                              height: rulerHeight + 4 + clipHeight)
-                .id("playhead-marker")
         }
     }
 
@@ -217,23 +260,162 @@ struct TimelineView: View {
             }
     }
 
-    private var pinchGesture: some Gesture {
-        MagnifyGesture()
-            .onChanged { value in
-                if zoomAtPinchStart == nil { zoomAtPinchStart = controller.pixelsPerSecond }
-                if let base = zoomAtPinchStart {
-                    controller.pixelsPerSecond = min(240, max(3, base * value.magnification))
-                }
-            }
-            .onEnded { _ in zoomAtPinchStart = nil }
-    }
-
     private func finishReorder() {
         if let original = orderAtDragStart {
             controller.commitReorder(originalOrder: original)
         }
         draggedClipID = nil
         orderAtDragStart = nil
+    }
+
+    private var playheadContentX: CGFloat {
+        timelineInset + CGFloat(controller.currentTime) * pps
+    }
+
+    private func timelineClip(_ item: TimelineLayoutItem) -> some View {
+        let geometry = clipGeometry(for: item)
+        return ClipCell(
+            clip: geometry.clip,
+            originalClip: item.clip,
+            width: geometry.width,
+            height: clipHeight,
+            selected: controller.selectedClipID == item.clip.id,
+            waveforms: controller.waveforms,
+            waveformVersion: controller.waveformVersion,
+            isDragged: draggedClipID == item.clip.id,
+            timelineStart: item.start,
+            pps: pps,
+            trimPreview: trimPreview?.originalClip.id == item.clip.id ? trimPreview : nil,
+            controller: controller,
+            draggedClipID: $draggedClipID,
+            orderAtDragStart: $orderAtDragStart,
+            onTrimChanged: updateTrimPreview,
+            onTrimEnded: commitTrimPreview
+        )
+        .equatable()
+        .offset(x: geometry.x)
+        .zIndex(trimPreview?.originalClip.id == item.clip.id ? 3 : 0)
+    }
+
+    private func clipGeometry(for item: TimelineLayoutItem) -> (clip: Clip, x: CGFloat, width: CGFloat) {
+        guard let preview = trimPreview, preview.originalClip.id == item.clip.id else {
+            return (item.clip, CGFloat(item.start) * pps, max(3, CGFloat(item.clip.duration) * pps))
+        }
+        let clip = preview.clip
+        let leadingTrim = preview.edge == .start
+            ? CGFloat(clip.start - preview.originalClip.start) * pps
+            : 0
+        return (
+            clip,
+            CGFloat(item.start) * pps + leadingTrim,
+            max(3, CGFloat(clip.duration) * pps)
+        )
+    }
+
+    private func updateTrimPreview(
+        clip: Clip,
+        edge: TimelineTrimEdge,
+        sourceTime: Double
+    ) {
+        guard !trimWasCancelled else { return }
+        controller.player.pause()
+        trimPreview = TimelineTrimPreview(
+            originalClip: clip,
+            edge: edge,
+            sourceTime: sourceTime
+        )
+    }
+
+    private func commitTrimPreview() {
+        if trimWasCancelled {
+            trimWasCancelled = false
+            trimPreview = nil
+            return
+        }
+        guard let preview = trimPreview else { return }
+        trimPreview = nil
+        guard preview.sourceTime != (preview.edge == .start
+            ? preview.originalClip.start
+            : preview.originalClip.end) else { return }
+        controller.commitTrim(
+            clipID: preview.originalClip.id,
+            edge: preview.edge,
+            sourceTime: preview.sourceTime
+        )
+    }
+
+    private func cancelTransientInteraction() -> Bool {
+        if trimPreview != nil {
+            trimPreview = nil
+            trimWasCancelled = true
+            return true
+        }
+        if handToolLatched {
+            handToolLatched = false
+            return true
+        }
+        return false
+    }
+
+    private func manualViewportInteraction() {
+        if followPlayback { followPlayback = false }
+    }
+
+    private func zoom(by factor: CGFloat, anchorX: CGFloat?) {
+        let oldScale = pps
+        let newScale = TimelineViewportMath.clampedPixelsPerSecond(oldScale * factor)
+        guard abs(newScale - oldScale) > 0.001 else { return }
+        manualViewportInteraction()
+
+        let targetOffset: CGFloat
+        if let anchorX, anchorX >= 0, anchorX <= viewportWidth {
+            targetOffset = TimelineViewportMath.offsetKeepingAnchor(
+                currentOffset: viewportProxy.horizontalOffset,
+                anchorX: anchorX,
+                oldPixelsPerSecond: oldScale,
+                newPixelsPerSecond: newScale,
+                leadingInset: timelineInset
+            )
+        } else {
+            targetOffset = timelineInset + CGFloat(controller.currentTime) * newScale
+                - viewportWidth / 2
+        }
+
+        controller.pixelsPerSecond = newScale
+        Task { @MainActor in
+            await Task.yield()
+            viewportProxy.setHorizontalOffset(targetOffset)
+        }
+    }
+
+    private func fitTimeline(duration: Double) {
+        guard duration > 0 else { return }
+        manualViewportInteraction()
+        controller.pixelsPerSecond = TimelineViewportMath.clampedPixelsPerSecond(
+            (viewportWidth - 64) / CGFloat(duration)
+        )
+        Task { @MainActor in
+            await Task.yield()
+            viewportProxy.setHorizontalOffset(0)
+        }
+    }
+
+    private func toggleFollowPlayback() {
+        followPlayback.toggle()
+        guard followPlayback else { return }
+        if !viewportProxy.isVisible(contentX: playheadContentX) {
+            viewportProxy.center(on: playheadContentX)
+        }
+    }
+
+    private func followPlayheadIfNeeded() {
+        guard followPlayback, controller.isPlaying else { return }
+        let offset = TimelineViewportMath.followOffset(
+            playheadX: playheadContentX,
+            currentOffset: viewportProxy.horizontalOffset,
+            viewportWidth: viewportProxy.viewportWidth
+        )
+        viewportProxy.setHorizontalOffset(offset)
     }
 }
 
@@ -306,6 +488,7 @@ private struct RulerView: View {
 
 private struct ClipCell: View, Equatable {
     let clip: Clip
+    let originalClip: Clip
     let width: CGFloat
     let height: CGFloat
     let selected: Bool
@@ -313,17 +496,24 @@ private struct ClipCell: View, Equatable {
     let waveformVersion: Int
     let isDragged: Bool
     let timelineStart: Double
+    let pps: CGFloat
+    let trimPreview: TimelineTrimPreview?
     let controller: EditorController
     @Binding var draggedClipID: UUID?
     @Binding var orderAtDragStart: [Clip]?
+    let onTrimChanged: (Clip, TimelineTrimEdge, Double) -> Void
+    let onTrimEnded: () -> Void
+    @State private var isHovering = false
 
     static func == (lhs: ClipCell, rhs: ClipCell) -> Bool {
         lhs.clip == rhs.clip
+            && lhs.originalClip == rhs.originalClip
             && lhs.width == rhs.width
             && lhs.selected == rhs.selected
             && lhs.waveformVersion == rhs.waveformVersion
             && lhs.isDragged == rhs.isDragged
             && lhs.timelineStart == rhs.timelineStart
+            && lhs.trimPreview == rhs.trimPreview
     }
 
     var body: some View {
@@ -351,7 +541,6 @@ private struct ClipCell: View, Equatable {
                         lineWidth: selected ? 2 : 1)
         )
         .opacity(isDragged ? 0.5 : 1)
-        .padding(.trailing, 2)
         .contentShape(Rectangle())
         .gesture(tapToSelectAndSeek)
         .contextMenu {
@@ -364,6 +553,11 @@ private struct ClipCell: View, Equatable {
             orderAtDragStart = controller.project.clips
             draggedClipID = clip.id
             return NSItemProvider(object: clip.id.uuidString as NSString)
+        } preview: {
+            TimelineClipDragPreview(
+                fileName: clip.fileName,
+                width: TimelineDragPreviewMath.width(forClipWidth: width)
+            )
         }
         .onDrop(of: [.text], delegate: ReorderDropDelegate(
             targetID: clip.id,
@@ -371,6 +565,30 @@ private struct ClipCell: View, Equatable {
             draggedClipID: $draggedClipID,
             orderAtDragStart: $orderAtDragStart
         ))
+        .overlay(alignment: .leading) {
+            if isHovering || selected || trimPreview != nil {
+                trimHandle(edge: .start)
+            }
+        }
+        .overlay(alignment: .trailing) {
+            if isHovering || selected || trimPreview != nil {
+                trimHandle(edge: .end)
+            }
+        }
+        .overlay(alignment: trimPreview?.edge == .start ? .topLeading : .topTrailing) {
+            if let trimPreview {
+                Text(TimeFormat.short(trimBoundaryTime(trimPreview)))
+                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 3)
+                    .background(Theme.accent)
+                    .clipShape(Capsule())
+                    .offset(y: -25)
+                    .allowsHitTesting(false)
+            }
+        }
+        .onHover { isHovering = $0 }
     }
 
     private var tapToSelectAndSeek: some Gesture {
@@ -379,6 +597,77 @@ private struct ClipCell: View, Equatable {
                 controller.selectedClipID = clip.id
                 controller.seek(to: timelineStart + Double(value.location.x) / Double(max(1, width / CGFloat(clip.duration))))
             }
+    }
+
+    private func trimHandle(edge: TimelineTrimEdge) -> some View {
+        ZStack {
+            Color.clear
+            Capsule()
+                .fill(Theme.accent)
+                .frame(width: 3, height: max(28, height * 0.62))
+        }
+        .frame(width: 10, height: height)
+        .contentShape(Rectangle())
+        .offset(x: edge == .start ? -2 : 2)
+        .gesture(trimGesture(edge: edge))
+        .help(edge == .start ? "Укоротить начало" : "Укоротить конец")
+    }
+
+    private func trimGesture(edge: TimelineTrimEdge) -> some Gesture {
+        DragGesture(minimumDistance: 0)
+            .onChanged { value in
+                let seconds = Double(value.translation.width / max(1, pps))
+                var sourceTime: Double
+                if edge == .start {
+                    sourceTime = min(
+                        originalClip.end - 0.1,
+                        originalClip.start + max(0, seconds)
+                    )
+                } else {
+                    sourceTime = max(
+                        originalClip.start + 0.1,
+                        originalClip.end + min(0, seconds)
+                    )
+                }
+
+                if !NSEvent.modifierFlags.contains(.option) {
+                    let boundary = timelineStart + (sourceTime - originalClip.start)
+                    if abs(controller.currentTime - boundary) * Double(pps) <= 6 {
+                        let snapped = originalClip.start + controller.currentTime - timelineStart
+                        sourceTime = edge == .start
+                            ? min(originalClip.end - 0.1, max(originalClip.start, snapped))
+                            : min(originalClip.end, max(originalClip.start + 0.1, snapped))
+                    }
+                }
+                onTrimChanged(originalClip, edge, sourceTime)
+            }
+            .onEnded { _ in onTrimEnded() }
+    }
+
+    private func trimBoundaryTime(_ preview: TimelineTrimPreview) -> Double {
+        timelineStart + (preview.sourceTime - preview.originalClip.start)
+    }
+}
+
+private struct TimelineClipDragPreview: View {
+    let fileName: String
+    let width: CGFloat
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: Theme.radiusSmall, style: .continuous)
+            .fill(Theme.clipBackground)
+            .overlay {
+                Text(fileName)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(Theme.textSecondary)
+                    .lineLimit(1)
+                    .padding(.horizontal, 10)
+            }
+            .overlay {
+                RoundedRectangle(cornerRadius: Theme.radiusSmall, style: .continuous)
+                    .stroke(Theme.accent, lineWidth: 2)
+            }
+            .frame(width: width, height: 56)
     }
 }
 
@@ -462,6 +751,26 @@ private struct ZoomButton: View {
                 .font(.system(size: 13))
                 .foregroundStyle(Theme.textSecondary)
                 .frame(width: 26, height: 22)
+        }
+        .buttonStyle(.plain)
+        .help(help)
+    }
+}
+
+private struct ToolButton: View {
+    let icon: String
+    let help: String
+    let active: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .font(.system(size: 13, weight: active ? .semibold : .regular))
+                .foregroundStyle(active ? Theme.accent : Theme.textSecondary)
+                .frame(width: 26, height: 22)
+                .background(active ? Theme.accent.opacity(0.12) : .clear)
+                .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
         }
         .buttonStyle(.plain)
         .help(help)

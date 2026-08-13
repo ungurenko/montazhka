@@ -29,7 +29,7 @@ if [ -d Resources/Music ]; then
   cp -R Resources/Music "$APP/Contents/Resources/Music"
 fi
 
-codesign --force -s - "$APP" 2>/dev/null
+scripts/sign-app.sh "$APP"
 
 echo "✓ Готово: $APP"
 

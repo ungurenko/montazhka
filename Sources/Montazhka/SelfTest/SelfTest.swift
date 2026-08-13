@@ -196,7 +196,8 @@ enum SelfTest {
                 .appendingPathComponent("montazhka-observation-\(UUID().uuidString)", isDirectory: true)
             defer { try? FileManager.default.removeItem(at: root) }
             let controller = EditorController(project: Project(name: "Observation"),
-                                              store: ProjectStore(baseDirectory: root))
+                                              store: ProjectStore(baseDirectory: root),
+                                              openRouterKeyStore: EmptyOpenRouterKeyStore())
             let probe = ObservationProbe()
 
             withObservationTracking {
@@ -225,7 +226,8 @@ enum SelfTest {
             let missing = MediaReference(path: "/tmp/montazhka-stale-\(UUID().uuidString).mov")
             let clip = Clip(source: missing, start: 0, end: 1)
             let controller = EditorController(project: Project(name: "Гонка", clips: [clip]),
-                                              store: ProjectStore(baseDirectory: root))
+                                              store: ProjectStore(baseDirectory: root),
+                                              openRouterKeyStore: EmptyOpenRouterKeyStore())
             controller.deleteClip(id: clip.id)
             try? await Task.sleep(nanoseconds: 100_000_000)
             let isClean = controller.missingSources.isEmpty

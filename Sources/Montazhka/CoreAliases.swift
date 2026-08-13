@@ -8,6 +8,7 @@ typealias MusicSettings = MontazhkaCore.MusicSettings
 typealias Project = MontazhkaCore.Project
 typealias ProjectMeta = MontazhkaCore.ProjectMeta
 typealias TimelineSelection = MontazhkaCore.TimelineSelection
+typealias TimelineTrimEdge = MontazhkaCore.TimelineTrimEdge
 typealias TimelineOps = MontazhkaCore.TimelineOps
 typealias EditHistory<State> = MontazhkaCore.EditHistory<State>
 typealias ProjectEdit = MontazhkaCore.ProjectEdit

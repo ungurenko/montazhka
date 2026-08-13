@@ -33,6 +33,26 @@ enum ProjectSaveStatus: Equatable {
     case failed(String)
 }
 
+enum PreviewState: Equatable {
+    case empty
+    case preparing
+    case ready
+    case failed(String)
+}
+
+enum ClipImportState: Equatable {
+    case idle
+    case importing
+    case failed(String)
+}
+
+private struct ClipLoadResult: Sendable {
+    let index: Int
+    let url: URL
+    let duration: Double?
+    let error: String?
+}
+
 enum OpenRouterKeyStatus: Equatable, Sendable {
     case missing
     case checking
@@ -79,6 +99,8 @@ final class EditorController {
     private(set) var missingSources: [MediaReference] = []
     private(set) var saveStatus: ProjectSaveStatus = .idle
     private(set) var renderWarnings: [CompositionWarning] = []
+    private(set) var previewState: PreviewState = .empty
+    private(set) var clipImportState: ClipImportState = .idle
     var smartEditCandidates: [SmartEditCandidate] = []
     private(set) var smartEditStatus: SmartEditStatus = .idle
     private(set) var openRouterKeyStatus: OpenRouterKeyStatus = .missing
@@ -94,7 +116,7 @@ final class EditorController {
     private let mediaPipeline: MediaPipeline
     private let transcriptStore: TranscriptStore
     private let smartEditService: SmartEditService
-    private let openRouterKeyStore = OpenRouterKeyStore()
+    private let openRouterKeyStore: any OpenRouterKeyStoring
 
     @ObservationIgnored private var timeObserver: Any?
     @ObservationIgnored private var endObserver: NSObjectProtocol?
@@ -119,6 +141,8 @@ final class EditorController {
     @ObservationIgnored private var missingFilesTask: Task<Void, Never>?
     @ObservationIgnored private var missingFilesGeneration = Generation()
     @ObservationIgnored private var waveformWarmupTask: Task<Void, Never>?
+    @ObservationIgnored private var previewTask: Task<Void, Never>?
+    @ObservationIgnored private var clipImportTask: Task<Void, Never>?
 
     var duration: Double { project.totalDuration }
     var timelineSelection: TimelineSelection? {
@@ -140,10 +164,13 @@ final class EditorController {
         return display
     }
 
-    init(project: Project, store: ProjectStore) {
+    init(project: Project,
+         store: ProjectStore,
+         openRouterKeyStore: any OpenRouterKeyStoring = OpenRouterKeyStore()) {
         self.project = project
         self.projectEditor = ProjectEditor(project: project)
         self.store = store
+        self.openRouterKeyStore = openRouterKeyStore
         let voiceStore = VoiceEnhanceStore(cacheDir: store.enhancedAudioDir)
         let musicEQStore = MusicEQStore(cacheDir: store.musicEQDir)
         self.waveforms = WaveformStore(cacheDir: store.waveformsDir)
@@ -176,6 +203,14 @@ final class EditorController {
 
     func shutdown() {
         player.pause()
+        player.replaceCurrentItem(with: nil)
+        isPlaying = false
+        previewState = .empty
+        clipImportState = .idle
+        previewTask?.cancel()
+        clipImportTask?.cancel()
+        seekTask?.cancel()
+        _ = rebuildGeneration.advance()
         cancelSmartEdit()
         keyStateTask?.cancel()
         missingFilesTask?.cancel()
@@ -275,9 +310,8 @@ final class EditorController {
 
     // MARK: - Сборка предпросмотра
 
-    private func makeComposition() async -> (composition: AVMutableComposition, audioMix: AVAudioMix?) {
-        let result = await renderComposition(mode: .preview)
-        return (result.composition, result.audioMix)
+    private func makeComposition() async -> MediaRenderResult {
+        await renderComposition(mode: .preview)
     }
 
     /// Композиция для экспорта. Если улучшение включено — дожидается обработки всех
@@ -300,18 +334,38 @@ final class EditorController {
                                          readyEnhancedAudio: enhancedAudioURLs)
         let result = await mediaPipeline.render(request)
         if processesMusic { musicProcessing = false }
-        if mode == .preview { renderWarnings = result.warnings }
         return result
     }
 
     func rebuildAndSeek(to time: Double?) {
+        previewTask?.cancel()
         let generation = rebuildGeneration.advance()
         let wasPlaying = player.rate != 0
         player.pause()
-        Task { [weak self] in
+        isPlaying = false
+        guard !project.clips.isEmpty else {
+            player.replaceCurrentItem(with: nil)
+            renderWarnings = []
+            previewState = .empty
+            return
+        }
+        previewState = .preparing
+        previewTask = Task { [weak self] in
             guard let self else { return }
-            let (composition, audioMix) = await self.makeComposition()
-            guard self.rebuildGeneration.isCurrent(generation) else { return }
+            let result = await self.makeComposition()
+            guard !Task.isCancelled, self.rebuildGeneration.isCurrent(generation) else { return }
+            self.renderWarnings = result.warnings
+            let composition = result.composition
+            let audioMix = result.audioMix
+            let duration = composition.duration.seconds
+            if !duration.isFinite || duration <= 0.001 {
+                let warning = self.renderWarnings.map(\.message).joined(separator: "\n")
+                self.player.replaceCurrentItem(with: nil)
+                self.previewState = .failed(
+                    warning.isEmpty ? "Не удалось прочитать видео из проекта." : warning
+                )
+                return
+            }
             let item = AVPlayerItem(asset: composition)
             item.audioMix = audioMix
             self.player.replaceCurrentItem(with: item)
@@ -321,6 +375,8 @@ final class EditorController {
                                        toleranceBefore: .zero, toleranceAfter: .zero)
                 self.currentTime = clamped
             }
+            guard !Task.isCancelled, self.rebuildGeneration.isCurrent(generation) else { return }
+            self.previewState = .ready
             if wasPlaying { self.player.play() }
         }
     }
@@ -328,6 +384,7 @@ final class EditorController {
     // MARK: - Воспроизведение
 
     func togglePlay() {
+        guard previewState == .ready else { return }
         if player.rate != 0 {
             player.pause()
         } else {
@@ -463,29 +520,57 @@ final class EditorController {
 
     func addClips(urls: [URL]) {
         guard !urls.isEmpty else { return }
-        Task { [weak self] in
+        clipImportTask?.cancel()
+        clipImportState = .importing
+        clipImportTask = Task { [weak self] in
             guard let self else { return }
             // Длительности читаем параллельно; порядок восстанавливаем по индексу.
-            let loaded = await withTaskGroup(of: (Int, URL, Double?).self) { group in
+            let loaded = await withTaskGroup(of: ClipLoadResult.self) { group in
                 for (i, url) in urls.enumerated() {
                     group.addTask {
-                        let seconds = (try? await AVURLAsset(url: url).load(.duration))?.seconds
-                        let valid = (seconds?.isFinite == true && (seconds ?? 0) > 0.1) ? seconds : nil
-                        return (i, url, valid)
+                        guard !Task.isCancelled else {
+                            return ClipLoadResult(index: i, url: url, duration: nil, error: nil)
+                        }
+                        do {
+                            let asset = AVURLAsset(url: url)
+                            let duration = try await asset.load(.duration).seconds
+                            guard duration.isFinite, duration > 0.1 else {
+                                return ClipLoadResult(index: i, url: url, duration: nil,
+                                                      error: "не удалось определить длительность")
+                            }
+                            let tracks = try await asset.loadTracks(withMediaType: .video)
+                            guard !tracks.isEmpty else {
+                                return ClipLoadResult(index: i, url: url, duration: nil,
+                                                      error: "в файле нет видеодорожки")
+                            }
+                            return ClipLoadResult(index: i, url: url, duration: duration, error: nil)
+                        } catch {
+                            return ClipLoadResult(index: i, url: url, duration: nil,
+                                                  error: error.localizedDescription)
+                        }
                     }
                 }
-                var acc: [(Int, URL, Double?)] = []
+                var acc: [ClipLoadResult] = []
                 for await result in group { acc.append(result) }
-                return acc.sorted { $0.0 < $1.0 }
+                return acc.sorted { $0.index < $1.index }
             }
-            let newClips = loaded.compactMap { _, url, seconds in
-                seconds.map { Clip(sourceURL: url, start: 0, end: $0) }
+            guard !Task.isCancelled else { return }
+            let newClips = loaded.compactMap { result in
+                result.duration.map { Clip(sourceURL: result.url, start: 0, end: $0) }
             }
-            guard !newClips.isEmpty else { return }
-            self.beginEdit()
-            self.applyProjectEdit(.replaceClips(self.project.clips + newClips))
-            self.afterEdit(seekTo: self.currentTime)
-            if self.project.voiceEnhance.enabled { self.refreshEnhancedAudio() }
+            if !newClips.isEmpty {
+                self.beginEdit()
+                self.applyProjectEdit(.replaceClips(self.project.clips + newClips))
+                self.afterEdit(seekTo: self.currentTime)
+                if self.project.voiceEnhance.enabled { self.refreshEnhancedAudio() }
+            }
+            let failures = loaded.compactMap { result -> String? in
+                result.error.map { "«\(result.url.lastPathComponent)»: \($0)" }
+            }
+            self.clipImportState = failures.isEmpty
+                ? .idle
+                : .failed("Не удалось добавить видео:\n" + failures.joined(separator: "\n"))
+            self.clipImportTask = nil
         }
     }
 
@@ -498,6 +583,23 @@ final class EditorController {
         applyProjectEdit(.replaceClips(newClips))
         selectedClipID = nil
         afterEdit(seekTo: splitTime)
+    }
+
+    func commitTrim(clipID: UUID, edge: TimelineTrimEdge, sourceTime: Double) {
+        guard let index = project.clips.firstIndex(where: { $0.id == clipID }) else { return }
+        let newClips = TimelineOps.shorteningClip(
+            clips: project.clips, id: clipID, edge: edge, sourceTime: sourceTime
+        )
+        guard newClips != project.clips else { return }
+        let trimmedClip = newClips[index]
+        let boundaryTime = timelineStart(of: index)
+            + (edge == .end ? trimmedClip.duration : 0)
+
+        beginEdit()
+        applyProjectEdit(.replaceClips(newClips))
+        selectedClipID = clipID
+        currentTime = min(max(0, boundaryTime), duration)
+        afterEdit(seekTo: currentTime)
     }
 
     func deleteClip(id: UUID) {

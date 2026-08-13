@@ -239,11 +239,12 @@ struct EditorView: View {
                 .fill(Color.black)
             if controller.project.clips.isEmpty {
                 dropHint
-            } else {
+            } else if controller.previewState == .ready {
                 PlayerLayerView(player: controller.player)
                     .clipShape(RoundedRectangle(cornerRadius: Theme.radius, style: .continuous))
                     .onTapGesture { controller.togglePlay() }
             }
+            playerStatusOverlay
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onDrop(of: [.fileURL], isTargeted: nil) { providers in
@@ -260,6 +261,68 @@ struct EditorView: View {
                 .font(.system(size: 15, design: .rounded))
         }
         .foregroundStyle(.white.opacity(0.55))
+    }
+
+    @ViewBuilder
+    private var playerStatusOverlay: some View {
+        switch controller.clipImportState {
+        case .importing:
+            playerProgress("Добавляю видео…")
+        case .failed(let message) where controller.project.clips.isEmpty:
+            playerError(title: "Видео не добавилось", message: message)
+        default:
+            switch controller.previewState {
+            case .preparing:
+                playerProgress("Подготавливаю проект…")
+            case .failed(let message):
+                playerError(title: "Не удалось подготовить проект", message: message)
+            case .empty, .ready:
+                if case .failed(let message) = controller.clipImportState {
+                    VStack {
+                        Spacer()
+                        Label(message, systemImage: "exclamationmark.triangle.fill")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.white)
+                            .padding(10)
+                            .background(Color.orange.opacity(0.92))
+                            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                            .padding(12)
+                    }
+                }
+            }
+        }
+    }
+
+    private func playerProgress(_ text: String) -> some View {
+        VStack(spacing: 10) {
+            ProgressView()
+                .controlSize(.regular)
+                .tint(.white)
+            Text(text)
+                .font(.system(size: 14, weight: .medium, design: .rounded))
+        }
+        .foregroundStyle(.white.opacity(0.9))
+    }
+
+    private func playerError(title: String, message: String) -> some View {
+        VStack(spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 28))
+                .foregroundStyle(.orange)
+            Text(title)
+                .font(.system(size: 15, weight: .semibold, design: .rounded))
+            Text(message)
+                .font(.system(size: 12))
+                .foregroundStyle(.white.opacity(0.7))
+                .multilineTextAlignment(.center)
+                .lineLimit(4)
+            if case .failed = controller.previewState {
+                Button("Повторить") { controller.rebuildAndSeek(to: controller.currentTime) }
+                    .buttonStyle(.borderedProminent)
+            }
+        }
+        .foregroundStyle(.white)
+        .padding(24)
     }
 
     private func handleDrop(_ providers: [NSItemProvider]) -> Bool {
@@ -360,6 +423,7 @@ private struct TransportBar: View {
                 controller.stepFrames(-1)
             }
             PlayPauseControl(controller: controller)
+                .disabled(controller.previewState != .ready)
             ControlButton(icon: "forward.frame.fill", help: "Кадр вперёд (→)") {
                 controller.stepFrames(1)
             }
