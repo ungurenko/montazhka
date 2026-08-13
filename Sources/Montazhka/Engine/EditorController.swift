@@ -3,6 +3,7 @@ import AVFoundation
 import AppKit
 import SwiftUI
 import Observation
+import OSLog
 
 func uniqueMediaSources(in clips: [Clip]) -> [MediaReference] {
     var seen = Set<UUID>()
@@ -198,7 +199,9 @@ final class EditorController {
     }
 
     deinit {
-        if let timeObserver { player.removeTimeObserver(timeObserver) }
+        MainActor.assumeIsolated {
+            if let timeObserver { player.removeTimeObserver(timeObserver) }
+        }
     }
 
     func shutdown() {
@@ -218,7 +221,7 @@ final class EditorController {
         _ = missingFilesGeneration.advance()
         if let endObserver { NotificationCenter.default.removeObserver(endObserver) }
         if let terminateObserver { NotificationCenter.default.removeObserver(terminateObserver) }
-        saveNow()
+        Task { await saveNow() }
     }
 
     // MARK: - Наблюдатели
@@ -241,7 +244,7 @@ final class EditorController {
         terminateObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.willTerminateNotification, object: nil, queue: .main
         ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.saveNow() }
+            MainActor.assumeIsolated { self?.saveOnTerminate() }
         }
     }
 
@@ -820,20 +823,26 @@ final class EditorController {
         isDetecting = true
         let clips = project.clips
         let settings = project.detection
+        let waveforms = self.waveforms
         Task { [weak self] in
             guard let self else { return }
             // Волны всех файлов считаем параллельно: ensure внутри распаковывает звук
             // в отдельной задаче, поэтому последовательный await зря терял время.
             await withTaskGroup(of: Void.self) { group in
                 for path in Set(clips.map(\.sourcePath)) {
-                    group.addTask { await self.waveforms.ensure(path: path) }
+                    group.addTask { await waveforms.ensure(path: path) }
                 }
             }
-            let found = SilenceDetector.findPauses(
-                clips: clips,
-                peaksFor: { self.waveforms.peaks(for: $0) },
-                settings: settings
-            )
+            guard !Task.isCancelled else { return }
+            // Сам проход по пикам — тоже вне главного потока.
+            let found = await Task.detached(priority: .userInitiated) {
+                SilenceDetector.findPauses(
+                    clips: clips,
+                    peaksFor: { waveforms.peaks(for: $0) },
+                    settings: settings
+                )
+            }.value
+            guard !Task.isCancelled else { return }
             self.waveformVersion += 1
             self.candidates = found
             self.isDetecting = false
@@ -1090,17 +1099,30 @@ final class EditorController {
         saveTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 500_000_000)
             guard !Task.isCancelled else { return }
-            self?.saveNow()
+            await self?.saveNow()
         }
     }
 
-    func saveNow() {
+    func saveNow() async {
+        saveTask?.cancel()
+        do {
+            try await store.saveAsync(project)
+            saveStatus = .saved
+        } catch {
+            Logger.persistence.error("Не удалось сохранить проект: \(error.localizedDescription)")
+            saveStatus = .failed(error.localizedDescription)
+        }
+    }
+
+    /// Финальный флеш при выходе из приложения — синхронно, чтобы гарантированно
+    /// попасть на диск: здесь главный поток и так завершает работу.
+    private func saveOnTerminate() {
         saveTask?.cancel()
         do {
             try store.save(project)
             saveStatus = .saved
         } catch {
-            saveStatus = .failed(error.localizedDescription)
+            Logger.persistence.error("Не удалось сохранить проект при завершении: \(error.localizedDescription)")
         }
     }
 

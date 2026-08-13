@@ -14,7 +14,7 @@ let package = Package(
         .target(
             name: "MontazhkaCore",
             path: "Sources/MontazhkaCore",
-            swiftSettings: [.swiftLanguageMode(.v5)]
+            swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         .executableTarget(
             name: "Montazhka",
@@ -23,7 +23,9 @@ let package = Package(
                 .product(name: "FluidAudio", package: "FluidAudio")
             ],
             path: "Sources/Montazhka",
-            swiftSettings: [.swiftLanguageMode(.v5)]
+            swiftSettings: [
+                .swiftLanguageMode(.v6)
+            ]
         ),
         .testTarget(
             name: "MontazhkaTests",

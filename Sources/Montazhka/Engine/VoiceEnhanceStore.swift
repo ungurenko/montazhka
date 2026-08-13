@@ -3,6 +3,9 @@ import CryptoKit
 
 /// Кэш обработанного звука: один CAF на пару «исходник + настройки».
 /// Обработка долгая, поэтому результат живёт на диске (как волны в WaveformStore).
+///
+/// @unchecked Sendable: NSLock защищает только словарь inFlight; готовые файлы
+/// появляются атомарно (рендер в .work + moveItem), диск — источник правды.
 final class VoiceEnhanceStore: @unchecked Sendable {
     private let cacheDir: URL
     private let lock = NSLock()

@@ -5,7 +5,7 @@ import UniformTypeIdentifiers
 
 /// Монтажный стол: плеер сверху, лента снизу, справа — панель поиска пауз.
 struct EditorView: View {
-    @EnvironmentObject private var app: AppModel
+    @Environment(AppModel.self) private var app
     var controller: EditorController
     @State private var projectName: String = ""
     @State private var showExport = false
@@ -60,7 +60,7 @@ struct EditorView: View {
             Text(controller.missingFilesMessage ?? "")
         }
         .alert("Не удалось сохранить проект", isPresented: saveErrorBinding) {
-            Button("Повторить") { controller.saveNow() }
+            Button("Повторить") { Task { await controller.saveNow() } }
             Button("Закрыть", role: .cancel) { controller.dismissSaveError() }
         } message: {
             if case let .failed(message) = controller.saveStatus {
@@ -327,30 +327,42 @@ struct EditorView: View {
 
     private func handleDrop(_ providers: [NSItemProvider]) -> Bool {
         let videoExtensions = Set(["mp4", "mov", "m4v", "mpg", "mpeg", "avi", "mkv"])
-        var found = false
-        let group = DispatchGroup()
-        var urls: [URL] = []
-        let lock = NSLock()
-        for provider in providers where provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
-            found = true
-            group.enter()
-            provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier) { item, _ in
-                defer { group.leave() }
-                var url: URL?
-                if let data = item as? Data {
-                    url = URL(dataRepresentation: data, relativeTo: nil)
-                } else if let u = item as? URL {
-                    url = u
-                }
-                if let url, videoExtensions.contains(url.pathExtension.lowercased()) {
-                    lock.lock(); urls.append(url); lock.unlock()
-                }
-            }
+        let fileProviders = providers.filter {
+            $0.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier)
         }
-        group.notify(queue: .main) {
+        guard !fileProviders.isEmpty else { return false }
+        Task {
+            let urls = await withTaskGroup(of: URL?.self) { group in
+                for provider in fileProviders {
+                    // NSItemProvider не Sendable — перевязываем до передачи в задачу.
+                    nonisolated(unsafe) let p = provider
+                    group.addTask {
+                        await withCheckedContinuation { continuation in
+                            p.loadItem(forTypeIdentifier: UTType.fileURL.identifier) { item, _ in
+                                var url: URL?
+                                if let data = item as? Data {
+                                    url = URL(dataRepresentation: data, relativeTo: nil)
+                                } else if let u = item as? URL {
+                                    url = u
+                                }
+                                guard let url, videoExtensions.contains(url.pathExtension.lowercased()) else {
+                                    continuation.resume(returning: nil)
+                                    return
+                                }
+                                continuation.resume(returning: url)
+                            }
+                        }
+                    }
+                }
+                var result: [URL] = []
+                for await url in group {
+                    if let url { result.append(url) }
+                }
+                return result
+            }
             controller.addClips(urls: urls)
         }
-        return found
+        return true
     }
 
     // MARK: - Клавиатура
@@ -359,9 +371,12 @@ struct EditorView: View {
         removeKeyMonitor()
         let controller = self.controller
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-            let keyCode = event.keyCode
-            let withShift = event.modifierFlags.contains(.shift)
-            let withCommand = event.modifierFlags.contains(.command)
+            // Хендлер монитора синхронно исполняется на главном потоке —
+            // перевязка nonisolated(unsafe) лишь успокаивает компилятор Swift 6.
+            nonisolated(unsafe) let e = event
+            let keyCode = e.keyCode
+            let withShift = e.modifierFlags.contains(.shift)
+            let withCommand = e.modifierFlags.contains(.command)
             let handled = MainActor.assumeIsolated { () -> Bool in
                 // Не перехватываем клавиши, когда печатают текст (например, имя проекта).
                 if NSApp.keyWindow?.firstResponder is NSTextView { return false }
@@ -396,7 +411,7 @@ struct EditorView: View {
                     return false
                 }
             }
-            return handled ? nil : event
+            return handled ? nil : e
         }
     }
 

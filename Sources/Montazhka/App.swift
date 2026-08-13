@@ -1,14 +1,15 @@
 import SwiftUI
 import AppKit
+import OSLog
 
 struct MontazhkaApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
-    @StateObject private var app = AppModel()
+    @State private var app = AppModel()
 
     var body: some Scene {
         WindowGroup {
             RootView()
-                .environmentObject(app)
+                .environment(app)
                 .frame(minWidth: 1080, minHeight: 660)
                 .preferredColorScheme(.light)
                 .background(Theme.background)
@@ -39,11 +40,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
 /// Навигация приложения: стартовый экран или монтажный стол.
 @MainActor
-final class AppModel: ObservableObject {
+@Observable
+final class AppModel {
     let store: ProjectStore
-    @Published var editor: EditorController?
-    @Published var recents: [ProjectMeta] = []
-    @Published var storeErrorMessage: String?
+    var editor: EditorController?
+    var recents: [ProjectMeta] = []
+    var storeErrorMessage: String?
     private var recentsTask: Task<Void, Never>?
     private var recentsGeneration = 0
 
@@ -70,20 +72,22 @@ final class AppModel: ObservableObject {
                     storeErrorMessage = "Не удалось открыть \(count) \(count == 1 ? "проект" : "проекта"): \(names). Остальные проекты доступны."
                 }
                 if openLatestAfterLoad, editor == nil, let latest = recents.first {
-                    openProject(id: latest.id)
+                    await openProject(id: latest.id)
                 }
             } catch {
                 guard !Task.isCancelled, generation == recentsGeneration else { return }
+                Logger.persistence.error("Не удалось получить список проектов: \(error.localizedDescription)")
                 storeErrorMessage = error.localizedDescription
             }
         }
     }
 
-    func newProject(with urls: [URL]) {
+    func newProject(with urls: [URL]) async {
         var project = Project(name: ProjectStore.defaultProjectName())
         do {
-            try store.save(project)
+            try await store.saveAsync(project)
         } catch {
+            Logger.persistence.error("Не удалось создать проект: \(error.localizedDescription)")
             storeErrorMessage = error.localizedDescription
             return
         }
@@ -93,18 +97,18 @@ final class AppModel: ObservableObject {
         editor = controller
     }
 
-    func openProject(id: UUID) {
+    func openProject(id: UUID) async {
         do {
-            let project = try store.load(id: id)
+            let project = try await store.loadAsync(id: id)
             editor = EditorController(project: project, store: store)
         } catch {
             storeErrorMessage = error.localizedDescription
         }
     }
 
-    func deleteProject(id: UUID) {
+    func deleteProject(id: UUID) async {
         do {
-            try store.delete(id: id)
+            try await store.deleteAsync(id: id)
             refreshRecents()
         } catch {
             storeErrorMessage = error.localizedDescription
@@ -130,7 +134,7 @@ final class AppModel: ObservableObject {
 }
 
 struct RootView: View {
-    @EnvironmentObject private var app: AppModel
+    @Environment(AppModel.self) private var app
 
     var body: some View {
         ZStack {

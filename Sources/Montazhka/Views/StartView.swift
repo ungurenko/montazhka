@@ -2,7 +2,7 @@ import SwiftUI
 
 /// Стартовый экран: новый монтаж + недавние проекты.
 struct StartView: View {
-    @EnvironmentObject private var app: AppModel
+    @Environment(AppModel.self) private var app
 
     var body: some View {
         VStack(spacing: 0) {
@@ -22,7 +22,7 @@ struct StartView: View {
 
             Button {
                 let urls = AppModel.pickVideos()
-                if !urls.isEmpty { app.newProject(with: urls) }
+                if !urls.isEmpty { Task { await app.newProject(with: urls) } }
             } label: {
                 Label("Новый монтаж", systemImage: "plus")
                     .font(.system(size: 16, weight: .semibold, design: .rounded))
@@ -62,13 +62,13 @@ struct StartView: View {
 }
 
 private struct RecentCard: View {
-    @EnvironmentObject private var app: AppModel
+    @Environment(AppModel.self) private var app
     let meta: ProjectMeta
     @State private var hovering = false
 
     var body: some View {
         Button {
-            app.openProject(id: meta.id)
+            Task { await app.openProject(id: meta.id) }
         } label: {
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
@@ -101,7 +101,7 @@ private struct RecentCard: View {
         .onHover { hovering = $0 }
         .contextMenu {
             Button("Удалить проект", role: .destructive) {
-                app.deleteProject(id: meta.id)
+                Task { await app.deleteProject(id: meta.id) }
             }
         }
     }

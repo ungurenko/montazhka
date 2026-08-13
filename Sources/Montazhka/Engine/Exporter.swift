@@ -1,6 +1,8 @@
 import Foundation
 import AVFoundation
 import AppKit
+import Observation
+import OSLog
 
 enum ExportQuality: String, CaseIterable, Identifiable {
     case maximum, high, medium, compact
@@ -101,7 +103,8 @@ enum ExportQuality: String, CaseIterable, Identifiable {
 
 /// Сохранение готового видео в MP4 с прогрессом.
 @MainActor
-final class ExportModel: ObservableObject {
+@Observable
+final class ExportModel {
     enum State: Equatable {
         case idle
         case exporting
@@ -109,8 +112,8 @@ final class ExportModel: ObservableObject {
         case failed(String)
     }
 
-    @Published var state: State = .idle
-    @Published var progress: Double = 0
+    var state: State = .idle
+    var progress: Double = 0
 
     private var exportTask: Task<Void, Never>?
 
@@ -134,9 +137,9 @@ final class ExportModel: ObservableObject {
         }
         exportTask = Task { [weak self] in
             do {
-                let settings = try await Transcoder.settings(for: quality, composition: composition)
-                try await Transcoder.export(composition: composition,
-                                            audioMix: audioMix,
+                let input = ExportInput(composition: composition, audioMix: audioMix)
+                let settings = try await Transcoder.settings(for: quality, input: input)
+                try await Transcoder.export(input: input,
                                             settings: settings,
                                             to: url,
                                             progress: onProgress)
@@ -146,6 +149,7 @@ final class ExportModel: ObservableObject {
             } catch is CancellationError {
                 self?.state = .idle
             } catch {
+                Logger.export.error("Экспорт не удался: \(error.localizedDescription)")
                 self?.state = .failed("Не получилось сохранить видео: \(error.localizedDescription)")
             }
             self?.exportTask = nil

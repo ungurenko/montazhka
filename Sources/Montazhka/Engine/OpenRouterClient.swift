@@ -1,4 +1,5 @@
 import Foundation
+import OSLog
 
 enum OpenRouterError: LocalizedError, Equatable {
     case invalidKey
@@ -169,6 +170,7 @@ actor OpenRouterClient {
             } catch let error as URLError where error.code == .timedOut {
                 throw OpenRouterError.timeout
             } catch {
+                Logger.network.error("OpenRouter: \(error.localizedDescription)")
                 throw OpenRouterError.network(error.localizedDescription)
             }
         }
@@ -309,7 +311,7 @@ private struct ResponseFormat: Encodable {
     enum CodingKeys: String, CodingKey { case type; case jsonSchema = "json_schema" }
 }
 
-private indirect enum JSONSchema: Encodable {
+private indirect enum JSONSchema: Encodable, Sendable {
     case object(properties: [String: JSONSchema], required: [String], additionalProperties: Bool)
     case array(items: JSONSchema)
     case string(enumValues: [String]? = nil)

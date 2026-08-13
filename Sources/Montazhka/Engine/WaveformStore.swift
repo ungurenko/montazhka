@@ -4,6 +4,10 @@ import CryptoKit
 
 /// Громкость звука (RMS) окнами по 10 мс — основа и для отрисовки волны, и для поиска пауз.
 /// Извлекается один раз на исходный файл и кэшируется на диск.
+///
+/// @unchecked Sendable: состояние защищено внутренним NSLock; массивы пиков после
+/// вставки не мутируются (только заменяются целиком), извлечение — в detached-задачах.
+/// `peaks(for:)` остаётся синхронным: его читает Canvas при отрисовке каждого кадра.
 final class WaveformStore: @unchecked Sendable {
     static let windowsPerSecond = 100.0
 
@@ -37,7 +41,7 @@ final class WaveformStore: @unchecked Sendable {
         if let existing = inFlight[path] { return existing }
         let cacheURL = cacheFileURL(for: path)
         let task = Task.detached(priority: .userInitiated) {
-            Self.loadOrExtract(path: path, cacheURL: cacheURL)
+            await Self.loadOrExtract(path: path, cacheURL: cacheURL)
         }
         inFlight[path] = task
         return task
@@ -60,11 +64,11 @@ final class WaveformStore: @unchecked Sendable {
         return cacheDir.appendingPathComponent("\(hash).f32")
     }
 
-    private static func loadOrExtract(path: String, cacheURL: URL) -> [Float]? {
+    private static func loadOrExtract(path: String, cacheURL: URL) async -> [Float]? {
         if let data = try? Data(contentsOf: cacheURL), !data.isEmpty {
             return data.withUnsafeBytes { Array($0.bindMemory(to: Float.self)) }
         }
-        guard let peaks = extract(path: path) else { return nil }
+        guard let peaks = await extract(path: path) else { return nil }
         peaks.withUnsafeBytes { try? Data($0).write(to: cacheURL, options: .atomic) }
         return peaks
     }
@@ -72,16 +76,10 @@ final class WaveformStore: @unchecked Sendable {
     // MARK: - Извлечение
 
     /// Декодирует звук в 16 кГц моно и считает RMS окнами по 10 мс (160 сэмплов).
-    private static func extract(path: String) -> [Float]? {
+    private static func extract(path: String) async -> [Float]? {
         let asset = AVURLAsset(url: URL(fileURLWithPath: path))
-        let semaphore = DispatchSemaphore(value: 0)
-        var audioTrack: AVAssetTrack?
-        asset.loadTracks(withMediaType: .audio) { tracks, _ in
-            audioTrack = tracks?.first
-            semaphore.signal()
-        }
-        semaphore.wait()
-        guard let track = audioTrack, let reader = try? AVAssetReader(asset: asset) else { return nil }
+        let audioTracks = (try? await asset.loadTracks(withMediaType: .audio)) ?? []
+        guard let track = audioTracks.first, let reader = try? AVAssetReader(asset: asset) else { return nil }
 
         let settings: [String: Any] = [
             AVFormatIDKey: kAudioFormatLinearPCM,

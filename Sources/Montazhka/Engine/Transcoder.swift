@@ -16,6 +16,22 @@ enum TranscodeError: LocalizedError {
     }
 }
 
+/// Склейка и микс для экспорта. AVFoundation-типы не Sendable, но после сборки
+/// композиция нигде больше не мутируется — контейнер осознанно помечен unchecked.
+struct ExportInput: @unchecked Sendable {
+    let composition: AVAsset
+    let audioMix: AVAudioMix?
+}
+
+/// Входы/выходы насосов перекодирования: колбэк каждого живёт на своей
+/// последовательной очереди, гонок между потоками нет.
+private struct PumpIO: @unchecked Sendable {
+    let videoOutput: AVAssetReaderVideoCompositionOutput
+    let videoInput: AVAssetWriterInput
+    let audioOutput: AVAssetReaderAudioMixOutput?
+    let audioInput: AVAssetWriterInput?
+}
+
 /// Перекодирование склейки в MP4 (H.264 + AAC) с заданным битрейтом.
 /// В отличие от готовых пресетов AVAssetExportSession даёт точный контроль сжатия,
 /// поэтому размер файла предсказуем: (битрейт видео + звука) × длительность.
@@ -27,8 +43,8 @@ enum Transcoder {
     }
 
     /// Целевые размеры и битрейт под выбранное качество — по реальному размеру кадра склейки.
-    static func settings(for quality: ExportQuality, composition: AVAsset) async throws -> Settings {
-        guard let video = try? await composition.loadTracks(withMediaType: .video).first,
+    static func settings(for quality: ExportQuality, input: ExportInput) async throws -> Settings {
+        guard let video = try? await input.composition.loadTracks(withMediaType: .video).first,
               let naturalSize = try? await video.load(.naturalSize),
               let transform = try? await video.load(.preferredTransform)
         else { throw TranscodeError.noVideoTrack }
@@ -42,11 +58,12 @@ enum Transcoder {
 
     /// Полное перекодирование: читает склейку (с миксом музыки), кодирует H.264 + AAC.
     /// `progress` зовётся с фоновой очереди значениями 0…1.
-    static func export(composition: AVAsset,
-                       audioMix: AVAudioMix?,
+    static func export(input: ExportInput,
                        settings: Settings,
                        to url: URL,
                        progress: @escaping @Sendable (Double) -> Void) async throws {
+        let composition = input.composition
+        let audioMix = input.audioMix
         let duration = (try? await composition.load(.duration).seconds) ?? 0
         let videoTracks = (try? await composition.loadTracks(withMediaType: .video)) ?? []
         guard !videoTracks.isEmpty else { throw TranscodeError.noVideoTrack }
@@ -131,15 +148,19 @@ enum Transcoder {
 
         // Отмена: сбрасываем ридер — насосы получают nil и сворачиваются сами.
         nonisolated(unsafe) let cancelReader = reader
+        let io = PumpIO(videoOutput: videoOutput,
+                        videoInput: videoInput,
+                        audioOutput: audioOutput,
+                        audioInput: audioInput)
         await withTaskCancellationHandler {
             await withTaskGroup(of: Void.self) { group in
                 group.addTask {
-                    await pump(from: videoOutput, to: videoInput, label: "video") { time in
+                    await pump(from: io.videoOutput, to: io.videoInput, label: "video") { time in
                         guard duration > 0 else { return }
                         progress(min(0.999, time.seconds / duration))
                     }
                 }
-                if let audioOutput, let audioInput {
+                if let audioOutput = io.audioOutput, let audioInput = io.audioInput {
                     group.addTask {
                         await pump(from: audioOutput, to: audioInput, label: "audio", onSample: nil)
                     }
@@ -167,6 +188,13 @@ enum Transcoder {
         progress(1)
     }
 
+    /// Потоки ридер → писатель. Колбэк requestMediaDataWhenReady зовётся строго
+    /// последовательно на своей очереди — бокс хранит его рабочее состояние.
+    private final class PumpState: @unchecked Sendable {
+        var finished = false
+        var lastReported = -1.0
+    }
+
     /// Перекачка одного потока ридер → писатель.
     /// ВАЖНО: только requestMediaDataWhenReady — ручной опрос isReadyForMoreMediaData
     /// виснет без живого RunLoop (--selftest). Прогресс — не чаще раза на 0.25 сек видео.
@@ -179,26 +207,25 @@ enum Transcoder {
         nonisolated(unsafe) let input = inputParam
         let queue = DispatchQueue(label: "montazhka.transcode.\(label)")
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            var finished = false
-            var lastReported = -1.0
+            let state = PumpState()
             input.requestMediaDataWhenReady(on: queue) {
                 while input.isReadyForMoreMediaData {
-                    guard !finished else { return }
+                    guard !state.finished else { return }
                     guard let sample = output.copyNextSampleBuffer() else {
-                        finished = true
+                        state.finished = true
                         input.markAsFinished()
                         continuation.resume()
                         return
                     }
                     if let onSample {
                         let time = CMSampleBufferGetPresentationTimeStamp(sample)
-                        if time.seconds - lastReported >= 0.25 {
-                            lastReported = time.seconds
+                        if time.seconds - state.lastReported >= 0.25 {
+                            state.lastReported = time.seconds
                             onSample(time)
                         }
                     }
                     if !input.append(sample) {
-                        finished = true
+                        state.finished = true
                         input.markAsFinished()
                         continuation.resume()
                         return

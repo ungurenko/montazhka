@@ -52,9 +52,13 @@ enum TimeFormat {
     }
 
     static func date(_ date: Date) -> String {
+        dateFormatter.string(from: date)
+    }
+
+    private static let dateFormatter: DateFormatter = {
         let f = DateFormatter()
         f.locale = Locale(identifier: "ru_RU")
         f.dateFormat = "d MMMM, HH:mm"
-        return f.string(from: date)
-    }
+        return f
+    }()
 }

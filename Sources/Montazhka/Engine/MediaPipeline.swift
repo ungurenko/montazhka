@@ -6,12 +6,16 @@ enum MediaRenderMode: Sendable {
     case export
 }
 
+/// @unchecked Sendable: композиция собирается в actor MediaPipeline, после сборки
+/// только читается и передаётся дальше один раз — мутаций нет.
 struct MediaRenderRequest: @unchecked Sendable {
     let project: Project
     let mode: MediaRenderMode
     let readyEnhancedAudio: [String: URL]
 }
 
+/// @unchecked Sendable: готовая композиция и микс после сборки не мутируются —
+/// предпросмотр или экспорт только читают их.
 struct MediaRenderResult: @unchecked Sendable {
     let composition: AVMutableComposition
     let audioMix: AVAudioMix?

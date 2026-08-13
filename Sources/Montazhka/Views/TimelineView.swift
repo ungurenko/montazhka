@@ -29,7 +29,7 @@ enum TimelineDragPreviewMath {
     }
 }
 
-private struct TimelineTrimPreview: Equatable {
+private struct TimelineTrimPreview: Equatable, Sendable {
     let originalClip: Clip
     let edge: TimelineTrimEdge
     var sourceTime: Double
@@ -505,7 +505,7 @@ private struct ClipCell: View, Equatable {
     let onTrimEnded: () -> Void
     @State private var isHovering = false
 
-    static func == (lhs: ClipCell, rhs: ClipCell) -> Bool {
+    nonisolated static func == (lhs: ClipCell, rhs: ClipCell) -> Bool {
         lhs.clip == rhs.clip
             && lhs.originalClip == rhs.originalClip
             && lhs.width == rhs.width

@@ -83,57 +83,67 @@ enum TestVideoFactory {
 
         // ВАЖНО: писатель чередует видео и звук — кормить оба потока надо ПАРАЛЛЕЛЬНО,
         // иначе он ждёт второй поток и всё замирает.
-        async let videoDone: Void = feedVideo(input: videoInput, adaptor: adaptor,
-                                              frame: frame, totalDuration: totalDuration,
-                                              writer: writer)
-        async let audioDone: Void = feedAudio(input: audioInput, sample: audioSample)
+        let videoIO = VideoFeedIO(input: videoInput, adaptor: adaptor, frame: frame, writer: writer)
+        let audioIO = AudioFeedIO(input: audioInput, sample: audioSample)
+        async let videoDone: Void = feedVideo(io: videoIO, totalDuration: totalDuration)
+        async let audioDone: Void = feedAudio(io: audioIO)
         _ = await (videoDone, audioDone)
 
         await writer.finishWriting()
         guard writer.status == .completed else { throw writer.error ?? NSError(domain: "test", code: 5) }
     }
 
-    private static func feedVideo(input inputParam: AVAssetWriterInput,
-                                  adaptor adaptorParam: AVAssetWriterInputPixelBufferAdaptor,
-                                  frame frameParam: CVPixelBuffer,
-                                  totalDuration: Double,
-                                  writer writerParam: AVAssetWriter) async {
-        // Колбэк живёт на последовательной очереди — гонок нет, помечаем осознанно
-        nonisolated(unsafe) let input = inputParam
-        nonisolated(unsafe) let adaptor = adaptorParam
-        nonisolated(unsafe) let frame = frameParam
-        nonisolated(unsafe) let writer = writerParam
+    /// Входы видео-насоса: колбэк живёт на своей последовательной очереди, гонок нет.
+    private struct VideoFeedIO: @unchecked Sendable {
+        let input: AVAssetWriterInput
+        let adaptor: AVAssetWriterInputPixelBufferAdaptor
+        let frame: CVPixelBuffer
+        let writer: AVAssetWriter
+    }
+
+    /// Входы звукового насоса — по той же схеме.
+    private struct AudioFeedIO: @unchecked Sendable {
+        let input: AVAssetWriterInput
+        let sample: CMSampleBuffer
+    }
+
+    /// Рабочее состояние колбэка насоса — менять можно только с его очереди.
+    private final class FeedState: @unchecked Sendable {
+        var frameTime = 0.0
+        var finished = false
+    }
+
+    private static func feedVideo(io: VideoFeedIO, totalDuration: Double) async {
         let queue = DispatchQueue(label: "selftest.video")
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            var frameTime = 0.0
-            var finished = false
-            input.requestMediaDataWhenReady(on: queue) {
-                while input.isReadyForMoreMediaData {
-                    if frameTime >= totalDuration || writer.status != .writing {
-                        guard !finished else { return }
-                        finished = true
-                        input.markAsFinished()
+            let state = FeedState()
+            io.input.requestMediaDataWhenReady(on: queue) {
+                while io.input.isReadyForMoreMediaData {
+                    if state.frameTime >= totalDuration || io.writer.status != .writing {
+                        guard !state.finished else { return }
+                        state.finished = true
+                        io.input.markAsFinished()
                         continuation.resume()
                         return
                     }
-                    adaptor.append(frame, withPresentationTime: CMTime(seconds: frameTime, preferredTimescale: 600))
-                    frameTime += 0.1
+                    io.adaptor.append(io.frame,
+                                      withPresentationTime: CMTime(seconds: state.frameTime,
+                                                                   preferredTimescale: 600))
+                    state.frameTime += 0.1
                 }
             }
         }
     }
 
-    private static func feedAudio(input inputParam: AVAssetWriterInput, sample sampleParam: CMSampleBuffer) async {
-        nonisolated(unsafe) let input = inputParam
-        nonisolated(unsafe) let sample = sampleParam
+    private static func feedAudio(io: AudioFeedIO) async {
         let queue = DispatchQueue(label: "selftest.audio")
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            var finished = false
-            input.requestMediaDataWhenReady(on: queue) {
-                guard input.isReadyForMoreMediaData, !finished else { return }
-                finished = true
-                input.append(sample)
-                input.markAsFinished()
+            let state = FeedState()
+            io.input.requestMediaDataWhenReady(on: queue) {
+                guard io.input.isReadyForMoreMediaData, !state.finished else { return }
+                state.finished = true
+                io.input.append(io.sample)
+                io.input.markAsFinished()
                 continuation.resume()
             }
         }

@@ -31,7 +31,7 @@ struct ProjectListing: Sendable {
 }
 
 /// Хранит проекты как JSON-файлы в Application Support — исходные видео не трогаются.
-final class ProjectStore {
+final class ProjectStore: Sendable {
     let projectsDir: URL
     let waveformsDir: URL
     let enhancedAudioDir: URL
@@ -101,6 +101,43 @@ final class ProjectStore {
         catch { throw ProjectStoreError.delete(error.localizedDescription) }
     }
 
+    // MARK: - Фоновые варианты для UI
+
+    /// Та же запись, но вне главного потока. Синхронный `save` остаётся
+    /// для критичных точек (завершение приложения) и тестов.
+    func saveAsync(_ project: Project) async throws {
+        let task = Task.detached(priority: .userInitiated) {
+            try self.save(project)
+        }
+        return try await withTaskCancellationHandler {
+            try await task.value
+        } onCancel: {
+            task.cancel()
+        }
+    }
+
+    func loadAsync(id: UUID) async throws -> Project {
+        let task = Task.detached(priority: .userInitiated) {
+            try self.load(id: id)
+        }
+        return try await withTaskCancellationHandler {
+            try await task.value
+        } onCancel: {
+            task.cancel()
+        }
+    }
+
+    func deleteAsync(id: UUID) async throws {
+        let task = Task.detached(priority: .userInitiated) {
+            try self.delete(id: id)
+        }
+        return try await withTaskCancellationHandler {
+            try await task.value
+        } onCancel: {
+            task.cancel()
+        }
+    }
+
     func listProjects() async throws -> ProjectListing {
         let directory = projectsDir
         let task = Task.detached(priority: .userInitiated) {
@@ -146,10 +183,14 @@ final class ProjectStore {
                               issues: issues)
     }
 
-    static func defaultProjectName() -> String {
+    private static let defaultNameFormatter: DateFormatter = {
         let f = DateFormatter()
         f.locale = Locale(identifier: "ru_RU")
         f.dateFormat = "d MMMM"
-        return "Монтаж \(f.string(from: Date()))"
+        return f
+    }()
+
+    static func defaultProjectName() -> String {
+        "Монтаж \(defaultNameFormatter.string(from: Date()))"
     }
 }

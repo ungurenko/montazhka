@@ -448,8 +448,11 @@ enum SelfTest {
             .appendingPathComponent("montazhka-selftest-\(UUID().uuidString).mp4")
         defer { try? FileManager.default.removeItem(at: out) }
         do {
-            let settings = try await Transcoder.settings(for: .compact, composition: composition)
-            try await Transcoder.export(composition: composition, audioMix: voiceMix,
+            let settings = try await Transcoder.settings(for: .compact,
+                                                         input: ExportInput(composition: composition,
+                                                                            audioMix: voiceMix))
+            try await Transcoder.export(input: ExportInput(composition: composition,
+                                                           audioMix: voiceMix),
                                         settings: settings, to: out) { _ in }
             check(true, "экспорт завершился")
         } catch {
@@ -663,8 +666,10 @@ enum SelfTest {
             let out = FileManager.default.temporaryDirectory
                 .appendingPathComponent("montazhka-selftest-music-out-\(UUID().uuidString).mp4")
             do {
-                let settings = try await Transcoder.settings(for: .medium, composition: asset)
-                try await Transcoder.export(composition: asset, audioMix: mix,
+                let settings = try await Transcoder.settings(for: .medium,
+                                                             input: ExportInput(composition: asset,
+                                                                                audioMix: mix))
+                try await Transcoder.export(input: ExportInput(composition: asset, audioMix: mix),
                                             settings: settings, to: out) { _ in }
                 return out
             } catch {

@@ -27,6 +27,8 @@ enum CompositionWarning: Equatable {
     }
 }
 
+/// @unchecked Sendable: готовая композиция после сборки не мутируется —
+/// вызывающий код только читает её и передаёт дальше.
 struct CompositionBuildResult: @unchecked Sendable {
     let composition: AVMutableComposition
     let audioMix: AVAudioMix?
@@ -207,6 +209,7 @@ enum CompositionBuilder {
     }
 
     /// Готовые дорожки одного исходника переиспользуются всеми его фрагментами.
+    /// @unchecked Sendable: AVFoundation-треки после загрузки не мутируются.
     private struct LoadedSource: @unchecked Sendable {
         let name: String
         let video: AVAssetTrack?

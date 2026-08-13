@@ -133,6 +133,9 @@ enum MusicEQ {
 }
 
 /// Кэш обработанной музыки: один CAF на исходный файл (по образцу VoiceEnhanceStore).
+///
+/// @unchecked Sendable: NSLock защищает только словарь inFlight; готовые файлы
+/// появляются атомарно (рендер в .work + moveItem), диск — источник правды.
 final class MusicEQStore: @unchecked Sendable {
     private let cacheDir: URL
     private let lock = NSLock()
