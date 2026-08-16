@@ -191,7 +191,7 @@ enum SelfTest {
 
     private static func testObservationIsolation() async {
         print("Observation интерфейса:")
-        let result = await MainActor.run { () -> (playback: Bool, project: Bool) in
+        let result = await Task { @MainActor in
             let root = FileManager.default.temporaryDirectory
                 .appendingPathComponent("montazhka-observation-\(UUID().uuidString)", isDirectory: true)
             defer { try? FileManager.default.removeItem(at: root) }
@@ -212,9 +212,9 @@ enum SelfTest {
             }
 
             controller.currentTime = 1
-            controller.shutdown()
-            return (probe.playbackChanged, probe.projectChanged)
-        }
+            await controller.shutdown()
+            return (playback: probe.playbackChanged, project: probe.projectChanged)
+        }.value
         check(result.playback && !result.project,
               "время воспроизведения обновляется без инвалидации проекта")
     }
@@ -232,7 +232,7 @@ enum SelfTest {
             try? await Task.sleep(nanoseconds: 100_000_000)
             let isClean = controller.missingSources.isEmpty
                 && controller.missingFilesMessage == nil
-            controller.shutdown()
+            await controller.shutdown()
             try? FileManager.default.removeItem(at: root)
             return isClean
         }.value
@@ -252,7 +252,7 @@ enum SelfTest {
         let legacyID = UUID()
 
         do {
-            try store.save(valid)
+            try await store.save(valid)
             let legacy = """
             {
               "id":"\(legacyID.uuidString)",

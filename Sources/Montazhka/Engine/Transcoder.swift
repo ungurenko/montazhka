@@ -25,9 +25,12 @@ struct ExportInput: @unchecked Sendable {
 
 /// Входы/выходы насосов перекодирования: колбэк каждого живёт на своей
 /// последовательной очереди, гонок между потоками нет.
-private struct PumpIO: @unchecked Sendable {
+private struct VideoPumpIO: @unchecked Sendable {
     let videoOutput: AVAssetReaderVideoCompositionOutput
     let videoInput: AVAssetWriterInput
+}
+
+private struct AudioPumpIO: @unchecked Sendable {
     let audioOutput: AVAssetReaderAudioMixOutput?
     let audioInput: AVAssetWriterInput?
 }
@@ -148,19 +151,17 @@ enum Transcoder {
 
         // Отмена: сбрасываем ридер — насосы получают nil и сворачиваются сами.
         nonisolated(unsafe) let cancelReader = reader
-        let io = PumpIO(videoOutput: videoOutput,
-                        videoInput: videoInput,
-                        audioOutput: audioOutput,
-                        audioInput: audioInput)
+        let videoIO = VideoPumpIO(videoOutput: videoOutput, videoInput: videoInput)
+        let audioIO = AudioPumpIO(audioOutput: audioOutput, audioInput: audioInput)
         await withTaskCancellationHandler {
             await withTaskGroup(of: Void.self) { group in
                 group.addTask {
-                    await pump(from: io.videoOutput, to: io.videoInput, label: "video") { time in
+                    await pump(from: videoIO.videoOutput, to: videoIO.videoInput, label: "video") { time in
                         guard duration > 0 else { return }
                         progress(min(0.999, time.seconds / duration))
                     }
                 }
-                if let audioOutput = io.audioOutput, let audioInput = io.audioInput {
+                if let audioOutput = audioIO.audioOutput, let audioInput = audioIO.audioInput {
                     group.addTask {
                         await pump(from: audioOutput, to: audioInput, label: "audio", onSample: nil)
                     }

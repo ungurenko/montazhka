@@ -1,13 +1,6 @@
 import AppKit
 import SwiftUI
 
-/// NSEvent не Sendable в SDK macOS 14, но локальный монитор всегда вызывает хендлер
-/// синхронно на главном потоке — бокс переносит событие через границу изоляции.
-final class NSEventBox: @unchecked Sendable {
-    let event: NSEvent
-    init(_ event: NSEvent) { self.event = event }
-}
-
 enum TimelineViewportMath {
     static func clampedPixelsPerSecond(_ proposed: CGFloat) -> CGFloat {
         min(240, max(3, proposed))
@@ -212,47 +205,41 @@ struct TimelineInputMonitor: NSViewRepresentable {
     final class Coordinator: NSObject {
         var parent: TimelineInputMonitor
         weak var view: MonitorView?
-        private var monitor: Any?
+        private let monitor = LocalEventMonitor()
 
         init(parent: TimelineInputMonitor) {
             self.parent = parent
         }
 
         func installMonitor() {
-            guard monitor == nil else { return }
-            // NSEvent не Sendable: через границу изоляции ходит только бокс.
-            monitor = NSEvent.addLocalMonitorForEvents(
+            monitor.install(
                 matching: [.keyDown, .keyUp, .magnify, .scrollWheel]
             ) { [weak self] event in
-                let box = NSEventBox(event)
-                let out = MainActor.assumeIsolated { self?.handle(box) }
-                return out?.event
+                self?.handle(event) ?? event
             }
         }
 
         func removeMonitor() {
-            if let monitor { NSEvent.removeMonitor(monitor) }
-            monitor = nil
+            monitor.remove()
         }
 
-        private func handle(_ box: NSEventBox) -> NSEventBox? {
-            let event = box.event
-            guard let view, event.window === view.window else { return box }
+        private func handle(_ event: NSEvent) -> NSEvent? {
+            guard let view, event.window === view.window else { return event }
             let location = view.convert(event.locationInWindow, from: nil)
             let isInside = view.bounds.contains(location)
 
             switch event.type {
             case .scrollWheel where isInside:
                 parent.onManualScroll()
-                return box
+                return event
             case .magnify where isInside:
                 parent.onManualScroll()
                 parent.onZoom(max(0.1, 1 + event.magnification), location.x)
                 return nil
             case .keyDown, .keyUp:
-                return handleKey(event) == nil ? nil : box
+                return handleKey(event)
             default:
-                return box
+                return event
             }
         }
 

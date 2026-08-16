@@ -42,14 +42,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 @MainActor
 @Observable
 final class AppModel {
-    let store: ProjectStore
+    let store: any ProjectRepository
     var editor: EditorController?
     var recents: [ProjectMeta] = []
     var storeErrorMessage: String?
+    private(set) var isProjectOperationInProgress = false
     private var recentsTask: Task<Void, Never>?
     private var recentsGeneration = 0
+    private var projectOperationTask: Task<Void, Never>?
+    private var projectOperationGeneration = Generation()
 
-    init(store: ProjectStore = ProjectStore()) {
+    init(store: any ProjectRepository = ProjectStore()) {
         self.store = store
         refreshRecents(openLatestAfterLoad: CommandLine.arguments.contains("--open-latest"))
     }
@@ -72,7 +75,7 @@ final class AppModel {
                     storeErrorMessage = "Не удалось открыть \(count) \(count == 1 ? "проект" : "проекта"): \(names). Остальные проекты доступны."
                 }
                 if openLatestAfterLoad, editor == nil, let latest = recents.first {
-                    await openProject(id: latest.id)
+                    openProject(id: latest.id)
                 }
             } catch {
                 guard !Task.isCancelled, generation == recentsGeneration else { return }
@@ -82,43 +85,92 @@ final class AppModel {
         }
     }
 
-    func newProject(with urls: [URL]) async {
-        var project = Project(name: ProjectStore.defaultProjectName())
-        do {
-            try await store.saveAsync(project)
-        } catch {
-            Logger.persistence.error("Не удалось создать проект: \(error.localizedDescription)")
-            storeErrorMessage = error.localizedDescription
-            return
-        }
-        project.updatedAt = Date()
-        let controller = EditorController(project: project, store: store)
-        controller.addClips(urls: urls)
-        editor = controller
-    }
-
-    func openProject(id: UUID) async {
-        do {
-            let project = try await store.loadAsync(id: id)
-            editor = EditorController(project: project, store: store)
-        } catch {
-            storeErrorMessage = error.localizedDescription
+    func newProject(with urls: [URL]) {
+        let generation = beginProjectOperation()
+        projectOperationTask = Task { [weak self] in
+            guard let self else { return }
+            var project = Project(name: ProjectStore.defaultProjectName())
+            do {
+                try await store.save(project)
+                guard isCurrentProjectOperation(generation) else { return }
+                project.updatedAt = Date()
+                let controller = EditorController(project: project, store: store)
+                controller.addClips(urls: urls)
+                editor = controller
+                finishProjectOperation(generation)
+            } catch {
+                failProjectOperation(generation, error: error, context: "Не удалось создать проект")
+            }
         }
     }
 
-    func deleteProject(id: UUID) async {
-        do {
-            try await store.deleteAsync(id: id)
-            refreshRecents()
-        } catch {
-            storeErrorMessage = error.localizedDescription
+    func openProject(id: UUID) {
+        let generation = beginProjectOperation()
+        projectOperationTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                let project = try await store.load(id: id)
+                guard isCurrentProjectOperation(generation) else { return }
+                editor = EditorController(project: project, store: store)
+                finishProjectOperation(generation)
+            } catch {
+                failProjectOperation(generation, error: error, context: "Не удалось открыть проект")
+            }
+        }
+    }
+
+    func deleteProject(id: UUID) {
+        let generation = beginProjectOperation()
+        projectOperationTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await store.delete(id: id)
+                guard isCurrentProjectOperation(generation) else { return }
+                finishProjectOperation(generation)
+                refreshRecents()
+            } catch {
+                failProjectOperation(generation, error: error, context: "Не удалось удалить проект")
+            }
         }
     }
 
     func closeProject() {
-        editor?.shutdown()
-        editor = nil
-        refreshRecents()
+        guard let closingEditor = editor else { return }
+        let generation = beginProjectOperation()
+        projectOperationTask = Task { [weak self] in
+            guard let self else { return }
+            await closingEditor.shutdown()
+            guard isCurrentProjectOperation(generation) else { return }
+            editor = nil
+            finishProjectOperation(generation)
+            refreshRecents()
+        }
+    }
+
+    private func beginProjectOperation() -> Int {
+        projectOperationTask?.cancel()
+        recentsTask?.cancel()
+        recentsGeneration += 1
+        storeErrorMessage = nil
+        isProjectOperationInProgress = true
+        return projectOperationGeneration.advance()
+    }
+
+    private func isCurrentProjectOperation(_ generation: Int) -> Bool {
+        !Task.isCancelled && projectOperationGeneration.isCurrent(generation)
+    }
+
+    private func finishProjectOperation(_ generation: Int) {
+        guard projectOperationGeneration.isCurrent(generation) else { return }
+        projectOperationTask = nil
+        isProjectOperationInProgress = false
+    }
+
+    private func failProjectOperation(_ generation: Int, error: Error, context: String) {
+        guard isCurrentProjectOperation(generation) else { return }
+        Logger.persistence.error("\(context): \(error.localizedDescription)")
+        storeErrorMessage = error.localizedDescription
+        finishProjectOperation(generation)
     }
 
     /// Системное окно выбора видеофайлов.

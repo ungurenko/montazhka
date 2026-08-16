@@ -12,10 +12,6 @@ func uniqueMediaSources(in clips: [Clip]) -> [MediaReference] {
     }
 }
 
-func unavailableMediaSources(_ sources: [MediaReference]) -> [MediaReference] {
-    sources.filter { $0.resolvedURL == nil }
-}
-
 func resolvedMediaPaths(_ sources: [MediaReference]) -> [String] {
     sources.compactMap { $0.resolvedURL?.path }
 }
@@ -61,19 +57,6 @@ enum OpenRouterKeyStatus: Equatable, Sendable {
     case failed(String)
 }
 
-/// Счётчик поколений асинхронной работы: результат устаревшего поколения отбрасывается.
-struct Generation {
-    private var value = 0
-
-    /// Начинает новое поколение и возвращает его номер.
-    mutating func advance() -> Int {
-        value += 1
-        return value
-    }
-
-    func isCurrent(_ generation: Int) -> Bool { generation == value }
-}
-
 /// Сердце монтажки: держит проект, собирает предпросмотр, режет, отменяет, сохраняет.
 @MainActor
 @Observable
@@ -85,9 +68,12 @@ final class EditorController {
     var selectionStart: Double?
     var selectionEnd: Double?
     var pixelsPerSecond: CGFloat = 24
-    var candidates: [PauseCandidate] = []
-    var isDetecting = false
-    var waveformVersion = 0
+    var candidates: [PauseCandidate] {
+        get { waveformAnalysis.candidates }
+        set { waveformAnalysis.candidates = newValue }
+    }
+    var isDetecting: Bool { waveformAnalysis.isDetecting }
+    var waveformVersion: Int { waveformAnalysis.version }
     var showPausePanel = false
     var showVoicePanel = false
     var showMusicPanel = false
@@ -96,28 +82,34 @@ final class EditorController {
     private(set) var musicProcessing = false
     var canUndo = false
     var canRedo = false
-    var missingFilesMessage: String?
-    private(set) var missingSources: [MediaReference] = []
-    private(set) var saveStatus: ProjectSaveStatus = .idle
+    var missingFilesMessage: String? {
+        get { mediaAvailability.message }
+        set { mediaAvailability.message = newValue }
+    }
+    var missingSources: [MediaReference] { mediaAvailability.missingSources }
+    var saveStatus: ProjectSaveStatus { saveCoordinator.status }
     private(set) var renderWarnings: [CompositionWarning] = []
     private(set) var previewState: PreviewState = .empty
     private(set) var clipImportState: ClipImportState = .idle
     var smartEditCandidates: [SmartEditCandidate] = []
     private(set) var smartEditStatus: SmartEditStatus = .idle
-    private(set) var openRouterKeyStatus: OpenRouterKeyStatus = .missing
+    var openRouterKeyStatus: OpenRouterKeyStatus { openRouterKeyManager.status }
     var smartEditModel: SmartEditModel = .saved {
         didSet { SmartEditModel.saved = smartEditModel }
     }
 
     let player = AVPlayer()
     let waveforms: WaveformStore
+    private let waveformAnalysis: WaveformAnalysisCoordinator
+    private let mediaAvailability = MediaAvailabilityMonitor()
     let voiceStore: VoiceEnhanceStore
     let musicEQStore: MusicEQStore
-    private let store: ProjectStore
+    private let repository: any ProjectRepository
+    private let saveCoordinator: ProjectSaveCoordinator
     private let mediaPipeline: MediaPipeline
     private let transcriptStore: TranscriptStore
     private let smartEditService: SmartEditService
-    private let openRouterKeyStore: any OpenRouterKeyStoring
+    private let openRouterKeyManager: OpenRouterKeyManager
 
     @ObservationIgnored private var timeObserver: Any?
     @ObservationIgnored private var endObserver: NSObjectProtocol?
@@ -127,7 +119,6 @@ final class EditorController {
     @ObservationIgnored private var coalescedEditKind: String?
     @ObservationIgnored private var coalescedEditReset: Task<Void, Never>?
     @ObservationIgnored private var rebuildGeneration = Generation()
-    @ObservationIgnored private var saveTask: Task<Void, Never>?
     @ObservationIgnored private var enhancedAudioURLs: [String: URL] = [:]
     @ObservationIgnored private var enhanceDebounce: Task<Void, Never>?
     @ObservationIgnored private var enhanceGeneration = Generation()
@@ -138,10 +129,6 @@ final class EditorController {
     @ObservationIgnored private var smartEditTask: Task<Void, Never>?
     @ObservationIgnored private var smartEditGeneration = Generation()
     @ObservationIgnored private var smartEditSnapshotID: String?
-    @ObservationIgnored private var keyStateTask: Task<Void, Never>?
-    @ObservationIgnored private var missingFilesTask: Task<Void, Never>?
-    @ObservationIgnored private var missingFilesGeneration = Generation()
-    @ObservationIgnored private var waveformWarmupTask: Task<Void, Never>?
     @ObservationIgnored private var previewTask: Task<Void, Never>?
     @ObservationIgnored private var clipImportTask: Task<Void, Never>?
 
@@ -166,20 +153,23 @@ final class EditorController {
     }
 
     init(project: Project,
-         store: ProjectStore,
+         store: any ProjectRepository,
          openRouterKeyStore: any OpenRouterKeyStoring = OpenRouterKeyStore()) {
         self.project = project
         self.projectEditor = ProjectEditor(project: project)
-        self.store = store
-        self.openRouterKeyStore = openRouterKeyStore
-        let voiceStore = VoiceEnhanceStore(cacheDir: store.enhancedAudioDir)
-        let musicEQStore = MusicEQStore(cacheDir: store.musicEQDir)
-        self.waveforms = WaveformStore(cacheDir: store.waveformsDir)
+        self.repository = store
+        self.saveCoordinator = ProjectSaveCoordinator(repository: store)
+        self.openRouterKeyManager = OpenRouterKeyManager(store: openRouterKeyStore)
+        let voiceStore = VoiceEnhanceStore(cacheDir: store.directories.enhancedAudio)
+        let musicEQStore = MusicEQStore(cacheDir: store.directories.musicEQ)
+        let waveformStore = WaveformStore(cacheDir: store.directories.waveforms)
+        self.waveforms = waveformStore
+        self.waveformAnalysis = WaveformAnalysisCoordinator(store: waveformStore)
         self.voiceStore = voiceStore
         self.musicEQStore = musicEQStore
         self.mediaPipeline = MediaPipeline(voiceStore: voiceStore, musicEQStore: musicEQStore)
-        let transcriptStore = TranscriptStore(cacheDir: store.transcriptsDir,
-                                              modelsDir: store.modelsDir)
+        let transcriptStore = TranscriptStore(cacheDir: store.directories.transcripts,
+                                               modelsDir: store.directories.models)
         self.transcriptStore = transcriptStore
         self.smartEditService = SmartEditService(
             transcriptStore: transcriptStore,
@@ -204,7 +194,7 @@ final class EditorController {
         }
     }
 
-    func shutdown() {
+    func shutdown() async {
         player.pause()
         player.replaceCurrentItem(with: nil)
         isPlaying = false
@@ -215,13 +205,12 @@ final class EditorController {
         seekTask?.cancel()
         _ = rebuildGeneration.advance()
         cancelSmartEdit()
-        keyStateTask?.cancel()
-        missingFilesTask?.cancel()
-        waveformWarmupTask?.cancel()
-        _ = missingFilesGeneration.advance()
+        openRouterKeyManager.cancel()
+        mediaAvailability.cancel()
+        waveformAnalysis.cancel()
         if let endObserver { NotificationCenter.default.removeObserver(endObserver) }
         if let terminateObserver { NotificationCenter.default.removeObserver(terminateObserver) }
-        Task { await saveNow() }
+        await saveCoordinator.saveNow(project)
     }
 
     // MARK: - Наблюдатели
@@ -244,29 +233,15 @@ final class EditorController {
         terminateObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.willTerminateNotification, object: nil, queue: .main
         ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.saveOnTerminate() }
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.saveCoordinator.saveBeforeTermination(self.project)
+            }
         }
     }
 
     private func checkMissingFiles() {
-        missingFilesTask?.cancel()
-        let generation = missingFilesGeneration.advance()
-        let sources = uniqueMediaSources(in: project.clips)
-        missingSources = []
-        missingFilesMessage = nil
-
-        missingFilesTask = Task { [weak self] in
-            let missing = await Task.detached(priority: .utility) {
-                unavailableMediaSources(sources)
-            }.value
-            guard let self,
-                  !Task.isCancelled,
-                  self.missingFilesGeneration.isCurrent(generation) else { return }
-            self.missingSources = missing
-            guard !missing.isEmpty else { return }
-            let names = missing.map(\.displayName).joined(separator: ", ")
-            self.missingFilesMessage = "Не нашёл исходные файлы: \(names). Клипы сохранены — укажи, где теперь лежат файлы."
-        }
+        mediaAvailability.check(sources: uniqueMediaSources(in: project.clips))
     }
 
     /// Переподключает все клипы одного исходника, сохраняя границы монтажа.
@@ -288,27 +263,8 @@ final class EditorController {
     }
 
     private func warmUpWaveforms() {
-        waveformWarmupTask?.cancel()
         let sources = uniqueMediaSources(in: project.clips)
-        let waveforms = self.waveforms
-        waveformWarmupTask = Task { [weak self] in
-            let paths = await Task.detached(priority: .utility) {
-                Array(Set(resolvedMediaPaths(sources)))
-            }.value
-            guard !Task.isCancelled else { return }
-            await withTaskGroup(of: Bool.self) { group in
-                for path in paths {
-                    group.addTask { await waveforms.ensure(path: path) != nil }
-                }
-                for await ready in group {
-                    guard !Task.isCancelled else {
-                        group.cancelAll()
-                        return
-                    }
-                    if ready { self?.waveformVersion += 1 }
-                }
-            }
-        }
+        waveformAnalysis.warmUp(paths: resolvedMediaPaths(sources))
     }
 
     // MARK: - Сборка предпросмотра
@@ -319,7 +275,7 @@ final class EditorController {
 
     /// Композиция для экспорта. Если улучшение включено — дожидается обработки всех
     /// исходников; при неудаче отдаёт оригинальный звук и текст предупреждения.
-    func compositionForExport() async -> (composition: AVMutableComposition,
+    func compositionForExport() async -> (composition: AVComposition,
                                           audioMix: AVAudioMix?,
                                           audioWarning: String?) {
         let result = await renderComposition(mode: .export)
@@ -820,33 +776,7 @@ final class EditorController {
 
     func detectPauses() {
         guard !project.clips.isEmpty else { return }
-        isDetecting = true
-        let clips = project.clips
-        let settings = project.detection
-        let waveforms = self.waveforms
-        Task { [weak self] in
-            guard let self else { return }
-            // Волны всех файлов считаем параллельно: ensure внутри распаковывает звук
-            // в отдельной задаче, поэтому последовательный await зря терял время.
-            await withTaskGroup(of: Void.self) { group in
-                for path in Set(clips.map(\.sourcePath)) {
-                    group.addTask { await waveforms.ensure(path: path) }
-                }
-            }
-            guard !Task.isCancelled else { return }
-            // Сам проход по пикам — тоже вне главного потока.
-            let found = await Task.detached(priority: .userInitiated) {
-                SilenceDetector.findPauses(
-                    clips: clips,
-                    peaksFor: { waveforms.peaks(for: $0) },
-                    settings: settings
-                )
-            }.value
-            guard !Task.isCancelled else { return }
-            self.waveformVersion += 1
-            self.candidates = found
-            self.isDetecting = false
-        }
+        waveformAnalysis.detect(clips: project.clips, settings: project.detection)
     }
 
     func toggleCandidate(_ id: UUID) {
@@ -873,69 +803,26 @@ final class EditorController {
     // MARK: - Умный монтаж
 
     func refreshOpenRouterKeyState() {
-        keyStateTask?.cancel()
-        openRouterKeyStatus = .checking
-        let keyStore = openRouterKeyStore
-        keyStateTask = Task { [weak self] in
-            let status = await Task.detached(priority: .utility) {
-                do {
-                    return try keyStore.load() == nil
-                        ? OpenRouterKeyStatus.missing
-                        : OpenRouterKeyStatus.saved
-                } catch {
-                    return OpenRouterKeyStatus.failed(error.localizedDescription)
-                }
-            }.value
-            guard !Task.isCancelled else { return }
-            self?.openRouterKeyStatus = status
-        }
+        openRouterKeyManager.refresh()
     }
 
     func saveAndValidateOpenRouterKey(_ key: String) async {
-        let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
-            openRouterKeyStatus = .failed("Вставь ключ OpenRouter.")
-            return
-        }
-        openRouterKeyStatus = .checking
-        do {
-            try await OpenRouterClient().validateKey(trimmed)
-            try openRouterKeyStore.save(trimmed)
-            openRouterKeyStatus = .saved
-        } catch {
-            openRouterKeyStatus = .failed(error.localizedDescription)
-        }
+        await openRouterKeyManager.saveAndValidate(key)
     }
 
     func validateSavedOpenRouterKey() async {
-        do {
-            guard let key = try openRouterKeyStore.load() else {
-                openRouterKeyStatus = .missing
-                return
-            }
-            openRouterKeyStatus = .checking
-            try await OpenRouterClient().validateKey(key)
-            openRouterKeyStatus = .saved
-        } catch {
-            openRouterKeyStatus = .failed(error.localizedDescription)
-        }
+        await openRouterKeyManager.validateSaved()
     }
 
     func deleteOpenRouterKey() {
-        do {
-            try openRouterKeyStore.delete()
-            openRouterKeyStatus = .missing
-            cancelSmartEdit()
-        } catch {
-            openRouterKeyStatus = .failed(error.localizedDescription)
-        }
+        if openRouterKeyManager.delete() { cancelSmartEdit() }
     }
 
     func analyzeSmartEdits() {
         guard !project.clips.isEmpty else { return }
         let apiKey: String
         do {
-            guard let stored = try openRouterKeyStore.load() else {
+            guard let stored = try openRouterKeyManager.load() else {
                 smartEditStatus = .failed("Сначала сохрани ключ OpenRouter.")
                 return
             }
@@ -1094,41 +981,14 @@ final class EditorController {
     // MARK: - Сохранение
 
     func scheduleSave() {
-        saveTask?.cancel()
-        saveStatus = .saving
-        saveTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 500_000_000)
-            guard !Task.isCancelled else { return }
-            await self?.saveNow()
-        }
+        saveCoordinator.schedule(project)
     }
 
     func saveNow() async {
-        saveTask?.cancel()
-        do {
-            try await store.saveAsync(project)
-            saveStatus = .saved
-        } catch {
-            Logger.persistence.error("Не удалось сохранить проект: \(error.localizedDescription)")
-            saveStatus = .failed(error.localizedDescription)
-        }
-    }
-
-    /// Финальный флеш при выходе из приложения — синхронно, чтобы гарантированно
-    /// попасть на диск: здесь главный поток и так завершает работу.
-    private func saveOnTerminate() {
-        saveTask?.cancel()
-        do {
-            try store.save(project)
-            saveStatus = .saved
-        } catch {
-            Logger.persistence.error("Не удалось сохранить проект при завершении: \(error.localizedDescription)")
-        }
+        await saveCoordinator.saveNow(project)
     }
 
     func dismissSaveError() {
-        if case .failed = saveStatus {
-            saveStatus = .idle
-        }
+        saveCoordinator.dismissError()
     }
 }

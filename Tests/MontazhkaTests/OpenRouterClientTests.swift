@@ -11,8 +11,7 @@ final class OpenRouterClientTests: XCTestCase {
     ]
 
     override func tearDown() {
-        MockOpenRouterURLProtocol.responses = []
-        MockOpenRouterURLProtocol.requests = []
+        MockOpenRouterURLProtocol.reset()
         super.tearDown()
     }
 
@@ -73,12 +72,12 @@ final class OpenRouterClientTests: XCTestCase {
     }
 
     func testQwenRepairsBrokenFormatOnceAndKeepsPrivacyProviderRules() async throws {
-        MockOpenRouterURLProtocol.responses = [
+        MockOpenRouterURLProtocol.configure(responses: [
             .json(content: "это не json"),
             .json(content: """
             {"schema_version":1,"edits":[{"id":"e1","kind":"false_start","first_word_id":"w000001","last_word_id":"w000001","reason":"фальстарт","confidence":0.95}]}
             """)
-        ]
+        ])
         let client = OpenRouterClient(session: makeMockSession())
 
         let result = try await client.propose(
@@ -86,8 +85,8 @@ final class OpenRouterClientTests: XCTestCase {
             model: .qwen, apiKey: "secret")
 
         XCTAssertEqual(result.edits.map(\.id), ["e1"])
-        XCTAssertEqual(MockOpenRouterURLProtocol.requests.count, 2)
-        let firstBody = try XCTUnwrap(MockOpenRouterURLProtocol.requests.first?.httpBody)
+        XCTAssertEqual(MockOpenRouterURLProtocol.recordedRequests.count, 2)
+        let firstBody = try XCTUnwrap(MockOpenRouterURLProtocol.recordedRequests.first?.body)
         let json = try XCTUnwrap(JSONSerialization.jsonObject(with: firstBody) as? [String: Any])
         let provider = try XCTUnwrap(json["provider"] as? [String: Any])
         XCTAssertEqual(provider["data_collection"] as? String, "deny")
@@ -96,25 +95,27 @@ final class OpenRouterClientTests: XCTestCase {
     }
 
     func testDeepSeekUsesStrictSchemaAndInvalidKeyIsNotRetried() async throws {
-        MockOpenRouterURLProtocol.responses = [
+        MockOpenRouterURLProtocol.configure(responses: [
             .json(content: "{\"schema_version\":1,\"edits\":[]}")
-        ]
+        ])
         let client = OpenRouterClient(session: makeMockSession())
         _ = try await client.propose(words: [.init(id: "w000001", text: "тест", start: 0, end: 1)],
                                      model: .deepSeek, apiKey: "secret")
-        let body = try XCTUnwrap(MockOpenRouterURLProtocol.requests.first?.httpBody)
+        let body = try XCTUnwrap(MockOpenRouterURLProtocol.recordedRequests.first?.body)
         let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
         XCTAssertEqual((json["response_format"] as? [String: Any])?["type"] as? String, "json_schema")
 
-        MockOpenRouterURLProtocol.responses = [.init(status: 401, body: Data(), headers: [:])]
-        MockOpenRouterURLProtocol.requests = []
+        MockOpenRouterURLProtocol.configure(
+            responses: [.init(status: 401, body: Data(), headers: [:])],
+            clearRequests: true
+        )
         do {
             try await client.validateKey("bad")
             XCTFail("Ожидалась ошибка ключа")
         } catch let error as OpenRouterError {
             XCTAssertEqual(error, .invalidKey)
         }
-        XCTAssertEqual(MockOpenRouterURLProtocol.requests.count, 1)
+        XCTAssertEqual(MockOpenRouterURLProtocol.recordedRequests.count, 1)
     }
 
     private func makeMockSession() -> URLSession {
@@ -125,7 +126,14 @@ final class OpenRouterClientTests: XCTestCase {
 }
 
 private final class MockOpenRouterURLProtocol: URLProtocol {
-    struct Response {
+    struct RecordedRequest: Sendable {
+        let method: String?
+        let url: URL?
+        let headers: [String: String]
+        let body: Data?
+    }
+
+    struct Response: Sendable {
         let status: Int
         let body: Data
         let headers: [String: String]
@@ -138,19 +146,50 @@ private final class MockOpenRouterURLProtocol: URLProtocol {
         }
     }
 
-    nonisolated(unsafe) static var responses: [Response] = []
-    nonisolated(unsafe) static var requests: [URLRequest] = []
+    private final class State: @unchecked Sendable {
+        let lock = NSLock()
+        var responses: [Response] = []
+        var requests: [RecordedRequest] = []
+    }
+
+    private static let state = State()
+
+    static var recordedRequests: [RecordedRequest] {
+        state.lock.withLock { state.requests }
+    }
+
+    static func configure(responses newResponses: [Response], clearRequests: Bool = false) {
+        state.lock.withLock {
+            state.responses = newResponses
+            if clearRequests { state.requests = [] }
+        }
+    }
+
+    static func reset() {
+        state.lock.withLock {
+            state.responses = []
+            state.requests = []
+        }
+    }
 
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
 
     override func startLoading() {
-        Self.requests.append(request)
-        guard !Self.responses.isEmpty else {
+        let recorded = RecordedRequest(
+            method: request.httpMethod,
+            url: request.url,
+            headers: request.allHTTPHeaderFields ?? [:],
+            body: Self.bodyData(from: request)
+        )
+        let value: Response? = Self.state.lock.withLock {
+            Self.state.requests.append(recorded)
+            return Self.state.responses.isEmpty ? nil : Self.state.responses.removeFirst()
+        }
+        guard let value else {
             client?.urlProtocol(self, didFailWithError: URLError(.badServerResponse))
             return
         }
-        let value = Self.responses.removeFirst()
         let response = HTTPURLResponse(url: request.url!, statusCode: value.status,
                                        httpVersion: nil, headerFields: value.headers)!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
@@ -159,4 +198,19 @@ private final class MockOpenRouterURLProtocol: URLProtocol {
     }
 
     override func stopLoading() {}
+
+    private static func bodyData(from request: URLRequest) -> Data? {
+        if let body = request.httpBody { return body }
+        guard let stream = request.httpBodyStream else { return nil }
+        stream.open()
+        defer { stream.close() }
+        var data = Data()
+        var buffer = [UInt8](repeating: 0, count: 4_096)
+        while true {
+            let count = stream.read(&buffer, maxLength: buffer.count)
+            if count < 0 { return nil }
+            if count == 0 { return data }
+            data.append(buffer, count: count)
+        }
+    }
 }

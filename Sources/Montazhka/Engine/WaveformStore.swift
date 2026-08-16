@@ -5,52 +5,50 @@ import CryptoKit
 /// Громкость звука (RMS) окнами по 10 мс — основа и для отрисовки волны, и для поиска пауз.
 /// Извлекается один раз на исходный файл и кэшируется на диск.
 ///
-/// @unchecked Sendable: состояние защищено внутренним NSLock; массивы пиков после
-/// вставки не мутируются (только заменяются целиком), извлечение — в detached-задачах.
+/// @unchecked Sendable: NSCache потокобезопасен, а дедупликацией и лимитом работ
+/// владеет приватный actor. Массивы пиков после публикации не мутируются.
 /// `peaks(for:)` остаётся синхронным: его читает Canvas при отрисовке каждого кадра.
 final class WaveformStore: @unchecked Sendable {
     static let windowsPerSecond = 100.0
+    typealias Loader = @Sendable (_ path: String, _ cacheURL: URL) async -> [Float]?
 
     private let cacheDir: URL
-    private let lock = NSLock()
-    private var memory: [String: [Float]] = [:]
-    private var inFlight: [String: Task<[Float]?, Never>] = [:]
+    private let memory = NSCache<NSString, WaveformPeaksBox>()
+    private let work: WaveformWorkCoordinator
 
-    init(cacheDir: URL) {
+    init(cacheDir: URL,
+         memoryCostLimit: Int = 64 * 1024 * 1024,
+         memoryCountLimit: Int = 0,
+         maxConcurrentDecodes: Int = 2,
+         loader: Loader? = nil) {
         self.cacheDir = cacheDir
+        memory.totalCostLimit = memoryCostLimit
+        memory.countLimit = memoryCountLimit
+        work = WaveformWorkCoordinator(
+            maxConcurrent: maxConcurrentDecodes,
+            loader: loader ?? Self.loadOrExtract
+        )
     }
 
     /// Мгновенный доступ для отрисовки (nil — ещё не готово).
     func peaks(for path: String) -> [Float]? {
-        lock.lock(); defer { lock.unlock() }
-        return memory[path]
+        memory.object(forKey: path as NSString)?.peaks
     }
 
     /// Гарантирует, что волна для файла посчитана (из кэша или заново).
     @discardableResult
     func ensure(path: String) async -> [Float]? {
         if let ready = peaks(for: path) { return ready }
-        let task = extractionTask(for: path)
-        let result = await task.value
-        finish(path: path, with: result)
-        return result
-    }
-
-    private func extractionTask(for path: String) -> Task<[Float]?, Never> {
-        lock.lock(); defer { lock.unlock() }
-        if let existing = inFlight[path] { return existing }
         let cacheURL = cacheFileURL(for: path)
-        let task = Task.detached(priority: .userInitiated) {
-            await Self.loadOrExtract(path: path, cacheURL: cacheURL)
+        let result = await work.value(key: cacheURL.path, path: path, cacheURL: cacheURL)
+        if let result {
+            memory.setObject(
+                WaveformPeaksBox(result),
+                forKey: path as NSString,
+                cost: result.count * MemoryLayout<Float>.stride
+            )
         }
-        inFlight[path] = task
-        return task
-    }
-
-    private func finish(path: String, with result: [Float]?) {
-        lock.lock(); defer { lock.unlock() }
-        if let result { memory[path] = result }
-        inFlight[path] = nil
+        return result
     }
 
     // MARK: - Кэш
@@ -127,5 +125,60 @@ final class WaveformStore: @unchecked Sendable {
             peaks.append(Float((sumSquares / Double(count)).squareRoot()))
         }
         return reader.status == .completed || !peaks.isEmpty ? peaks : nil
+    }
+}
+
+private final class WaveformPeaksBox: NSObject {
+    let peaks: [Float]
+    init(_ peaks: [Float]) { self.peaks = peaks }
+}
+
+private actor WaveformWorkCoordinator {
+    private struct Entry {
+        let id: UUID
+        let task: Task<[Float]?, Never>
+    }
+
+    private let maxConcurrent: Int
+    private let loader: WaveformStore.Loader
+    private var active = 0
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+    private var inFlight: [String: Entry] = [:]
+
+    init(maxConcurrent: Int, loader: @escaping WaveformStore.Loader) {
+        self.maxConcurrent = max(1, maxConcurrent)
+        self.loader = loader
+    }
+
+    func value(key: String, path: String, cacheURL: URL) async -> [Float]? {
+        if let existing = inFlight[key] { return await existing.task.value }
+        let id = UUID()
+        let task = Task<[Float]?, Never> { [weak self, loader] in
+            guard let self else { return nil }
+            await self.acquire()
+            let result = await loader(path, cacheURL)
+            await self.release()
+            return result
+        }
+        inFlight[key] = Entry(id: id, task: task)
+        let result = await task.value
+        if inFlight[key]?.id == id { inFlight[key] = nil }
+        return result
+    }
+
+    private func acquire() async {
+        if active < maxConcurrent {
+            active += 1
+            return
+        }
+        await withCheckedContinuation { continuation in waiters.append(continuation) }
+    }
+
+    private func release() {
+        if waiters.isEmpty {
+            active -= 1
+        } else {
+            waiters.removeFirst().resume()
+        }
     }
 }

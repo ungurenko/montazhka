@@ -22,7 +22,7 @@ struct StartView: View {
 
             Button {
                 let urls = AppModel.pickVideos()
-                if !urls.isEmpty { Task { await app.newProject(with: urls) } }
+                if !urls.isEmpty { app.newProject(with: urls) }
             } label: {
                 Label("Новый монтаж", systemImage: "plus")
                     .font(.system(size: 16, weight: .semibold, design: .rounded))
@@ -33,7 +33,12 @@ struct StartView: View {
                     .clipShape(Capsule())
             }
             .buttonStyle(.plain)
+            .disabled(app.isProjectOperationInProgress)
             .padding(.top, 28)
+
+            if app.isProjectOperationInProgress {
+                ProgressView().controlSize(.small).padding(.top, 12)
+            }
 
             if !app.recents.isEmpty {
                 VStack(alignment: .leading, spacing: 14) {
@@ -68,7 +73,7 @@ private struct RecentCard: View {
 
     var body: some View {
         Button {
-            Task { await app.openProject(id: meta.id) }
+            app.openProject(id: meta.id)
         } label: {
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
@@ -98,10 +103,11 @@ private struct RecentCard: View {
             .animation(.easeOut(duration: 0.15), value: hovering)
         }
         .buttonStyle(.plain)
+        .disabled(app.isProjectOperationInProgress)
         .onHover { hovering = $0 }
         .contextMenu {
             Button("Удалить проект", role: .destructive) {
-                Task { await app.deleteProject(id: meta.id) }
+                app.deleteProject(id: meta.id)
             }
         }
     }

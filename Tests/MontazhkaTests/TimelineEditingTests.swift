@@ -21,7 +21,7 @@ final class TimelineEditingTests: XCTestCase {
 
         XCTAssertEqual(keyStore.loadCount, 1)
         XCTAssertEqual(controller.openRouterKeyStatus, .missing)
-        controller.shutdown()
+        await controller.shutdown()
     }
 
     func testShorteningClipPreservesIdentityAndShortensLeftEdge() {
@@ -63,7 +63,7 @@ final class TimelineEditingTests: XCTestCase {
     }
 
     @MainActor
-    func testCommitTrimIsOneUndoableEditAndClearsRangeSelection() {
+    func testCommitTrimIsOneUndoableEditAndClearsRangeSelection() async {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("montazhka-trim-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -86,7 +86,7 @@ final class TimelineEditingTests: XCTestCase {
 
         controller.undo()
         XCTAssertEqual(controller.project.clips[0], clip)
-        controller.shutdown()
+        await controller.shutdown()
     }
 
     func testSelectionNormalizesAndClampsToTimeline() {
@@ -102,7 +102,7 @@ final class TimelineEditingTests: XCTestCase {
     }
 
     @MainActor
-    func testUndoRestoresProjectSettingsAsOneDocumentSnapshot() {
+    func testUndoRestoresProjectSettingsAsOneDocumentSnapshot() async {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("montazhka-editor-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -117,7 +117,7 @@ final class TimelineEditingTests: XCTestCase {
         controller.undo()
 
         XCTAssertEqual(controller.project.music, MusicSettings())
-        controller.shutdown()
+        await controller.shutdown()
     }
 
     @MainActor
@@ -143,7 +143,7 @@ final class TimelineEditingTests: XCTestCase {
         }
         XCTAssertTrue(message.contains("broken.mov"))
         XCTAssertTrue(controller.project.clips.isEmpty)
-        controller.shutdown()
+        await controller.shutdown()
     }
 
     @MainActor
@@ -162,7 +162,7 @@ final class TimelineEditingTests: XCTestCase {
                                           store: ProjectStore(baseDirectory: root),
                                           openRouterKeyStore: EmptyOpenRouterKeyStore())
 
-        controller.shutdown()
+        await controller.shutdown()
         try await Task.sleep(nanoseconds: 100_000_000)
 
         XCTAssertNil(controller.player.currentItem)

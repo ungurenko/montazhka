@@ -9,7 +9,8 @@ struct EditorView: View {
     var controller: EditorController
     @State private var projectName: String = ""
     @State private var showExport = false
-    @State private var keyMonitor: Any?
+    @State private var keyMonitor: LocalEventMonitor?
+    @State private var dropTask: Task<Void, Never>?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -71,7 +72,11 @@ struct EditorView: View {
             projectName = controller.project.name
             installKeyMonitor()
         }
-        .onDisappear { removeKeyMonitor() }
+        .onDisappear {
+            removeKeyMonitor()
+            dropTask?.cancel()
+            dropTask = nil
+        }
     }
 
     private func chooseReplacement(for source: MediaReference) {
@@ -118,6 +123,7 @@ struct EditorView: View {
             }
             .buttonStyle(.plain)
             .foregroundStyle(Theme.accent)
+            .disabled(app.isProjectOperationInProgress)
 
             TextField("Название", text: $projectName)
                 .textFieldStyle(.plain)
@@ -326,41 +332,16 @@ struct EditorView: View {
     }
 
     private func handleDrop(_ providers: [NSItemProvider]) -> Bool {
-        let videoExtensions = Set(["mp4", "mov", "m4v", "mpg", "mpeg", "avi", "mkv"])
         let fileProviders = providers.filter {
             $0.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier)
         }
         guard !fileProviders.isEmpty else { return false }
-        Task {
-            let urls = await withTaskGroup(of: URL?.self) { group in
-                for provider in fileProviders {
-                    // NSItemProvider не Sendable — перевязываем до передачи в задачу.
-                    nonisolated(unsafe) let p = provider
-                    group.addTask {
-                        await withCheckedContinuation { continuation in
-                            p.loadItem(forTypeIdentifier: UTType.fileURL.identifier) { item, _ in
-                                var url: URL?
-                                if let data = item as? Data {
-                                    url = URL(dataRepresentation: data, relativeTo: nil)
-                                } else if let u = item as? URL {
-                                    url = u
-                                }
-                                guard let url, videoExtensions.contains(url.pathExtension.lowercased()) else {
-                                    continuation.resume(returning: nil)
-                                    return
-                                }
-                                continuation.resume(returning: url)
-                            }
-                        }
-                    }
-                }
-                var result: [URL] = []
-                for await url in group {
-                    if let url { result.append(url) }
-                }
-                return result
-            }
+        dropTask?.cancel()
+        dropTask = Task {
+            let urls = await DroppedVideoLoader.load(from: fileProviders)
+            guard !Task.isCancelled else { return }
             controller.addClips(urls: urls)
+            dropTask = nil
         }
         return true
     }
@@ -370,54 +351,40 @@ struct EditorView: View {
     private func installKeyMonitor() {
         removeKeyMonitor()
         let controller = self.controller
-        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-            // Хендлер монитора синхронно исполняется на главном потоке —
-            // перевязка nonisolated(unsafe) лишь успокаивает компилятор Swift 6.
-            nonisolated(unsafe) let e = event
-            let keyCode = e.keyCode
-            let withShift = e.modifierFlags.contains(.shift)
-            let withCommand = e.modifierFlags.contains(.command)
-            let handled = MainActor.assumeIsolated { () -> Bool in
-                // Не перехватываем клавиши, когда печатают текст (например, имя проекта).
-                if NSApp.keyWindow?.firstResponder is NSTextView { return false }
-                if withCommand { return false }
+        let monitor = LocalEventMonitor()
+        monitor.install(matching: .keyDown) { event in
+            // Не перехватываем клавиши, когда печатают текст (например, имя проекта).
+            if NSApp.keyWindow?.firstResponder is NSTextView { return event }
+            if event.modifierFlags.contains(.command) { return event }
 
-                switch keyCode {
-                case 49: // пробел
-                    controller.togglePlay()
-                    return true
-                case 1: // S / Ы — разрезать
-                    controller.splitAtPlayhead()
-                    return true
-                case 34: // I / Ш — начало выделения
-                    controller.markSelectionStart()
-                    return true
-                case 31: // O / Щ — конец выделения
-                    controller.markSelectionEnd()
-                    return true
-                case 7: // X / Ч — вырезать выделение
-                    controller.cutSelection()
-                    return true
-                case 51, 117: // Backspace / Delete — удалить выбранный клип
-                    controller.deleteSelectedClip()
-                    return true
-                case 123: // ←
-                    controller.stepFrames(withShift ? -30 : -1)
-                    return true
-                case 124: // →
-                    controller.stepFrames(withShift ? 30 : 1)
-                    return true
-                default:
-                    return false
-                }
+            switch event.keyCode {
+            case 49: // пробел
+                controller.togglePlay()
+            case 1: // S / Ы — разрезать
+                controller.splitAtPlayhead()
+            case 34: // I / Ш — начало выделения
+                controller.markSelectionStart()
+            case 31: // O / Щ — конец выделения
+                controller.markSelectionEnd()
+            case 7: // X / Ч — вырезать выделение
+                controller.cutSelection()
+            case 51, 117: // Backspace / Delete — удалить выбранный клип
+                controller.deleteSelectedClip()
+            case 123: // ←
+                controller.stepFrames(event.modifierFlags.contains(.shift) ? -30 : -1)
+            case 124: // →
+                controller.stepFrames(event.modifierFlags.contains(.shift) ? 30 : 1)
+            default:
+                return event
             }
-            return handled ? nil : e
+            return nil
         }
+        keyMonitor = monitor
     }
 
     private func removeKeyMonitor() {
         if let keyMonitor {
-            NSEvent.removeMonitor(keyMonitor)
+            keyMonitor.remove()
             self.keyMonitor = nil
         }
     }

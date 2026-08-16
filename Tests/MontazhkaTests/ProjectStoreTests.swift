@@ -101,7 +101,7 @@ final class ProjectStoreTests: XCTestCase {
                        moved.resolvingSymlinksInPath().path)
     }
 
-    func testStoreRoundTripUsesPublicSaveAndLoadContract() throws {
+    func testStoreRoundTripUsesPublicSaveAndLoadContract() async throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("montazhka-store-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -110,8 +110,8 @@ final class ProjectStoreTests: XCTestCase {
             Clip(sourcePath: "/tmp/video.mov", start: 2, end: 7)
         ])
 
-        try store.save(project)
-        let loaded = try store.load(id: project.id)
+        try await store.save(project)
+        let loaded = try await store.load(id: project.id)
 
         XCTAssertEqual(loaded.name, "Проверка")
         XCTAssertEqual(loaded.clips, project.clips)
@@ -125,7 +125,7 @@ final class ProjectStoreTests: XCTestCase {
         let store = ProjectStore(baseDirectory: root)
         let valid = Project(name: "Исправный")
         let legacyID = UUID()
-        try store.save(valid)
+        try await store.save(valid)
         let legacy = """
         {
           "id":"\(legacyID.uuidString)",
@@ -155,13 +155,18 @@ final class ProjectStoreTests: XCTestCase {
         XCTAssertEqual(Set(listing.issues.map(\.fileName)), Set(["damaged.json", "newer.json"]))
     }
 
-    func testSaveReportsDirectoryFailure() throws {
+    func testSaveReportsDirectoryFailure() async throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("montazhka-file-\(UUID().uuidString)")
         try Data("occupied".utf8).write(to: root)
         defer { try? FileManager.default.removeItem(at: root) }
         let store = ProjectStore(baseDirectory: root)
 
-        XCTAssertThrowsError(try store.save(Project(name: "Не запишется")))
+        do {
+            try await store.save(Project(name: "Не запишется"))
+            XCTFail("Ожидалась ошибка записи")
+        } catch {
+            XCTAssertTrue(error is ProjectStoreError)
+        }
     }
 }

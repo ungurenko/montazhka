@@ -31,26 +31,32 @@ struct ProjectListing: Sendable {
 }
 
 /// Хранит проекты как JSON-файлы в Application Support — исходные видео не трогаются.
-final class ProjectStore: Sendable {
-    let projectsDir: URL
-    let waveformsDir: URL
-    let enhancedAudioDir: URL
-    let musicEQDir: URL
-    let transcriptsDir: URL
-    let modelsDir: URL
+final class ProjectStore: ProjectRepository, Sendable {
+    let directories: ProjectDirectories
 
     private let baseDirectory: URL
+    private let ioQueue = DispatchQueue(label: "ru.ungurenko.montazhka.project-store",
+                                        qos: .userInitiated)
+
+    var projectsDir: URL { directories.projects }
+    var waveformsDir: URL { directories.waveforms }
+    var enhancedAudioDir: URL { directories.enhancedAudio }
+    var musicEQDir: URL { directories.musicEQ }
+    var transcriptsDir: URL { directories.transcripts }
+    var modelsDir: URL { directories.models }
 
     init(baseDirectory: URL? = nil) {
         let base = baseDirectory ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Montazhka", isDirectory: true)
         self.baseDirectory = base
-        projectsDir = base.appendingPathComponent("Projects", isDirectory: true)
-        waveformsDir = base.appendingPathComponent("Waveforms", isDirectory: true)
-        enhancedAudioDir = base.appendingPathComponent("EnhancedAudio", isDirectory: true)
-        musicEQDir = base.appendingPathComponent("MusicEQ", isDirectory: true)
-        transcriptsDir = base.appendingPathComponent("Transcripts", isDirectory: true)
-        modelsDir = base.appendingPathComponent("Models", isDirectory: true)
+        directories = ProjectDirectories(
+            projects: base.appendingPathComponent("Projects", isDirectory: true),
+            waveforms: base.appendingPathComponent("Waveforms", isDirectory: true),
+            enhancedAudio: base.appendingPathComponent("EnhancedAudio", isDirectory: true),
+            musicEQ: base.appendingPathComponent("MusicEQ", isDirectory: true),
+            transcripts: base.appendingPathComponent("Transcripts", isDirectory: true),
+            models: base.appendingPathComponent("Models", isDirectory: true)
+        )
         try? prepareDirectories()
     }
 
@@ -71,7 +77,7 @@ final class ProjectStore: Sendable {
         }
     }
 
-    func save(_ project: Project) throws {
+    private func saveOnQueue(_ project: Project) throws {
         try prepareDirectories()
         var p = project
         p.schemaVersion = Project.currentSchemaVersion
@@ -86,7 +92,7 @@ final class ProjectStore: Sendable {
         catch { throw ProjectStoreError.write(error.localizedDescription) }
     }
 
-    func load(id: UUID) throws -> Project {
+    private func loadOnQueue(id: UUID) throws -> Project {
         let data: Data
         do { data = try Data(contentsOf: fileURL(for: id)) }
         catch { throw ProjectStoreError.read(error.localizedDescription) }
@@ -96,57 +102,39 @@ final class ProjectStore: Sendable {
         catch { throw ProjectStoreError.decode(error.localizedDescription) }
     }
 
-    func delete(id: UUID) throws {
+    private func deleteOnQueue(id: UUID) throws {
         do { try FileManager.default.trashItem(at: fileURL(for: id), resultingItemURL: nil) }
         catch { throw ProjectStoreError.delete(error.localizedDescription) }
     }
 
-    // MARK: - Фоновые варианты для UI
+    // MARK: - Последовательный интерфейс
 
-    /// Та же запись, но вне главного потока. Синхронный `save` остаётся
-    /// для критичных точек (завершение приложения) и тестов.
-    func saveAsync(_ project: Project) async throws {
-        let task = Task.detached(priority: .userInitiated) {
-            try self.save(project)
-        }
-        return try await withTaskCancellationHandler {
-            try await task.value
-        } onCancel: {
-            task.cancel()
-        }
+    func save(_ project: Project) async throws {
+        try await perform { try self.saveOnQueue(project) }
     }
 
-    func loadAsync(id: UUID) async throws -> Project {
-        let task = Task.detached(priority: .userInitiated) {
-            try self.load(id: id)
-        }
-        return try await withTaskCancellationHandler {
-            try await task.value
-        } onCancel: {
-            task.cancel()
-        }
+    func load(id: UUID) async throws -> Project {
+        try await perform { try self.loadOnQueue(id: id) }
     }
 
-    func deleteAsync(id: UUID) async throws {
-        let task = Task.detached(priority: .userInitiated) {
-            try self.delete(id: id)
-        }
-        return try await withTaskCancellationHandler {
-            try await task.value
-        } onCancel: {
-            task.cancel()
-        }
+    func delete(id: UUID) async throws {
+        try await perform { try self.deleteOnQueue(id: id) }
     }
 
     func listProjects() async throws -> ProjectListing {
         let directory = projectsDir
-        let task = Task.detached(priority: .userInitiated) {
-            try Self.listProjects(in: directory)
-        }
-        return try await withTaskCancellationHandler {
-            try await task.value
-        } onCancel: {
-            task.cancel()
+        return try await perform { try Self.listProjects(in: directory) }
+    }
+
+    func saveBeforeTermination(_ project: Project) throws {
+        try ioQueue.sync { try saveOnQueue(project) }
+    }
+
+    private func perform<T: Sendable>(_ operation: @escaping @Sendable () throws -> T) async throws -> T {
+        try await withCheckedThrowingContinuation { continuation in
+            ioQueue.async {
+                continuation.resume(with: Result { try operation() })
+            }
         }
     }
 
