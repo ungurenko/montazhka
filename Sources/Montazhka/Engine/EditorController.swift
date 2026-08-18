@@ -95,8 +95,17 @@ final class EditorController {
     private(set) var smartEditStatus: SmartEditStatus = .idle
     var openRouterKeyStatus: OpenRouterKeyStatus { openRouterKeyManager.status }
     var smartEditModel: SmartEditModel = .saved {
-        didSet { SmartEditModel.saved = smartEditModel }
+        didSet {
+            SmartEditModel.saved = smartEditModel
+            refreshSmartEditReasoningOptions()
+        }
     }
+    var smartEditReasoning: ReasoningChoice = ReasoningChoice.saved(key: EditorController.smartEditReasoningKey) {
+        didSet { smartEditReasoning.save(key: EditorController.smartEditReasoningKey) }
+    }
+    /// Варианты пикера размышлений по возможностям модели; до загрузки
+    /// каталога — только «Авто».
+    private(set) var smartEditReasoningOptions: [ReasoningChoice] = [.auto]
 
     let player = AVPlayer()
     let waveforms: WaveformStore
@@ -109,7 +118,10 @@ final class EditorController {
     private let mediaPipeline: MediaPipeline
     private let transcriptStore: TranscriptStore
     private let smartEditService: SmartEditService
+    private let openRouterClient: OpenRouterClient
     private let openRouterKeyManager: OpenRouterKeyManager
+
+    static let smartEditReasoningKey = "smartEdit.reasoningEffort"
 
     @ObservationIgnored private var timeObserver: Any?
     @ObservationIgnored private var endObserver: NSObjectProtocol?
@@ -171,9 +183,11 @@ final class EditorController {
         let transcriptStore = TranscriptStore(cacheDir: store.directories.transcripts,
                                                modelsDir: store.directories.models)
         self.transcriptStore = transcriptStore
+        let openRouterClient = OpenRouterClient()
+        self.openRouterClient = openRouterClient
         self.smartEditService = SmartEditService(
             transcriptStore: transcriptStore,
-            openRouter: OpenRouterClient(),
+            openRouter: openRouterClient,
             waveforms: self.waveforms
         )
         player.actionAtItemEnd = .pause
@@ -808,6 +822,7 @@ final class EditorController {
 
     func saveAndValidateOpenRouterKey(_ key: String) async {
         await openRouterKeyManager.saveAndValidate(key)
+        refreshSmartEditReasoningOptions()
     }
 
     func validateSavedOpenRouterKey() async {
@@ -816,6 +831,30 @@ final class EditorController {
 
     func deleteOpenRouterKey() {
         if openRouterKeyManager.delete() { cancelSmartEdit() }
+    }
+
+    /// Подтягивает уровни размышлений выбранной модели из каталога OpenRouter.
+    /// Без ключа или при сбое сети молча остаёмся на «Авто».
+    func refreshSmartEditReasoningOptions() {
+        let requestedModel = smartEditModel
+        guard let apiKey = try? openRouterKeyManager.load() else { return }
+        Task { [weak self] in
+            guard let self else { return }
+            let options: [ReasoningChoice]
+            do {
+                let capabilities = try await self.openRouterClient.reasoningCapabilities(
+                    for: requestedModel, apiKey: apiKey)
+                options = ReasoningChoice.options(availableEfforts: capabilities.efforts,
+                                                  mandatory: capabilities.mandatory)
+            } catch {
+                return
+            }
+            guard self.smartEditModel == requestedModel else { return }
+            self.smartEditReasoningOptions = options
+            if !options.contains(self.smartEditReasoning) {
+                self.smartEditReasoning = .auto
+            }
+        }
     }
 
     func analyzeSmartEdits() {
@@ -837,6 +876,7 @@ final class EditorController {
         let clips = project.clips
         let threshold = project.detection.thresholdDB
         let model = smartEditModel
+        let effort = smartEditReasoning.apiEffort
         smartEditCandidates = []
         smartEditSnapshotID = nil
         smartEditStatus = .preparingModel(progress: nil)
@@ -845,7 +885,7 @@ final class EditorController {
             do {
                 let result = try await self.smartEditService.analyze(
                     clips: clips, projectThresholdDB: threshold,
-                    model: model, apiKey: apiKey,
+                    model: model, effort: effort, apiKey: apiKey,
                     status: { status in
                         await self.receiveSmartEditStatus(status, generation: generation)
                     })

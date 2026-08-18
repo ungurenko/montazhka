@@ -118,10 +118,152 @@ final class OpenRouterClientTests: XCTestCase {
         XCTAssertEqual(MockOpenRouterURLProtocol.recordedRequests.count, 1)
     }
 
+    func testReasoningEffortSentOnlyWhenChosen() async throws {
+        let content = """
+        {"schema_version":1,"clips":[{"id":"s1","first_word_id":"w000001","last_word_id":"w000002","title":"т","reason":"р","confidence":0.9}]}
+        """
+        ShortsMockBodyURLProtocol.configure(responses: [.json(content: content)])
+        let client = OpenRouterClient(session: makeSession(ShortsMockBodyURLProtocol.self))
+        _ = try await client.proposeShorts(words: words, model: .deepSeek,
+                                           effort: "high", apiKey: "secret")
+        let body = try XCTUnwrap(ShortsMockBodyURLProtocol.recordedRequests.first)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+        let reasoning = try XCTUnwrap(json["reasoning"] as? [String: Any])
+        XCTAssertEqual(reasoning["effort"] as? String, "high")
+
+        ShortsMockBodyURLProtocol.configure(responses: [.json(content: content)])
+        _ = try await client.proposeShorts(words: words, model: .deepSeek,
+                                           effort: nil, apiKey: "secret")
+        let autoBody = try XCTUnwrap(ShortsMockBodyURLProtocol.recordedRequests.last)
+        let autoJSON = try XCTUnwrap(JSONSerialization.jsonObject(with: autoBody) as? [String: Any])
+        XCTAssertNil(autoJSON["reasoning"], "«Авто» не должно отправлять параметр reasoning")
+    }
+
+    func testReasoningCapabilitiesDecodedFromCatalog() async throws {
+        let catalog = """
+        {"data":[
+            {"id":"qwen/qwen3.7-flash","reasoning":{"supported_efforts":["high","medium","low"],"default_effort":"medium","mandatory":false}},
+            {"id":"deepseek/deepseek-v4-flash-0731","reasoning":{"supported_efforts":null,"default_effort":"low","mandatory":true}},
+            {"id":"openai/gpt-5.6-luna"}
+        ]}
+        """
+        ShortsMockBodyURLProtocol.configure(responses: [.init(status: 200, body: Data(catalog.utf8),
+                                                              headers: ["Content-Type": "application/json"])])
+        let client = OpenRouterClient(session: makeSession(ShortsMockBodyURLProtocol.self))
+
+        let qwen = try await client.reasoningCapabilities(for: .qwen, apiKey: "secret")
+        XCTAssertEqual(qwen.efforts, [.low, .medium, .high])
+        XCTAssertEqual(qwen.defaultEffort, .medium)
+        XCTAssertFalse(qwen.mandatory)
+
+        // supported_efforts: null — модель принимает любые уровни.
+        let deepSeek = try await client.reasoningCapabilities(for: .deepSeek, apiKey: "secret")
+        XCTAssertNil(deepSeek.efforts)
+        XCTAssertTrue(deepSeek.mandatory)
+        XCTAssertEqual(deepSeek.defaultEffort, .low)
+
+        // Модель без объекта reasoning — выбора уровня нет.
+        let luna = try await client.reasoningCapabilities(for: .luna, apiKey: "secret")
+        XCTAssertEqual(luna, .withoutEffortSelection)
+    }
+
+    func testReasoningChoiceOptionsRespectCatalogAndMandatory() {
+        // Полный список: все уровни в каноническом порядке, «Выкл» доступен.
+        let full = ReasoningChoice.options(availableEfforts: nil, mandatory: false)
+        XCTAssertEqual(full, [.auto, .effort(.none), .effort(.minimal), .effort(.low),
+                              .effort(.medium), .effort(.high), .effort(.xhigh), .effort(.max)])
+        // Обязательные размышления: «Выкл» спрятан.
+        let mandatory = ReasoningChoice.options(availableEfforts: nil, mandatory: true)
+        XCTAssertFalse(mandatory.contains(.effort(.none)))
+        // Модель без выбора усилия: только «Авто».
+        XCTAssertEqual(ReasoningChoice.options(availableEfforts: [], mandatory: false), [.auto])
+        // Подмножество уровней из каталога.
+        let subset = ReasoningChoice.options(availableEfforts: [.high, .low], mandatory: false)
+        XCTAssertEqual(subset, [.auto, .effort(.low), .effort(.high)])
+    }
+
     private func makeMockSession() -> URLSession {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [MockOpenRouterURLProtocol.self]
         return URLSession(configuration: configuration)
+    }
+
+    private func makeSession(_ protocolClass: AnyClass) -> URLSession {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [protocolClass]
+        return URLSession(configuration: configuration)
+    }
+}
+
+/// Отдельный мок-протокол: не делит запись запросов с основным.
+private final class ShortsMockBodyURLProtocol: URLProtocol {
+    struct Response: Sendable {
+        let status: Int
+        let body: Data
+        let headers: [String: String]
+
+        static func json(content: String) -> Response {
+            let object: [String: Any] = ["choices": [["message": ["content": content]]]]
+            return Response(status: 200,
+                            body: try! JSONSerialization.data(withJSONObject: object),
+                            headers: ["Content-Type": "application/json"])
+        }
+    }
+
+    private final class State: @unchecked Sendable {
+        let lock = NSLock()
+        var responses: [Response] = []
+        var requests: [Data] = []
+    }
+
+    private static let state = State()
+
+    static var recordedRequests: [Data] {
+        state.lock.withLock { state.requests }
+    }
+
+    static func configure(responses newResponses: [Response]) {
+        state.lock.withLock {
+            state.responses = newResponses
+            state.requests = []
+        }
+    }
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        let body: Data? = Self.bodyData(from: request)
+        let value: Response? = Self.state.lock.withLock {
+            Self.state.requests.append(body ?? Data())
+            return Self.state.responses.isEmpty ? nil : Self.state.responses.removeFirst()
+        }
+        guard let value else {
+            client?.urlProtocol(self, didFailWithError: URLError(.badServerResponse))
+            return
+        }
+        let response = HTTPURLResponse(url: request.url!, statusCode: value.status,
+                                       httpVersion: nil, headerFields: value.headers)!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: value.body)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+
+    override func stopLoading() {}
+
+    private static func bodyData(from request: URLRequest) -> Data? {
+        if let body = request.httpBody { return body }
+        guard let stream = request.httpBodyStream else { return nil }
+        stream.open()
+        defer { stream.close() }
+        var data = Data()
+        var buffer = [UInt8](repeating: 0, count: 4_096)
+        while true {
+            let count = stream.read(&buffer, maxLength: buffer.count)
+            if count < 0 { return nil }
+            if count == 0 { return data }
+            data.append(buffer, count: count)
+        }
     }
 }
 

@@ -44,6 +44,7 @@ struct SmartEditPanel: View {
             if !controller.smartEditCandidates.isEmpty { applyBar }
         }
         .cardStyle()
+        .task { controller.refreshSmartEditReasoningOptions() }
     }
 
     private var header: some View {
@@ -147,6 +148,20 @@ struct SmartEditPanel: View {
             }
             .labelsHidden()
             .frame(maxWidth: .infinity)
+
+            Picker("Размышления", selection: $controller.smartEditReasoning) {
+                ForEach(controller.smartEditReasoningOptions) { choice in
+                    Text(choice.title).tag(choice)
+                }
+            }
+            .labelsHidden()
+            .frame(maxWidth: .infinity)
+            if controller.smartEditReasoningOptions.count > 1 {
+                Text("Глубина «размышлений» модели. Выше уровень — вдумчивее склейки, но дольше анализ.")
+                    .font(.system(size: 10))
+                    .foregroundStyle(Theme.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
 
             keyControls
 

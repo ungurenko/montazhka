@@ -26,7 +26,10 @@ struct ShortsView: View {
             .padding(.bottom, 16)
         }
         .background(Theme.background)
-        .task { controller.prepare() }
+        .task {
+            controller.prepare()
+            controller.refreshReasoningOptions()
+        }
         .onAppear(perform: installKeyMonitor)
         .onDisappear(perform: removeKeyMonitor)
     }
@@ -202,6 +205,18 @@ struct ShortsView: View {
                 }
             }
 
+            Picker("Размышления", selection: $controller.reasoningChoice) {
+                ForEach(controller.reasoningOptions) { choice in
+                    Text(choice.title).tag(choice)
+                }
+            }
+            if controller.reasoningOptions.count > 1 {
+                Text("Глубина «размышлений» модели. Выше уровень — вдумчивее отбор, но дольше и дороже анализ.")
+                    .font(.system(size: 10))
+                    .foregroundStyle(Theme.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
             keyControls
 
             Label("В OpenRouter уходит текст расшифровки — он может содержать произнесённые личные данные. Звук, видео и пути файлов остаются на Mac.",
@@ -357,12 +372,16 @@ struct ShortsView: View {
 
     private var progressValue: Double? {
         switch controller.status {
-        case .preparingModel(let value): return value.map { $0 * 0.15 }
-        case .transcribing(let value): return 0.15 + 0.45 * (value ?? 0)
+        case .preparingModel(let value): return value.map { $0 * 0.12 }
+        case .transcribing(let value): return 0.12 + 0.38 * (value ?? 0)
+        case .mapping(let done, let total):
+            guard total > 0 else { return nil }
+            return 0.50 + 0.20 * Double(done) / Double(total)
         case .searching(let done, let total):
             guard total > 0 else { return nil }
-            return 0.60 + 0.25 * Double(done) / Double(total)
+            return 0.70 + 0.18 * Double(done) / Double(total)
         case .ranking: return 0.90
+        case .verifying: return 0.96
         default: return nil
         }
     }
@@ -371,8 +390,10 @@ struct ShortsView: View {
         switch controller.status {
         case .preparingModel: return "Готовлю локальную модель — в первый раз загружается около 460 МБ"
         case .transcribing: return "Расшифровываю речь"
+        case .mapping(let done, let total): return "Составляю карту видео: окно \(done + 1) из \(total)"
         case .searching(let done, let total): return "Ищу сильные моменты: окно \(done + 1) из \(total)"
         case .ranking: return "Отбираю и ранжирую лучшие моменты"
+        case .verifying: return "Проверяю выбранные моменты тестом холодного зрителя"
         default: return ""
         }
     }
@@ -406,6 +427,13 @@ struct ShortsView: View {
                     Text("\(candidate.rank). \(candidate.title)")
                         .font(.system(size: 12, weight: .semibold))
                         .lineLimit(2)
+                    if !candidate.hook.isEmpty {
+                        Text("«\(candidate.hook)…»")
+                            .font(.system(size: 11, weight: .medium, design: .rounded))
+                            .italic()
+                            .foregroundStyle(Theme.accent)
+                            .lineLimit(1)
+                    }
                     Text(candidate.excerpt)
                         .font(.system(size: 11))
                         .foregroundStyle(Theme.textSecondary)
@@ -417,6 +445,11 @@ struct ShortsView: View {
                 .foregroundStyle(Theme.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
                 .lineLimit(3)
+            Text("Хук \(candidate.hookScore) · Отдельно \(candidate.standaloneScore) · Польза \(candidate.payoffScore) · Темп \(candidate.pacingScore)")
+                .font(.system(size: 9.5, design: .monospaced))
+                .foregroundStyle(Theme.textSecondary.opacity(0.85))
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
             HStack {
                 Text(TimeFormat.compact(candidate.duration))
                     .font(.system(size: 10, weight: .medium, design: .monospaced))
@@ -425,6 +458,16 @@ struct ShortsView: View {
                     .padding(.vertical, 2)
                     .background(Theme.background)
                     .clipShape(Capsule())
+                if !candidate.pattern.isEmpty {
+                    Text(candidate.pattern)
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(Theme.accent)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Theme.accent.opacity(0.12))
+                        .clipShape(Capsule())
+                        .lineLimit(1)
+                }
                 Spacer()
                 Button {
                     controller.preview(candidate)

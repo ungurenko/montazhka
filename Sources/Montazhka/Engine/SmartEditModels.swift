@@ -27,6 +27,76 @@ enum SmartEditModel: String, CaseIterable, Codable, Sendable {
     var usesStrictSchema: Bool { self != .qwen }
 }
 
+/// Уровень «размышлений» reasoning-модели в OpenRouter
+/// (параметр reasoning.effort).
+enum ReasoningEffort: String, CaseIterable, Codable, Sendable {
+    case none, minimal, low, medium, high, xhigh, max
+
+    var title: String {
+        switch self {
+        case .none: return "Выкл"
+        case .minimal: return "Минимум"
+        case .low: return "Низкий"
+        case .medium: return "Средний"
+        case .high: return "Высокий"
+        case .xhigh: return "Очень высокий"
+        case .max: return "Максимум"
+        }
+    }
+}
+
+/// Выбор уровня размышлений в UI: «Авто» (параметр reasoning не отправляется —
+/// модель использует свой уровень по умолчанию) или явный уровень.
+enum ReasoningChoice: Hashable, Identifiable, Sendable {
+    case auto
+    case effort(ReasoningEffort)
+
+    var id: String {
+        switch self {
+        case .auto: return "auto"
+        case .effort(let effort): return effort.rawValue
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .auto: return "Авто"
+        case .effort(let effort): return effort.title
+        }
+    }
+
+    /// Значение для API: nil — не отправлять reasoning вовсе.
+    var apiEffort: String? {
+        switch self {
+        case .auto: return nil
+        case .effort(let effort): return effort.rawValue
+        }
+    }
+
+    static func saved(key: String) -> ReasoningChoice {
+        guard let raw = UserDefaults.standard.string(forKey: key), raw != "auto",
+              let effort = ReasoningEffort(rawValue: raw) else { return .auto }
+        return .effort(effort)
+    }
+
+    func save(key: String) {
+        UserDefaults.standard.set(id, forKey: key)
+    }
+
+    /// Варианты пикера по возможностям модели: «Авто» всегда, дальше уровни,
+    /// которые модель принимает (nil — модель принимает любые значения).
+    /// «Выкл» прячется у моделей с обязательными размышлениями.
+    static func options(availableEfforts: [ReasoningEffort]?, mandatory: Bool) -> [ReasoningChoice] {
+        let efforts = availableEfforts ?? ReasoningEffort.allCases
+        var choices: [ReasoningChoice] = [.auto]
+        for effort in ReasoningEffort.allCases {
+            guard efforts.contains(effort), !(effort == .none && mandatory) else { continue }
+            choices.append(.effort(effort))
+        }
+        return choices
+    }
+}
+
 enum SmartEditKind: String, Codable, CaseIterable, Sendable {
     case fillerSound = "filler_sound"
     case falseStart = "false_start"

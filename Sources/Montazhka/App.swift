@@ -33,6 +33,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Всегда светлый интерфейс — как просил Александр.
         NSApp.appearance = NSAppearance(named: .aqua)
+        // Запуск из терминала (swift run) не выводит окно вперёд — активируем сами.
+        NSApp.activate(ignoringOtherApps: true)
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }

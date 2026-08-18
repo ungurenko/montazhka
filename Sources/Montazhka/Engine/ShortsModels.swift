@@ -55,10 +55,19 @@ struct ShortCandidate: Identifiable, Equatable, Sendable {
     let rank: Int
     let title: String
     let reason: String
+    /// Первые слова ролика — что зритель услышит в начале.
+    let hook: String
+    /// Вирусный паттерн одним-двумя словами («мнение», «история»…).
+    let pattern: String
     let excerpt: String
     let start: Double
     let end: Double
     let confidence: Double
+    /// Баллы решётки оценки 0–10: хук, самостоятельность, польза, темп.
+    let hookScore: Int
+    let standaloneScore: Int
+    let payoffScore: Int
+    let pacingScore: Int
     var enabled: Bool
 
     var duration: Double { max(0, end - start) }
@@ -68,8 +77,10 @@ enum ShortsStatus: Equatable {
     case idle
     case preparingModel(progress: Double?)
     case transcribing(progress: Double?)
+    case mapping(done: Int, total: Int)
     case searching(done: Int, total: Int)
     case ranking
+    case verifying
     case ready
     case failed(String)
 
@@ -82,7 +93,7 @@ enum ShortsStatus: Equatable {
 
     var isWorking: Bool {
         switch self {
-        case .preparingModel, .transcribing, .searching, .ranking: return true
+        case .preparingModel, .transcribing, .mapping, .searching, .ranking, .verifying: return true
         default: return false
         }
     }
@@ -124,10 +135,53 @@ struct ShortsProposalDTO: Codable, Equatable, Sendable {
     let title: String
     let reason: String
     let confidence: Double
+    /// Первые 5–7 слов ролика — хук для зрителя.
+    let hook: String
+    /// Вирусный паттерн одним-двумя словами.
+    let pattern: String
+    /// Тема фрагмента одним-двумя словами.
+    let topic: String
+    /// Баллы решётки 0–10: цепкость начала, самостоятельность, польза, темп.
+    let hookScore: Int
+    let standaloneScore: Int
+    let payoffScore: Int
+    let pacingScore: Int
     enum CodingKeys: String, CodingKey {
-        case id, title, reason, confidence
+        case id, title, reason, confidence, hook, pattern, topic
         case firstWordID = "first_word_id"
         case lastWordID = "last_word_id"
+        case hookScore = "hook_score"
+        case standaloneScore = "standalone_score"
+        case payoffScore = "payoff_score"
+        case pacingScore = "pacing_score"
+    }
+}
+
+extension ShortsProposalDTO {
+    /// Ленентный вход: qwen отвечает без строгой JSON-схемы, поэтому новые
+    /// поля могут отсутствовать — подставляем нейтральные значения, а баллы
+    /// ещё и зажимаем в 0–10 на случай самодеятельности модели.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        firstWordID = try container.decode(String.self, forKey: .firstWordID)
+        lastWordID = try container.decode(String.self, forKey: .lastWordID)
+        title = try container.decode(String.self, forKey: .title)
+        reason = try container.decode(String.self, forKey: .reason)
+        confidence = try container.decode(Double.self, forKey: .confidence)
+        hook = try container.decodeIfPresent(String.self, forKey: .hook) ?? ""
+        pattern = try container.decodeIfPresent(String.self, forKey: .pattern) ?? ""
+        topic = try container.decodeIfPresent(String.self, forKey: .topic) ?? ""
+        hookScore = Self.clamped(container, key: .hookScore)
+        standaloneScore = Self.clamped(container, key: .standaloneScore)
+        payoffScore = Self.clamped(container, key: .payoffScore)
+        pacingScore = Self.clamped(container, key: .pacingScore)
+    }
+
+    private static func clamped(_ container: KeyedDecodingContainer<CodingKeys>,
+                                key: CodingKeys) -> Int {
+        let raw = (try? container.decodeIfPresent(Int.self, forKey: key)) ?? 5
+        return min(10, max(0, raw))
     }
 }
 
@@ -161,8 +215,81 @@ struct ShortsRankInput: Codable, Equatable, Sendable {
     let confidence: Double
     let durationSeconds: Double
     let excerpt: String
+    let hook: String
+    let pattern: String
+    let topic: String
+    let hookScore: Int
+    let standaloneScore: Int
+    let payoffScore: Int
+    let pacingScore: Int
     enum CodingKeys: String, CodingKey {
-        case id, title, reason, confidence, excerpt
+        case id, title, reason, confidence, excerpt, hook, pattern, topic
         case durationSeconds = "duration_seconds"
+        case hookScore = "hook_score"
+        case standaloneScore = "standalone_score"
+        case payoffScore = "payoff_score"
+        case pacingScore = "pacing_score"
+    }
+}
+
+/// Сводка отобранного кандидата для верификационного прохода «тест холодного
+/// зрителя»: достаточно текста и баллов, полные границы не нужны.
+struct ShortsVerifyInput: Codable, Equatable, Sendable {
+    let id: String
+    let title: String
+    let hook: String
+    let pattern: String
+    let durationSeconds: Double
+    let excerpt: String
+    let hookScore: Int
+    let standaloneScore: Int
+    let payoffScore: Int
+    let pacingScore: Int
+    enum CodingKeys: String, CodingKey {
+        case id, title, hook, pattern, excerpt
+        case durationSeconds = "duration_seconds"
+        case hookScore = "hook_score"
+        case standaloneScore = "standalone_score"
+        case payoffScore = "payoff_score"
+        case pacingScore = "pacing_score"
+    }
+}
+
+// MARK: - Карта видео (проход 0)
+
+/// Итог анализа одного окна: о чём кусок и где его сильные места.
+struct ShortsMapEnvelope: Codable, Equatable, Sendable {
+    let schemaVersion: Int
+    let summary: String
+    let peaks: [ShortsMapPeakDTO]
+    enum CodingKeys: String, CodingKey { case schemaVersion = "schema_version", summary, peaks }
+}
+
+struct ShortsMapPeakDTO: Codable, Equatable, Sendable {
+    let firstWordID: String
+    let lastWordID: String
+    let what: String
+    enum CodingKeys: String, CodingKey {
+        case what
+        case firstWordID = "first_word_id"
+        case lastWordID = "last_word_id"
+    }
+}
+
+// MARK: - Верификация (проход 3)
+
+struct ShortsVerdictEnvelope: Codable, Equatable, Sendable {
+    let schemaVersion: Int
+    let verdicts: [ShortsVerdictDTO]
+    enum CodingKeys: String, CodingKey { case schemaVersion = "schema_version", verdicts }
+}
+
+struct ShortsVerdictDTO: Codable, Equatable, Sendable {
+    let clipID: String
+    let keep: Bool
+    let verdict: String
+    enum CodingKeys: String, CodingKey {
+        case keep, verdict
+        case clipID = "clip_id"
     }
 }

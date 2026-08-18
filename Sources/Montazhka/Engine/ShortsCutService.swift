@@ -18,7 +18,7 @@ actor ShortsCutService {
     func analyze(source: MediaReference,
                  sourceDuration: Double,
                  count: ShortsCount,
-                 model: SmartEditModel, apiKey: String,
+                 model: SmartEditModel, effort: String?, apiKey: String,
                  thresholdDB: Double,
                  status: @escaping @Sendable (ShortsStatus) async -> Void) async throws -> [ShortCandidate] {
         guard sourceDuration >= ShortsLimits.minSourceDuration else { throw ShortsError.tooShort }
@@ -44,9 +44,33 @@ actor ShortsCutService {
         let windows = ShortsWindowPlanner.windows(for: timelineMap.words)
         guard !windows.isEmpty else { throw ShortsError.emptyTranscript }
 
-        // Проход 1: предложения по каждому окну. Ошибка одного окна (таймаут,
-        // битый ответ после ремонта) не губит весь анализ — работаем с теми
-        // окнами, что отвечают.
+        // Проход 0: карта видео — о чём каждое окно и где его сильные места.
+        // Компактный вызов на окно; ошибка одного окна просто оставляет его
+        // без строчки в карте.
+        var mapLines: [String] = []
+        for (index, window) in windows.enumerated() {
+            try Task.checkCancellation()
+            await status(.mapping(done: index, total: windows.count))
+            let windowWords = timelineMap.words[window]
+            do {
+                let map = try await openRouter.mapShortsWindow(
+                    words: windowWords.map(\.publicPayload),
+                    model: model, effort: effort, apiKey: apiKey)
+                if let line = Self.mapLine(for: map, windowWords: windowWords) {
+                    mapLines.append(line)
+                }
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                Logger.network.error("Shorts: карта окна \(index + 1)/\(windows.count) не собралась: \(error.localizedDescription, privacy: .public)")
+            }
+        }
+        let videoMap = mapLines.joined(separator: "\n")
+        try Task.checkCancellation()
+
+        // Проход 1: предложения по каждому окну с картой всего видео в
+        // контексте. Ошибка одного окна (таймаут, битый ответ после ремонта)
+        // не губит весь анализ — работаем с теми окнами, что отвечают.
         var contexts: [String: ProposalContext] = [:]
         var ordered: [ShortsProposalDTO] = []
         var failedWindows = 0
@@ -57,7 +81,8 @@ actor ShortsCutService {
             let windowWords = timelineMap.words[window]
             do {
                 let envelope = try await openRouter.proposeShorts(
-                    words: windowWords.map(\.publicPayload), model: model, apiKey: apiKey)
+                    words: windowWords.map(\.publicPayload), model: model,
+                    effort: effort, apiKey: apiKey, videoMap: videoMap)
                 for proposal in envelope.clips {
                     // Модель любит одинаковые ID в каждом окне (clip_1…),
                     // а кандидаты разных окон должны быть уникальны.
@@ -74,7 +99,14 @@ actor ShortsCutService {
                         lastWordID: proposal.lastWordID,
                         title: proposal.title,
                         reason: proposal.reason,
-                        confidence: proposal.confidence)
+                        confidence: proposal.confidence,
+                        hook: proposal.hook,
+                        pattern: proposal.pattern,
+                        topic: proposal.topic,
+                        hookScore: proposal.hookScore,
+                        standaloneScore: proposal.standaloneScore,
+                        payoffScore: proposal.payoffScore,
+                        pacingScore: proposal.pacingScore)
                     contexts[uniqueID] = ProposalContext(
                         first: first, last: last, excerpt: excerpt,
                         duration: last.sourceEnd - first.sourceStart)
@@ -104,13 +136,16 @@ actor ShortsCutService {
                 id: proposal.id, title: proposal.title, reason: proposal.reason,
                 confidence: proposal.confidence,
                 durationSeconds: max(0, context?.duration ?? 0),
-                excerpt: String((context?.excerpt ?? "").prefix(700)))
+                excerpt: String((context?.excerpt ?? "").prefix(700)),
+                hook: proposal.hook, pattern: proposal.pattern, topic: proposal.topic,
+                hookScore: proposal.hookScore, standaloneScore: proposal.standaloneScore,
+                payoffScore: proposal.payoffScore, pacingScore: proposal.pacingScore)
         }
         let decisions: [ShortsRankDTO]
         do {
             let ranking = try await openRouter.rankShorts(
                 proposals: rankInputs, desiredCount: count.desired,
-                model: model, apiKey: apiKey)
+                model: model, effort: effort, apiKey: apiKey, videoMap: videoMap)
             decisions = ranking.decisions
         } catch is CancellationError {
             throw CancellationError()
@@ -120,10 +155,39 @@ actor ShortsCutService {
         }
         try Task.checkCancellation()
 
+        // Проход 3: тест холодного зрителя. Пропущенный кандидатом вердикт
+        // трактуем как «оставить»; ошибка прохода целиком — фолбэк на
+        // ранжированный список без верификации.
+        await status(.verifying)
+        let accepted = Self.acceptedInRankOrder(decisions)
+        var rejectedIDs = Set<String>()
+        if !accepted.isEmpty {
+            let verifyInputs: [ShortsVerifyInput] = accepted.compactMap { decision in
+                guard let proposal = Self.proposalByID(decision.clipID, in: ordered),
+                      let context = contexts[decision.clipID] else { return nil }
+                return ShortsVerifyInput(
+                    id: proposal.id, title: decision.title,
+                    hook: proposal.hook, pattern: proposal.pattern,
+                    durationSeconds: max(0, context.duration),
+                    excerpt: String(context.excerpt.prefix(700)),
+                    hookScore: proposal.hookScore, standaloneScore: proposal.standaloneScore,
+                    payoffScore: proposal.payoffScore, pacingScore: proposal.pacingScore)
+            }
+            do {
+                let envelope = try await openRouter.verifyShorts(
+                    inputs: verifyInputs, videoMap: videoMap,
+                    model: model, effort: effort, apiKey: apiKey)
+                rejectedIDs = Set(envelope.verdicts.filter { !$0.keep }.map(\.clipID))
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                Logger.network.error("Shorts: проверка недоступна, оставляю решения отбора: \(error.localizedDescription, privacy: .public)")
+            }
+        }
+
         var candidates: [ShortCandidate] = []
-        let proposalByID = Dictionary(uniqueKeysWithValues: ordered.map { ($0.id, $0) })
-        for decision in Self.acceptedInRankOrder(decisions) {
-            guard let proposal = proposalByID[decision.clipID],
+        for decision in accepted where !rejectedIDs.contains(decision.clipID) {
+            guard let proposal = Self.proposalByID(decision.clipID, in: ordered),
                   let context = contexts[decision.clipID] else { continue }
             guard let boundary = ShortsBoundaryResolver.resolve(
                 first: context.first, last: context.last, peaks: peaks,
@@ -132,12 +196,19 @@ actor ShortsCutService {
             candidates.append(ShortCandidate(
                 id: UUID(), rank: candidates.count + 1,
                 title: decision.title, reason: decision.reason,
+                hook: proposal.hook, pattern: proposal.pattern,
                 excerpt: context.excerpt,
                 start: boundary.start, end: boundary.end,
-                confidence: confidence, enabled: false))
+                confidence: confidence,
+                hookScore: proposal.hookScore,
+                standaloneScore: proposal.standaloneScore,
+                payoffScore: proposal.payoffScore,
+                pacingScore: proposal.pacingScore,
+                enabled: false))
         }
 
         candidates = ShortsWindowPlanner.deduplicated(candidates)
+        candidates = Self.diversified(candidates)
         candidates = Array(candidates.prefix(ShortsLimits.maxCandidates))
         await status(.ready)
         return candidates
@@ -164,6 +235,51 @@ actor ShortsCutService {
                           title: proposal.title, reason: proposal.reason,
                           confidence: proposal.confidence)
         }
+    }
+
+    /// Разнообразие: не больше двух роликов на один паттерн. Вход должен быть
+    /// отсортирован по силе — в каждом паттерне остаются сильнейшие.
+    static func diversified(_ candidates: [ShortCandidate]) -> [ShortCandidate] {
+        let perPatternLimit = 2
+        var counts: [String: Int] = [:]
+        return candidates.filter { candidate in
+            let key = candidate.pattern.isEmpty ? "без паттерна" : candidate.pattern
+            let count = counts[key, default: 0]
+            guard count < perPatternLimit else { return false }
+            counts[key] = count + 1
+            return true
+        }
+    }
+
+    private static func proposalByID(_ id: String, in proposals: [ShortsProposalDTO]) -> ShortsProposalDTO? {
+        proposals.first { $0.id == id }
+    }
+
+    /// Компактная строка карты для контекста других проходов: время — о чём
+    /// кусок — пики. Без JSON, только сущности и тайминги.
+    private static func mapLine(for map: ShortsMapEnvelope,
+                                windowWords: ArraySlice<MappedTranscriptWord>) -> String? {
+        guard let first = windowWords.first, let last = windowWords.last,
+              !map.summary.isEmpty else { return nil }
+        var line = "[\(clock(first.sourceStart))–\(clock(last.sourceEnd))] \(map.summary)"
+        let wordsByID = Dictionary(uniqueKeysWithValues: windowWords.map { ($0.wordID, $0) })
+        let peaks = map.peaks.compactMap { peak -> String? in
+            guard let word = wordsByID[peak.firstWordID] else { return nil }
+            return "\(clock(word.sourceStart)) \(peak.what)"
+        }
+        if !peaks.isEmpty {
+            line += " Пики: " + peaks.joined(separator: "; ") + "."
+        }
+        return line
+    }
+
+    private static func clock(_ seconds: Double) -> String {
+        let total = Int(seconds.rounded())
+        let hours = total / 3600
+        let minutes = (total % 3600) / 60
+        let seconds = total % 60
+        if hours > 0 { return String(format: "%d:%02d:%02d", hours, minutes, seconds) }
+        return String(format: "%02d:%02d", minutes, seconds)
     }
 
     private struct ProposalContext: Sendable {

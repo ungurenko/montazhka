@@ -27,6 +27,20 @@ enum OpenRouterError: LocalizedError, Equatable {
     }
 }
 
+/// Что каталог OpenRouter говорит о «размышлениях» модели: какие уровни
+/// усилия она принимает и можно ли их отключать.
+struct ModelReasoningCapabilities: Equatable, Sendable {
+    /// Уровни, принимаемые моделью; nil — модель принимает любые значения
+    /// шлюза. Пустой массив — модель не поддерживает выбор усилия вовсе.
+    let efforts: [ReasoningEffort]?
+    let defaultEffort: ReasoningEffort?
+    /// Модель размышляет всегда — «Выкл» ей отправлять нельзя.
+    let mandatory: Bool
+
+    static let withoutEffortSelection = ModelReasoningCapabilities(
+        efforts: [], defaultEffort: nil, mandatory: false)
+}
+
 struct ProposalEnvelope: Codable, Equatable, Sendable {
     let schemaVersion: Int
     let edits: [ProposalDTO]
@@ -73,6 +87,9 @@ actor OpenRouterClient {
     private let baseURL = URL(string: "https://openrouter.ai/api/v1")!
     private let decoder = JSONDecoder()
     private let encoder = JSONEncoder()
+    /// Каталог моделей на время жизни клиента (≈ сессия экрана), чтобы не
+    /// качать его заново для проверки доступности и возможностей модели.
+    private var catalogByID: [String: ModelItem]?
 
     init(session: URLSession = .shared) {
         self.session = session
@@ -85,55 +102,115 @@ actor OpenRouterClient {
     }
 
     func ensureModelAvailable(_ model: SmartEditModel, apiKey: String) async throws {
-        var request = URLRequest(url: baseURL.appendingPathComponent("models"))
-        authorize(&request, key: apiKey)
-        let data = try await data(for: request, retry: true)
-        let catalog = try decoder.decode(ModelCatalog.self, from: data)
-        guard catalog.data.contains(where: { $0.id == model.rawValue }) else {
+        let catalog = try await modelCatalog(apiKey: apiKey)
+        guard catalog[model.rawValue] != nil else {
             throw OpenRouterError.modelUnavailable
         }
     }
 
+    /// Уровни размышлений, которые принимает модель, — из каталога OpenRouter.
+    /// У не-reasoning моделей каталог не отдаёт объект reasoning: тогда
+    /// возвращаем «выбора нет» и UI показывает только «Авто».
+    func reasoningCapabilities(for model: SmartEditModel, apiKey: String) async throws -> ModelReasoningCapabilities {
+        let catalog = try await modelCatalog(apiKey: apiKey)
+        guard let item = catalog[model.rawValue] else {
+            throw OpenRouterError.modelUnavailable
+        }
+        guard let reasoning = item.reasoning else { return .withoutEffortSelection }
+        // supported_efforts: null означает «модель принимает любые уровни» —
+        // отличаем это от отсутствия ключа (тогда выбора нет).
+        if let rawEfforts = reasoning.supportedEfforts ?? nil {
+            let efforts = ReasoningEffort.allCases.filter { rawEfforts.contains($0.rawValue) }
+            return ModelReasoningCapabilities(
+                efforts: efforts,
+                defaultEffort: reasoning.defaultEffort.flatMap(ReasoningEffort.init(rawValue:)),
+                mandatory: reasoning.mandatory ?? false)
+        }
+        return ModelReasoningCapabilities(
+            efforts: nil,
+            defaultEffort: reasoning.defaultEffort.flatMap(ReasoningEffort.init(rawValue:)),
+            mandatory: reasoning.mandatory ?? false)
+    }
+
+    private func modelCatalog(apiKey: String) async throws -> [String: ModelItem] {
+        if let catalogByID { return catalogByID }
+        var request = URLRequest(url: baseURL.appendingPathComponent("models"))
+        authorize(&request, key: apiKey)
+        let data = try await data(for: request, retry: true)
+        let catalog = try decoder.decode(ModelCatalog.self, from: data)
+        let byID = Dictionary(uniqueKeysWithValues: catalog.data.map { ($0.id, $0) })
+        catalogByID = byID
+        return byID
+    }
+
     func propose(words: [OpenRouterTranscriptWord], model: SmartEditModel,
-                 apiKey: String) async throws -> ProposalEnvelope {
+                 effort: String? = nil, apiKey: String) async throws -> ProposalEnvelope {
         let user = try SmartEditPrompts.proposalUser(words: words)
         let content = try await chat(model: model, apiKey: apiKey,
                                      system: SmartEditPrompts.editorSystem,
-                                     user: user, schema: .proposals)
+                                     user: user, schema: .proposals,
+                                     reasoningEffort: effort)
         do { return try Self.decodeProposals(content, words: words) }
         catch where model == .qwen {
             let repaired = try await chat(model: model, apiKey: apiKey,
                                           system: "Ты исправляешь только JSON-формат.",
                                           user: SmartEditPrompts.repairUser(content, contract: "proposal_schema_v1"),
-                                          schema: .jsonObject)
+                                          schema: .jsonObject,
+                                          reasoningEffort: "minimal")
             return try Self.decodeProposals(repaired, words: words)
         }
     }
 
     func review(words: [OpenRouterTranscriptWord], proposals: ProposalEnvelope,
-                model: SmartEditModel, apiKey: String) async throws -> ReviewEnvelope {
+                model: SmartEditModel, effort: String? = nil,
+                apiKey: String) async throws -> ReviewEnvelope {
         let user = try SmartEditPrompts.reviewUser(words: words, proposals: proposals)
         let content = try await chat(model: model, apiKey: apiKey,
                                      system: SmartEditPrompts.reviewerSystem,
-                                     user: user, schema: .reviews)
+                                     user: user, schema: .reviews,
+                                     reasoningEffort: effort)
         do { return try Self.decodeReviews(content, proposals: proposals, words: words) }
         catch where model == .qwen {
             let repaired = try await chat(model: model, apiKey: apiKey,
                                           system: "Ты исправляешь только JSON-формат.",
                                           user: SmartEditPrompts.repairUser(content, contract: "review_schema_v1"),
-                                          schema: .jsonObject)
+                                          schema: .jsonObject,
+                                          reasoningEffort: "minimal")
             return try Self.decodeReviews(repaired, proposals: proposals, words: words)
         }
     }
 
+    /// Нарезка на shorts, проход 0: карта окна — о чём кусок и где сильные места.
+    func mapShortsWindow(words: [OpenRouterTranscriptWord], model: SmartEditModel,
+                         effort: String? = nil, apiKey: String) async throws -> ShortsMapEnvelope {
+        let user = try ShortsPrompts.mapUser(words: words)
+        let content = try await chat(model: model, apiKey: apiKey,
+                                     system: ShortsPrompts.mapperSystem,
+                                     user: user, schema: .shortsMap,
+                                     reasoningEffort: effort)
+        do { return try Self.decodeShortsMap(content, words: words) }
+        catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            let repaired = try await chat(model: model, apiKey: apiKey,
+                                          system: "Ты исправляешь только JSON-формат.",
+                                          user: SmartEditPrompts.repairUser(content, contract: "shorts_map_schema_v1"),
+                                          schema: .jsonObject,
+                                          reasoningEffort: "minimal")
+            return try Self.decodeShortsMap(repaired, words: words)
+        }
+    }
+
     /// Нарезка на shorts, проход 1: предложения по одному окну транскрипта.
+    /// videoMap — карта всего видео, чтобы окно видело контекст соседей.
     func proposeShorts(words: [OpenRouterTranscriptWord], model: SmartEditModel,
-                       apiKey: String) async throws -> ShortsProposalEnvelope {
-        let user = try ShortsPrompts.proposalUser(words: words)
+                       effort: String? = nil, apiKey: String,
+                       videoMap: String = "") async throws -> ShortsProposalEnvelope {
+        let user = try ShortsPrompts.proposalUser(words: words, videoMap: videoMap)
         let content = try await chat(model: model, apiKey: apiKey,
                                      system: ShortsPrompts.selectorSystem,
                                      user: user, schema: .shortsProposals,
-                                     reasoningEffort: "low")
+                                     reasoningEffort: effort)
         do { return try Self.decodeShortsProposals(content, words: words) }
         catch is CancellationError {
             throw CancellationError()
@@ -144,19 +221,21 @@ actor OpenRouterClient {
                                           system: "Ты исправляешь только JSON-формат.",
                                           user: SmartEditPrompts.repairUser(content, contract: "shorts_clips_schema_v1"),
                                           schema: .jsonObject,
-                                          reasoningEffort: "low")
+                                          reasoningEffort: "minimal")
             return try Self.decodeShortsProposals(repaired, words: words)
         }
     }
 
     /// Нарезка на shorts, проход 2: отбор и ранжирование кандидатов по сводкам.
     func rankShorts(proposals: [ShortsRankInput], desiredCount: Int?,
-                    model: SmartEditModel, apiKey: String) async throws -> ShortsRankingEnvelope {
-        let user = try ShortsPrompts.rankUser(proposals: proposals, desiredCount: desiredCount)
+                    model: SmartEditModel, effort: String? = nil, apiKey: String,
+                    videoMap: String = "") async throws -> ShortsRankingEnvelope {
+        let user = try ShortsPrompts.rankUser(proposals: proposals, desiredCount: desiredCount,
+                                              videoMap: videoMap)
         let content = try await chat(model: model, apiKey: apiKey,
                                      system: ShortsPrompts.rankerSystem,
                                      user: user, schema: .shortsRanking,
-                                     reasoningEffort: "low")
+                                     reasoningEffort: effort)
         do { return try Self.decodeShortsRanking(content, proposals: proposals) }
         catch is CancellationError {
             throw CancellationError()
@@ -165,12 +244,35 @@ actor OpenRouterClient {
                                           system: "Ты исправляешь только JSON-формат.",
                                           user: SmartEditPrompts.repairUser(content, contract: "shorts_decisions_schema_v1"),
                                           schema: .jsonObject,
-                                          reasoningEffort: "low")
+                                          reasoningEffort: "minimal")
             return try Self.decodeShortsRanking(repaired, proposals: proposals)
         }
     }
 
-    private enum OutputSchema { case proposals, reviews, jsonObject, shortsProposals, shortsRanking }
+    /// Нарезка на shorts, проход 3: «тест холодного зрителя» для отобранных
+    /// роликов — слабые отсеиваются с приговором в одно предложение.
+    func verifyShorts(inputs: [ShortsVerifyInput], videoMap: String,
+                      model: SmartEditModel, effort: String? = nil,
+                      apiKey: String) async throws -> ShortsVerdictEnvelope {
+        let user = try ShortsPrompts.verifyUser(inputs: inputs, videoMap: videoMap)
+        let content = try await chat(model: model, apiKey: apiKey,
+                                     system: ShortsPrompts.verifierSystem,
+                                     user: user, schema: .shortsVerdicts,
+                                     reasoningEffort: effort)
+        do { return try Self.decodeShortsVerdicts(content, inputs: inputs) }
+        catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            let repaired = try await chat(model: model, apiKey: apiKey,
+                                          system: "Ты исправляешь только JSON-формат.",
+                                          user: SmartEditPrompts.repairUser(content, contract: "shorts_verdicts_schema_v1"),
+                                          schema: .jsonObject,
+                                          reasoningEffort: "minimal")
+            return try Self.decodeShortsVerdicts(repaired, inputs: inputs)
+        }
+    }
+
+    private enum OutputSchema { case proposals, reviews, jsonObject, shortsProposals, shortsRanking, shortsMap, shortsVerdicts }
 
     private func chat(model: SmartEditModel, apiKey: String, system: String,
                       user: String, schema: OutputSchema,
@@ -339,6 +441,48 @@ actor OpenRouterClient {
         return ShortsRankingEnvelope(schemaVersion: 1, decisions: decisions)
     }
 
+    /// Ленентный декодер карты: пики с битыми диапазонами слов отфильтровываются,
+    /// конверт жив, даже если summary короткий — он опционален по смыслу.
+    static func decodeShortsMap(_ content: String,
+                                words: [OpenRouterTranscriptWord]) throws -> ShortsMapEnvelope {
+        let decoder = JSONDecoder()
+        guard let data = Self.extractedEnvelopeData(content),
+              let envelope = try? decoder.decode(ShortsMapEnvelope.self, from: data),
+              envelope.schemaVersion == 1 else {
+            Logger.network.error("Shorts map: повреждённый ответ: \(content.prefix(400), privacy: .public)")
+            throw OpenRouterError.damagedResponse
+        }
+        let wordIndices = try validatedWordIndices(words)
+        let peaks = envelope.peaks.filter {
+            !$0.what.isEmpty &&
+                validRange(first: $0.firstWordID, last: $0.lastWordID,
+                           wordIndices: wordIndices) != nil
+        }
+        return ShortsMapEnvelope(schemaVersion: 1, summary: envelope.summary, peaks: peaks)
+    }
+
+    /// Ленентный декодер вердиктов: неизвестные и повторные кандидаты
+    /// отбрасываются, пропущенного кандидата сервис трактует как «оставить».
+    static func decodeShortsVerdicts(_ content: String,
+                                     inputs: [ShortsVerifyInput]) throws -> ShortsVerdictEnvelope {
+        let decoder = JSONDecoder()
+        let inputIDs = Set(inputs.map(\.id))
+        guard !inputIDs.isEmpty,
+              let data = Self.extractedEnvelopeData(content),
+              let envelope = try? decoder.decode(ShortsVerdictEnvelope.self, from: data),
+              envelope.schemaVersion == 1 else {
+            Logger.network.error("Shorts verdicts: повреждённый ответ: \(content.prefix(400), privacy: .public)")
+            throw OpenRouterError.damagedResponse
+        }
+        var seenIDs = Set<String>()
+        let verdicts = envelope.verdicts.filter {
+            seenIDs.insert($0.clipID).inserted &&
+                inputIDs.contains($0.clipID) &&
+                !$0.verdict.isEmpty
+        }
+        return ShortsVerdictEnvelope(schemaVersion: 1, verdicts: verdicts)
+    }
+
     /// Модели иногда заворачивают JSON в markdown-ограждения или повторяют
     /// обёртку запроса («name» + «schema»). Вытаскиваем полезный JSON, чтобы
     /// не тратить ремонтный вызов на такие случаи.
@@ -396,6 +540,8 @@ actor OpenRouterClient {
         case .reviews: return .init(type: "json_schema", jsonSchema: .init(name: "smart_edit_reviews", strict: true, schema: Self.reviewSchema))
         case .shortsProposals: return .init(type: "json_schema", jsonSchema: .init(name: "shorts_clips", strict: true, schema: Self.shortsProposalSchema))
         case .shortsRanking: return .init(type: "json_schema", jsonSchema: .init(name: "shorts_decisions", strict: true, schema: Self.shortsRankingSchema))
+        case .shortsMap: return .init(type: "json_schema", jsonSchema: .init(name: "shorts_map", strict: true, schema: Self.shortsMapSchema))
+        case .shortsVerdicts: return .init(type: "json_schema", jsonSchema: .init(name: "shorts_verdicts", strict: true, schema: Self.shortsVerdictsSchema))
         case .jsonObject: return .init(type: "json_object", jsonSchema: nil)
         }
     }
@@ -404,10 +550,40 @@ actor OpenRouterClient {
     private static let reviewSchema = JSONSchema.reviews
     private static let shortsProposalSchema = JSONSchema.shortsProposals
     private static let shortsRankingSchema = JSONSchema.shortsRanking
+    private static let shortsMapSchema = JSONSchema.shortsMap
+    private static let shortsVerdictsSchema = JSONSchema.shortsVerdicts
 }
 
 private struct ModelCatalog: Decodable { let data: [ModelItem] }
-private struct ModelItem: Decodable { let id: String }
+private struct ModelItem: Decodable {
+    let id: String
+    let reasoning: ModelReasoning?
+}
+
+/// Объект reasoning из каталога OpenRouter. supportedEfforts — двойной
+/// Optional: nil = ключа нет, .some(nil) = «принимает любые уровни».
+private struct ModelReasoning: Decodable {
+    let supportedEfforts: [String]??
+    let defaultEffort: String?
+    let mandatory: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case supportedEfforts = "supported_efforts"
+        case defaultEffort = "default_effort"
+        case mandatory
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        if container.contains(.supportedEfforts) {
+            supportedEfforts = .some(try container.decodeIfPresent([String].self, forKey: .supportedEfforts))
+        } else {
+            supportedEfforts = nil
+        }
+        defaultEffort = try container.decodeIfPresent(String.self, forKey: .defaultEffort)
+        mandatory = try container.decodeIfPresent(Bool.self, forKey: .mandatory)
+    }
+}
 private struct ChatResponse: Decodable {
     struct Choice: Decodable { struct Message: Decodable { let content: String? }; let message: Message }
     let choices: [Choice]
@@ -445,6 +621,7 @@ private indirect enum JSONSchema: Encodable, Sendable {
     case string(enumValues: [String]? = nil)
     case number(minimum: Double?, maximum: Double?)
     case integer(constant: Int?)
+    case boolean
 
     static let proposals: JSONSchema = .object(properties: [
         "schema_version": .integer(constant: 1),
@@ -469,8 +646,15 @@ private indirect enum JSONSchema: Encodable, Sendable {
         "clips": .array(items: .object(properties: [
             "id": .string(), "first_word_id": .string(), "last_word_id": .string(),
             "title": .string(), "reason": .string(),
+            "hook": .string(), "pattern": .string(), "topic": .string(),
+            "hook_score": .number(minimum: 0, maximum: 10),
+            "standalone_score": .number(minimum: 0, maximum: 10),
+            "payoff_score": .number(minimum: 0, maximum: 10),
+            "pacing_score": .number(minimum: 0, maximum: 10),
             "confidence": .number(minimum: 0, maximum: 1)
-        ], required: ["id", "first_word_id", "last_word_id", "title", "reason", "confidence"], additionalProperties: false))
+        ], required: ["id", "first_word_id", "last_word_id", "title", "reason",
+                      "hook", "pattern", "topic", "hook_score", "standalone_score",
+                      "payoff_score", "pacing_score", "confidence"], additionalProperties: false))
     ], required: ["schema_version", "clips"], additionalProperties: false)
 
     static let shortsRanking: JSONSchema = .object(properties: [
@@ -481,6 +665,21 @@ private indirect enum JSONSchema: Encodable, Sendable {
             "confidence": .number(minimum: 0, maximum: 1)
         ], required: ["clip_id", "decision", "rank", "title", "reason", "confidence"], additionalProperties: false))
     ], required: ["schema_version", "decisions"], additionalProperties: false)
+
+    static let shortsMap: JSONSchema = .object(properties: [
+        "schema_version": .integer(constant: 1),
+        "summary": .string(),
+        "peaks": .array(items: .object(properties: [
+            "first_word_id": .string(), "last_word_id": .string(), "what": .string()
+        ], required: ["first_word_id", "last_word_id", "what"], additionalProperties: false))
+    ], required: ["schema_version", "summary", "peaks"], additionalProperties: false)
+
+    static let shortsVerdicts: JSONSchema = .object(properties: [
+        "schema_version": .integer(constant: 1),
+        "verdicts": .array(items: .object(properties: [
+            "clip_id": .string(), "keep": .boolean, "verdict": .string()
+        ], required: ["clip_id", "keep", "verdict"], additionalProperties: false))
+    ], required: ["schema_version", "verdicts"], additionalProperties: false)
 
     func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: Keys.self)
@@ -495,6 +694,8 @@ private indirect enum JSONSchema: Encodable, Sendable {
             try c.encode("number", forKey: .type); try c.encodeIfPresent(minimum, forKey: .minimum); try c.encodeIfPresent(maximum, forKey: .maximum)
         case .integer(let constant):
             try c.encode("integer", forKey: .type); try c.encodeIfPresent(constant, forKey: .constant)
+        case .boolean:
+            try c.encode("boolean", forKey: .type)
         }
     }
     private enum Keys: String, CodingKey {

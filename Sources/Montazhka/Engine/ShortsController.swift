@@ -19,8 +19,17 @@ final class ShortsController {
         didSet { ShortsCount.saved = count }
     }
     var model: SmartEditModel = .saved {
-        didSet { SmartEditModel.saved = model }
+        didSet {
+            SmartEditModel.saved = model
+            refreshReasoningOptions()
+        }
     }
+    var reasoningChoice: ReasoningChoice = ReasoningChoice.saved(key: ShortsController.reasoningKey) {
+        didSet { reasoningChoice.save(key: ShortsController.reasoningKey) }
+    }
+    /// Варианты пикера по возможностям текущей модели; до загрузки каталога —
+    /// только «Авто».
+    private(set) var reasoningOptions: [ReasoningChoice] = [.auto]
     var cropVertical: Bool = UserDefaults.standard.bool(forKey: "shorts.cropVertical") {
         didSet {
             UserDefaults.standard.set(cropVertical, forKey: "shorts.cropVertical")
@@ -41,7 +50,10 @@ final class ShortsController {
     let waveforms: WaveformStore
     private let transcriptStore: TranscriptStore
     private let service: ShortsCutService
+    private let openRouter: OpenRouterClient
     private let keyManager: OpenRouterKeyManager
+
+    static let reasoningKey = "shorts.reasoningEffort"
 
     @ObservationIgnored private var analysisTask: Task<Void, Never>?
     @ObservationIgnored private var analysisGeneration = Generation()
@@ -62,8 +74,10 @@ final class ShortsController {
         let transcriptStore = TranscriptStore(cacheDir: store.directories.transcripts,
                                               modelsDir: store.directories.models)
         self.transcriptStore = transcriptStore
+        let openRouter = OpenRouterClient()
+        self.openRouter = openRouter
         self.service = ShortsCutService(transcriptStore: transcriptStore,
-                                        openRouter: OpenRouterClient(),
+                                        openRouter: openRouter,
                                         waveforms: waveformStore)
         self.keyManager = OpenRouterKeyManager(store: openRouterKeyStore)
         attachObservers()
@@ -121,6 +135,7 @@ final class ShortsController {
 
     func saveAndValidateOpenRouterKey(_ key: String) async {
         await keyManager.saveAndValidate(key)
+        refreshReasoningOptions()
     }
 
     func validateSavedOpenRouterKey() async {
@@ -129,6 +144,30 @@ final class ShortsController {
 
     func deleteOpenRouterKey() {
         if keyManager.delete() { cancelAnalysis() }
+    }
+
+    /// Подтягивает уровни размышлений выбранной модели из каталога OpenRouter.
+    /// Без ключа или при сбое сети молча остаёмся на «Авто».
+    func refreshReasoningOptions() {
+        let requestedModel = model
+        guard let apiKey = try? keyManager.load() else { return }
+        Task { [weak self] in
+            guard let self else { return }
+            let options: [ReasoningChoice]
+            do {
+                let capabilities = try await self.openRouter.reasoningCapabilities(
+                    for: requestedModel, apiKey: apiKey)
+                options = ReasoningChoice.options(availableEfforts: capabilities.efforts,
+                                                  mandatory: capabilities.mandatory)
+            } catch {
+                return
+            }
+            guard self.model == requestedModel else { return }
+            self.reasoningOptions = options
+            if !options.contains(self.reasoningChoice) {
+                self.reasoningChoice = .auto
+            }
+        }
     }
 
     // MARK: - Анализ
@@ -153,6 +192,7 @@ final class ShortsController {
         let duration = sourceDuration
         let requestedCount = count
         let requestedModel = model
+        let requestedEffort = reasoningChoice.apiEffort
         candidates = []
         status = .preparingModel(progress: nil)
         analysisTask = Task { [weak self] in
@@ -160,7 +200,7 @@ final class ShortsController {
             do {
                 let result = try await self.service.analyze(
                     source: file, sourceDuration: duration, count: requestedCount,
-                    model: requestedModel, apiKey: apiKey,
+                    model: requestedModel, effort: requestedEffort, apiKey: apiKey,
                     thresholdDB: DetectionSettings().thresholdDB,
                     status: { status in
                         await self.receiveStatus(status, generation: generation)

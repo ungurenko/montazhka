@@ -13,7 +13,7 @@ actor SmartEditService {
     }
 
     func analyze(clips: [Clip], projectThresholdDB: Double,
-                 model: SmartEditModel, apiKey: String,
+                 model: SmartEditModel, effort: String?, apiKey: String,
                  status: @escaping @Sendable (SmartEditStatus) async -> Void) async throws -> SmartEditAnalysisResult {
         let snapshot = SmartEditSnapshot(clips: clips)
         try await openRouter.ensureModelAvailable(model, apiKey: apiKey)
@@ -47,12 +47,13 @@ actor SmartEditService {
 
         await status(.proposing)
         let proposals = try await openRouter.propose(
-            words: timelineMap.words.map(\.publicPayload), model: model, apiKey: apiKey)
+            words: timelineMap.words.map(\.publicPayload), model: model,
+            effort: effort, apiKey: apiKey)
         try Task.checkCancellation()
         await status(.reviewing)
         let reviews = try await openRouter.review(
             words: timelineMap.words.map(\.publicPayload), proposals: proposals,
-            model: model, apiKey: apiKey)
+            model: model, effort: effort, apiKey: apiKey)
         try Task.checkCancellation()
         await status(.preparingCuts)
 

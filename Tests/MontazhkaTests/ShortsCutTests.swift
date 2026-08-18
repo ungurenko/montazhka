@@ -19,9 +19,31 @@ final class ShortsCutTests: XCTestCase {
 
     func testProposalDecoderAcceptsValidEnvelope() throws {
         let envelope = try OpenRouterClient.decodeShortsProposals("""
-        {"schema_version":1,"clips":[{"id":"s1","first_word_id":"w000001","last_word_id":"w000002","title":"Приветствие","reason":"яркое начало","confidence":0.9}]}
+        {"schema_version":1,"clips":[{"id":"s1","first_word_id":"w000001","last_word_id":"w000002","title":"Приветствие","reason":"яркое начало","confidence":0.9,"hook":"все думают что","pattern":"мнение","topic":"деньги","hook_score":8,"standalone_score":9,"payoff_score":7,"pacing_score":6}]}
         """, words: words)
         XCTAssertEqual(envelope.clips.map(\.id), ["s1"])
+        XCTAssertEqual(envelope.clips.first?.hook, "все думают что")
+        XCTAssertEqual(envelope.clips.first?.pattern, "мнение")
+        XCTAssertEqual(envelope.clips.first?.hookScore, 8)
+    }
+
+    func testProposalDecoderFillsDefaultsForMissingOptionalFields() throws {
+        // qwen отвечает без строгой схемы: новые поля могут отсутствовать.
+        let envelope = try OpenRouterClient.decodeShortsProposals("""
+        {"schema_version":1,"clips":[{"id":"s1","first_word_id":"w000001","last_word_id":"w000002","title":"т","reason":"р","confidence":0.9}]}
+        """, words: words)
+        XCTAssertEqual(envelope.clips.first?.hook, "")
+        XCTAssertEqual(envelope.clips.first?.pattern, "")
+        XCTAssertEqual(envelope.clips.first?.hookScore, 5)
+        XCTAssertEqual(envelope.clips.first?.pacingScore, 5)
+    }
+
+    func testProposalDecoderClampsRunawayScores() throws {
+        let envelope = try OpenRouterClient.decodeShortsProposals("""
+        {"schema_version":1,"clips":[{"id":"s1","first_word_id":"w000001","last_word_id":"w000002","title":"т","reason":"р","confidence":0.9,"hook_score":42,"pacing_score":-3}]}
+        """, words: words)
+        XCTAssertEqual(envelope.clips.first?.hookScore, 10)
+        XCTAssertEqual(envelope.clips.first?.pacingScore, 0)
     }
 
     func testProposalDecoderFiltersInvalidClipsButKeepsValidOnes() throws {
@@ -67,7 +89,10 @@ final class ShortsCutTests: XCTestCase {
     private func rankInputs(from envelope: ShortsProposalEnvelope) -> [ShortsRankInput] {
         envelope.clips.map {
             ShortsRankInput(id: $0.id, title: $0.title, reason: $0.reason,
-                            confidence: $0.confidence, durationSeconds: 10, excerpt: "текст")
+                            confidence: $0.confidence, durationSeconds: 10, excerpt: "текст",
+                            hook: $0.hook, pattern: $0.pattern, topic: $0.topic,
+                            hookScore: $0.hookScore, standaloneScore: $0.standaloneScore,
+                            payoffScore: $0.payoffScore, pacingScore: $0.pacingScore)
         }
     }
 
@@ -106,7 +131,10 @@ final class ShortsCutTests: XCTestCase {
     func testFallbackDecisionsCapAtDesiredCount() {
         let proposals = (1...5).map {
             ShortsProposalDTO(id: "s\($0)", firstWordID: "w000001", lastWordID: "w000002",
-                              title: "т\($0)", reason: "р", confidence: 0.9)
+                              title: "т\($0)", reason: "р", confidence: 0.9,
+                              hook: "", pattern: "", topic: "",
+                              hookScore: 5, standaloneScore: 5,
+                              payoffScore: 5, pacingScore: 5)
         }
         let fallback = ShortsCutService.fallbackDecisions(proposals: proposals, desiredCount: 3)
         XCTAssertEqual(fallback.count, 3)
@@ -184,17 +212,38 @@ final class ShortsCutTests: XCTestCase {
         }
     }
 
+    private func makeCandidate(rank: Int, title: String, start: Double, end: Double,
+                               pattern: String = "") -> ShortCandidate {
+        ShortCandidate(id: UUID(), rank: rank, title: title, reason: "", hook: "",
+                       pattern: pattern, excerpt: "", start: start, end: end,
+                       confidence: 0.9, hookScore: 8, standaloneScore: 8,
+                       payoffScore: 8, pacingScore: 8, enabled: false)
+    }
+
     func testDeduplicationKeepsHigherRankedOverlappingCandidate() {
         let candidates = [
-            ShortCandidate(id: UUID(), rank: 1, title: "сильный", reason: "", excerpt: "",
-                           start: 10, end: 40, confidence: 0.9, enabled: false),
-            ShortCandidate(id: UUID(), rank: 2, title: "пересекается", reason: "", excerpt: "",
-                           start: 30, end: 55, confidence: 0.85, enabled: false),
-            ShortCandidate(id: UUID(), rank: 3, title: "отдельный", reason: "", excerpt: "",
-                           start: 100, end: 120, confidence: 0.8, enabled: false)
+            makeCandidate(rank: 1, title: "сильный", start: 10, end: 40),
+            makeCandidate(rank: 2, title: "пересекается", start: 30, end: 55),
+            makeCandidate(rank: 3, title: "отдельный", start: 100, end: 120)
         ]
         let deduplicated = ShortsWindowPlanner.deduplicated(candidates)
         XCTAssertEqual(deduplicated.map(\.title), ["сильный", "отдельный"])
+    }
+
+    func testDiversityKeepsAtMostTwoPerPattern() {
+        // Три «мнения» и одна «история»: сильнейшие два мнения остаются.
+        let candidates = [
+            makeCandidate(rank: 1, title: "мнение 1", start: 0, end: 30, pattern: "мнение"),
+            makeCandidate(rank: 2, title: "мнение 2", start: 40, end: 70, pattern: "мнение"),
+            makeCandidate(rank: 3, title: "мнение 3", start: 80, end: 110, pattern: "мнение"),
+            makeCandidate(rank: 4, title: "история", start: 120, end: 150, pattern: "история"),
+            makeCandidate(rank: 5, title: "без паттерна 1", start: 160, end: 190),
+            makeCandidate(rank: 6, title: "без паттерна 2", start: 200, end: 230),
+            makeCandidate(rank: 7, title: "без паттерна 3", start: 240, end: 270)
+        ]
+        let diversified = ShortsCutService.diversified(candidates)
+        XCTAssertEqual(diversified.map(\.title),
+                       ["мнение 1", "мнение 2", "история", "без паттерна 1", "без паттерна 2"])
     }
 
     // MARK: - Границы
@@ -258,14 +307,72 @@ final class ShortsCutTests: XCTestCase {
     func testPromptsTreatDataAsUntrusted() throws {
         XCTAssertTrue(ShortsPrompts.selectorSystem.contains("недоверенные данные"))
         XCTAssertTrue(ShortsPrompts.rankerSystem.contains("недоверенные данные"))
+        XCTAssertTrue(ShortsPrompts.mapperSystem.contains("недоверенные данные"))
+        XCTAssertTrue(ShortsPrompts.verifierSystem.contains("недоверенные данные"))
         let proposal = try ShortsPrompts.proposalUser(words: words)
         XCTAssertTrue(proposal.contains("DATA_TRANSCRIPT_BEGIN"))
         let rank = try ShortsPrompts.rankUser(
             proposals: [ShortsRankInput(id: "s1", title: "т", reason: "р",
-                                        confidence: 0.9, durationSeconds: 20, excerpt: "текст")],
+                                        confidence: 0.9, durationSeconds: 20, excerpt: "текст",
+                                        hook: "хук", pattern: "мнение", topic: "тема",
+                                        hookScore: 7, standaloneScore: 8,
+                                        payoffScore: 9, pacingScore: 6)],
             desiredCount: 3)
         XCTAssertTrue(rank.contains("DATA_CANDIDATES_BEGIN"))
         XCTAssertTrue(rank.contains("не больше 3"))
+    }
+
+    func testPromptsCarryRubricAndVideoMap() throws {
+        // Решётка оценки и хук-дисциплина — в системном промпте поиска.
+        XCTAssertTrue(ShortsPrompts.selectorSystem.contains("hook_score"))
+        XCTAssertTrue(ShortsPrompts.selectorSystem.contains("standalone_score"))
+        XCTAssertTrue(ShortsPrompts.selectorSystem.contains("payoff_score"))
+        XCTAssertTrue(ShortsPrompts.selectorSystem.contains("pacing_score"))
+        XCTAssertTrue(ShortsPrompts.selectorSystem.contains("Никогда не бери"))
+        // Карта видео — недоверенные данные во всех пользовательских промптах.
+        let map = try ShortsPrompts.mapUser(words: words)
+        XCTAssertTrue(map.contains("DATA_TRANSCRIPT_BEGIN"))
+        let withMap = try ShortsPrompts.proposalUser(words: words, videoMap: "[00:00–01:00] тест")
+        XCTAssertTrue(withMap.contains("DATA_VIDEO_MAP_BEGIN"))
+        XCTAssertTrue(withMap.contains("[00:00–01:00] тест"))
+        let rankWithMap = try ShortsPrompts.rankUser(
+            proposals: [], desiredCount: nil, videoMap: "карта")
+        XCTAssertTrue(rankWithMap.contains("DATA_VIDEO_MAP_BEGIN"))
+        let verify = try ShortsPrompts.verifyUser(inputs: [], videoMap: "карта")
+        XCTAssertTrue(verify.contains("DATA_CANDIDATES_BEGIN"))
+        XCTAssertTrue(verify.contains("DATA_VIDEO_MAP_BEGIN"))
+        // Разнообразие — в системном промпте отбора.
+        XCTAssertTrue(ShortsPrompts.rankerSystem.contains("одну тему"))
+    }
+
+    // MARK: - Контракты карты и вердиктов
+
+    func testMapDecoderFiltersPeaksWithUnknownWords() throws {
+        let envelope = try OpenRouterClient.decodeShortsMap("""
+        {"schema_version":1,"summary":"о чём кусок","peaks":[{"first_word_id":"w000001","last_word_id":"w000002","what":"главный тезис"},{"first_word_id":"unknown","last_word_id":"w000002","what":"битый"},{"first_word_id":"w000003","last_word_id":"w000001","what":"перевёрнут"}]}
+        """, words: words)
+        XCTAssertEqual(envelope.summary, "о чём кусок")
+        XCTAssertEqual(envelope.peaks.map(\.what), ["главный тезис"])
+    }
+
+    func testMapDecoderRejectsBrokenEnvelope() {
+        XCTAssertThrowsError(try OpenRouterClient.decodeShortsMap("не json", words: words))
+    }
+
+    func testVerdictDecoderFiltersUnknownAndDuplicateCandidates() throws {
+        let inputs = [
+            ShortsVerifyInput(id: "s1", title: "т", hook: "хук", pattern: "мнение",
+                              durationSeconds: 20, excerpt: "текст",
+                              hookScore: 7, standaloneScore: 8, payoffScore: 9, pacingScore: 6),
+            ShortsVerifyInput(id: "s2", title: "т", hook: "хук", pattern: "история",
+                              durationSeconds: 25, excerpt: "текст",
+                              hookScore: 6, standaloneScore: 7, payoffScore: 8, pacingScore: 5)
+        ]
+        let envelope = try OpenRouterClient.decodeShortsVerdicts("""
+        {"schema_version":1,"verdicts":[{"clip_id":"sX","keep":true,"verdict":"неизвестный"},{"clip_id":"s1","keep":false,"verdict":"начало скучное"},{"clip_id":"s1","keep":true,"verdict":"дубль"},{"clip_id":"s2","keep":true,"verdict":"держит внимание"}]}
+        """, inputs: inputs)
+        XCTAssertEqual(envelope.verdicts.count, 2)
+        XCTAssertEqual(envelope.verdicts.first?.keep, false)
     }
 
     func testFileNameSanitizesTitleAndAvoidsCollisions() throws {
