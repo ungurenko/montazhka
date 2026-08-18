@@ -38,12 +38,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
 }
 
-/// Навигация приложения: стартовый экран или монтажный стол.
+/// Навигация приложения: стартовый экран, монтажный стол или нарезка на shorts.
 @MainActor
 @Observable
 final class AppModel {
     let store: any ProjectRepository
     var editor: EditorController?
+    var shorts: ShortsController?
     var recents: [ProjectMeta] = []
     var storeErrorMessage: String?
     private(set) var isProjectOperationInProgress = false
@@ -147,6 +148,32 @@ final class AppModel {
         }
     }
 
+    // MARK: - Нарезка на shorts
+
+    func startShorts(url: URL) {
+        let generation = beginProjectOperation()
+        projectOperationTask = Task { [weak self] in
+            guard let self else { return }
+            guard isCurrentProjectOperation(generation) else { return }
+            let controller = ShortsController(sourceURL: url, store: store)
+            shorts = controller
+            controller.prepare()
+            finishProjectOperation(generation)
+        }
+    }
+
+    func closeShorts() {
+        guard let closingShorts = shorts else { return }
+        let generation = beginProjectOperation()
+        projectOperationTask = Task { [weak self] in
+            guard let self else { return }
+            await closingShorts.shutdown()
+            guard isCurrentProjectOperation(generation) else { return }
+            shorts = nil
+            finishProjectOperation(generation)
+        }
+    }
+
     private func beginProjectOperation() -> Int {
         projectOperationTask?.cancel()
         recentsTask?.cancel()
@@ -183,10 +210,28 @@ final class AppModel {
         panel.allowedContentTypes = [.movie, .mpeg4Movie, .quickTimeMovie]
         return panel.runModal() == .OK ? panel.urls : []
     }
+
+    /// Системное окно выбора одного длинного видео для нарезки на shorts.
+    static func pickVideo() -> URL? {
+        let panel = NSOpenPanel()
+        panel.title = "Выбери длинное видео"
+        panel.prompt = "Нарезать"
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.allowedContentTypes = [.movie, .mpeg4Movie, .quickTimeMovie]
+        return panel.runModal() == .OK ? panel.url : nil
+    }
 }
 
 struct RootView: View {
     @Environment(AppModel.self) private var app
+
+    /// Числовой ключ режима — для плавной анимации смены экранов.
+    private var rootKey: Int {
+        if app.editor != nil { return 1 }
+        if app.shorts != nil { return 2 }
+        return 0
+    }
 
     var body: some View {
         ZStack {
@@ -194,12 +239,15 @@ struct RootView: View {
             if let editor = app.editor {
                 EditorView(controller: editor)
                     .transition(.opacity)
+            } else if let shorts = app.shorts {
+                ShortsView(controller: shorts)
+                    .transition(.opacity)
             } else {
                 StartView()
                     .transition(.opacity)
             }
         }
-        .animation(.easeInOut(duration: 0.2), value: app.editor == nil)
+        .animation(.easeInOut(duration: 0.2), value: rootKey)
         .alert("Ошибка проекта", isPresented: storeErrorBinding) {
             Button("Понятно", role: .cancel) {}
         } message: {

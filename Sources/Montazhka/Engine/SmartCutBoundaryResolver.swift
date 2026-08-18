@@ -42,8 +42,9 @@ enum SmartCutBoundaryResolver {
         return SmartCutBoundary(timelineStart: timelineStart, timelineEnd: timelineEnd)
     }
 
-    private static func quietPoint(near target: Double, in peaks: [Float], threshold: Float,
-                                   lower: Double, upper: Double, preferLatest: Bool) -> Double? {
+    /// Общая точка тишины для склеек и нарезки на ролики.
+    static func quietPoint(near target: Double, in peaks: [Float], threshold: Float,
+                           lower: Double, upper: Double, preferLatest: Bool) -> Double? {
         guard !peaks.isEmpty, upper > lower else { return nil }
         let first = max(0, Int((lower * windowsPerSecond).rounded(.up)))
         let last = min(peaks.count - minimumQuietWindows,
@@ -70,7 +71,7 @@ enum SmartCutBoundaryResolver {
         return Array(peaks[first..<last])
     }
 
-    private static func percentile(_ values: [Float], fraction: Double) -> Float {
+    static func percentile(_ values: [Float], fraction: Double) -> Float {
         guard !values.isEmpty else { return 0 }
         let sorted = values.sorted()
         let index = min(sorted.count - 1, max(0, Int(Double(sorted.count - 1) * fraction)))

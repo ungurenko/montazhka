@@ -495,7 +495,7 @@ private struct ControlButton: View {
 // MARK: - Видео-слой
 
 /// Нативный слой воспроизведения без встроенных элементов управления.
-private struct PlayerLayerView: NSViewRepresentable {
+struct PlayerLayerView: NSViewRepresentable {
     let player: AVPlayer
 
     func makeNSView(context: Context) -> PlayerNSView {

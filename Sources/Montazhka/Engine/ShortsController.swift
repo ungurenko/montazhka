@@ -1,0 +1,367 @@
+import Foundation
+import AVFoundation
+import AppKit
+import SwiftUI
+import Observation
+import OSLog
+
+/// Экран нарезки на shorts: анализ отдельного файла, просмотр кандидатов,
+/// пакетный экспорт. Живёт независимо от проекта.
+@MainActor
+@Observable
+final class ShortsController {
+    private(set) var source: MediaReference
+    private(set) var sourceDuration: Double = 0
+    private(set) var displaySize = CGSize(width: 1920, height: 1080)
+    private(set) var prepareError: String?
+
+    var count: ShortsCount = .saved {
+        didSet { ShortsCount.saved = count }
+    }
+    var model: SmartEditModel = .saved {
+        didSet { SmartEditModel.saved = model }
+    }
+    var cropVertical: Bool = UserDefaults.standard.bool(forKey: "shorts.cropVertical") {
+        didSet {
+            UserDefaults.standard.set(cropVertical, forKey: "shorts.cropVertical")
+            refreshPreviewAfterCropChange()
+        }
+    }
+    var quality: ExportQuality = .high
+
+    private(set) var status: ShortsStatus = .idle
+    var candidates: [ShortCandidate] = []
+    private(set) var exportState: ShortsExportState = .idle
+    var openRouterKeyStatus: OpenRouterKeyStatus { keyManager.status }
+
+    let player = AVPlayer()
+    var currentTime: Double = 0
+    var isPlaying = false
+
+    let waveforms: WaveformStore
+    private let transcriptStore: TranscriptStore
+    private let service: ShortsCutService
+    private let keyManager: OpenRouterKeyManager
+
+    @ObservationIgnored private var analysisTask: Task<Void, Never>?
+    @ObservationIgnored private var analysisGeneration = Generation()
+    @ObservationIgnored private var exportTask: Task<Void, Never>?
+    @ObservationIgnored private var previewBoundary: Any?
+    @ObservationIgnored private var previewingID: UUID?
+    @ObservationIgnored private var timeObserver: Any?
+    @ObservationIgnored private var endObserver: NSObjectProtocol?
+
+    var fileName: String { source.displayName }
+
+    init(sourceURL: URL,
+         store: any ProjectRepository,
+         openRouterKeyStore: any OpenRouterKeyStoring = OpenRouterKeyStore()) {
+        self.source = MediaReference(url: sourceURL)
+        let waveformStore = WaveformStore(cacheDir: store.directories.waveforms)
+        self.waveforms = waveformStore
+        let transcriptStore = TranscriptStore(cacheDir: store.directories.transcripts,
+                                              modelsDir: store.directories.models)
+        self.transcriptStore = transcriptStore
+        self.service = ShortsCutService(transcriptStore: transcriptStore,
+                                        openRouter: OpenRouterClient(),
+                                        waveforms: waveformStore)
+        self.keyManager = OpenRouterKeyManager(store: openRouterKeyStore)
+        attachObservers()
+        keyManager.refresh()
+    }
+
+    func shutdown() async {
+        player.pause()
+        player.replaceCurrentItem(with: nil)
+        isPlaying = false
+        analysisTask?.cancel()
+        exportTask?.cancel()
+        _ = analysisGeneration.advance()
+        keyManager.cancel()
+        cancelPreviewStop()
+        if let timeObserver { player.removeTimeObserver(timeObserver) }
+        if let endObserver { NotificationCenter.default.removeObserver(endObserver) }
+    }
+
+    // MARK: - Подготовка файла
+
+    /// Читает длительность, видеодорожку и размер кадра выбранного файла.
+    func prepare() {
+        guard sourceDuration == 0, prepareError == nil else { return }
+        let asset = AVURLAsset(url: sourceURL)
+        Task { [weak self] in
+            guard let self else { return }
+            guard let duration = try? await asset.load(.duration).seconds, duration.isFinite else {
+                self.prepareError = "Не удалось прочитать файл."
+                return
+            }
+            guard let videoTrack = try? await asset.loadTracks(withMediaType: .video).first else {
+                self.prepareError = "В файле нет видеодорожки."
+                return
+            }
+            if let naturalSize = try? await videoTrack.load(.naturalSize),
+               let transform = try? await videoTrack.load(.preferredTransform) {
+                let rect = CGRect(origin: .zero, size: naturalSize).applying(transform)
+                self.displaySize = CGSize(width: abs(rect.width), height: abs(rect.height))
+            }
+            self.sourceDuration = duration
+            if duration < ShortsLimits.minSourceDuration {
+                self.prepareError = ShortsError.tooShort.localizedDescription
+            }
+        }
+    }
+
+    private var sourceURL: URL {
+        source.resolvedURL ?? URL(fileURLWithPath: source.lastKnownPath)
+    }
+
+    // MARK: - Ключ OpenRouter
+
+    func refreshOpenRouterKeyState() { keyManager.refresh() }
+
+    func saveAndValidateOpenRouterKey(_ key: String) async {
+        await keyManager.saveAndValidate(key)
+    }
+
+    func validateSavedOpenRouterKey() async {
+        await keyManager.validateSaved()
+    }
+
+    func deleteOpenRouterKey() {
+        if keyManager.delete() { cancelAnalysis() }
+    }
+
+    // MARK: - Анализ
+
+    func analyze() {
+        guard prepareError == nil, sourceDuration >= ShortsLimits.minSourceDuration else { return }
+        let apiKey: String
+        do {
+            guard let stored = try keyManager.load() else {
+                status = .failed("Сначала сохрани ключ OpenRouter.")
+                return
+            }
+            apiKey = stored
+        } catch {
+            status = .failed(error.localizedDescription)
+            return
+        }
+
+        analysisTask?.cancel()
+        let generation = analysisGeneration.advance()
+        let file = source
+        let duration = sourceDuration
+        let requestedCount = count
+        let requestedModel = model
+        candidates = []
+        status = .preparingModel(progress: nil)
+        analysisTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                let result = try await self.service.analyze(
+                    source: file, sourceDuration: duration, count: requestedCount,
+                    model: requestedModel, apiKey: apiKey,
+                    thresholdDB: DetectionSettings().thresholdDB,
+                    status: { status in
+                        await self.receiveStatus(status, generation: generation)
+                    })
+                guard self.analysisGeneration.isCurrent(generation) else { return }
+                self.candidates = self.preselected(result)
+                self.status = .ready
+            } catch is CancellationError {
+                if self.analysisGeneration.isCurrent(generation) { self.status = .idle }
+            } catch {
+                guard self.analysisGeneration.isCurrent(generation) else { return }
+                self.status = .failed(error.localizedDescription)
+            }
+        }
+    }
+
+    func cancelAnalysis() {
+        _ = analysisGeneration.advance()
+        analysisTask?.cancel()
+        analysisTask = nil
+        candidates = []
+        status = .idle
+    }
+
+    private func receiveStatus(_ status: ShortsStatus, generation: Int) {
+        guard analysisGeneration.isCurrent(generation) else { return }
+        self.status = status
+    }
+
+    /// Галочки на top-N по рангу: один клик — и лучшее уже выбрано.
+    private func preselected(_ candidates: [ShortCandidate]) -> [ShortCandidate] {
+        var result = candidates
+        let limit = count.desired ?? result.count
+        for index in result.indices {
+            result[index].enabled = index < limit
+        }
+        return result
+    }
+
+    func toggleCandidate(_ id: UUID) {
+        guard let index = candidates.firstIndex(where: { $0.id == id }) else { return }
+        candidates[index].enabled.toggle()
+    }
+
+    var selectedCount: Int { candidates.filter(\.enabled).count }
+
+    // MARK: - Просмотр
+
+    func preview(_ candidate: ShortCandidate) {
+        previewingID = candidate.id
+        cancelPreviewStop()
+        player.pause()
+        let asset = AVURLAsset(url: sourceURL)
+        let cropEnabled = cropVertical
+        let size = displaySize
+        let start = max(0, candidate.start)
+        let end = min(sourceDuration, candidate.end)
+        Task { [weak self] in
+            guard let self else { return }
+            let item = AVPlayerItem(asset: asset)
+            if cropEnabled {
+                item.videoComposition = await ShortsExporter.verticalCropComposition(
+                    for: asset, displaySize: size)
+            }
+            self.player.replaceCurrentItem(with: item)
+            await self.player.seek(to: CMTime(seconds: start, preferredTimescale: 600),
+                                   toleranceBefore: .zero, toleranceAfter: .zero)
+            self.currentTime = start
+            self.player.play()
+            self.isPlaying = true
+            let stop = NSValue(time: CMTime(seconds: end, preferredTimescale: 600))
+            self.previewBoundary = self.player.addBoundaryTimeObserver(forTimes: [stop], queue: .main) { [weak self] in
+                MainActor.assumeIsolated {
+                    self?.player.pause()
+                    self?.isPlaying = false
+                    self?.cancelPreviewStop()
+                }
+            }
+        }
+    }
+
+    func togglePlay() {
+        guard player.currentItem != nil else { return }
+        if player.rate != 0 {
+            player.pause()
+        } else {
+            if let end = player.currentItem?.duration.seconds,
+               end > 0, currentTime >= end - 0.02 {
+                seek(to: 0)
+            }
+            player.play()
+        }
+        isPlaying = player.rate != 0
+    }
+
+    func seek(to time: Double) {
+        let clamped = max(0, time)
+        currentTime = clamped
+        Task { [weak self] in
+            await self?.player.seek(to: CMTime(seconds: clamped, preferredTimescale: 600),
+                                    toleranceBefore: .zero, toleranceAfter: .zero)
+        }
+    }
+
+    /// Кроп поменялся — перезапускаем текущий превью, чтобы показать честно.
+    private func refreshPreviewAfterCropChange() {
+        guard let id = previewingID,
+              let candidate = candidates.first(where: { $0.id == id }) else { return }
+        preview(candidate)
+    }
+
+    private func cancelPreviewStop() {
+        if let previewBoundary {
+            player.removeTimeObserver(previewBoundary)
+            self.previewBoundary = nil
+        }
+    }
+
+    private func attachObservers() {
+        timeObserver = player.addPeriodicTimeObserver(
+            forInterval: CMTime(value: 1, timescale: 30), queue: .main
+        ) { [weak self] time in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.currentTime = time.seconds
+                self.isPlaying = self.player.rate != 0
+            }
+        }
+        endObserver = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemDidPlayToEndTime, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.isPlaying = false }
+        }
+    }
+
+    // MARK: - Экспорт
+
+    func chooseFolderAndExport() {
+        guard selectedCount > 0 else { return }
+        let panel = NSOpenPanel()
+        panel.title = "Выбери папку для роликов"
+        panel.prompt = "Сохранить"
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.canCreateDirectories = true
+        panel.allowsMultipleSelection = false
+        guard panel.runModal() == .OK, let folder = panel.url else { return }
+        startExport(to: folder)
+    }
+
+    func startExport(to folder: URL) {
+        let selected = candidates.filter(\.enabled)
+        guard !selected.isEmpty else { return }
+        exportTask?.cancel()
+        let url = sourceURL
+        let sourceName = url.deletingPathExtension().lastPathComponent
+        let size = displaySize
+        let exportQuality = quality
+        let crop = cropVertical
+        let total = selected.count
+        exportState = .exporting(done: 0, total: total, progress: 0)
+        exportTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                for (index, candidate) in selected.enumerated() {
+                    try Task.checkCancellation()
+                    let fileURL = ShortsExporter.fileURL(in: folder, sourceName: sourceName,
+                                                         index: index, title: candidate.title)
+                    try await ShortsExporter.export(
+                        candidate: candidate, sourceURL: url, displaySize: size,
+                        quality: exportQuality, cropVertical: crop, to: fileURL,
+                        progress: { fraction in
+                            Task { @MainActor [weak self] in
+                                guard let self else { return }
+                                if case .exporting(let done, _, _) = self.exportState, done == index {
+                                    self.exportState = .exporting(done: index, total: total,
+                                                                  progress: fraction)
+                                }
+                            }
+                        })
+                    guard !Task.isCancelled else { break }
+                    self.exportState = .exporting(done: index + 1, total: total, progress: 0)
+                }
+                guard !Task.isCancelled else { throw CancellationError() }
+                self.exportState = .done(folder)
+            } catch is CancellationError {
+                self.exportState = .idle
+            } catch {
+                self.exportState = .failed("Не получилось сохранить ролики: \(error.localizedDescription)")
+            }
+            self.exportTask = nil
+        }
+    }
+
+    func cancelExport() {
+        exportTask?.cancel()
+        exportTask = nil
+        exportState = .idle
+    }
+
+    func revealFolder(_ url: URL) {
+        NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: url.path)
+    }
+}

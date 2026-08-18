@@ -36,6 +36,21 @@ struct StartView: View {
             .disabled(app.isProjectOperationInProgress)
             .padding(.top, 28)
 
+            Button {
+                if let url = AppModel.pickVideo() { app.startShorts(url: url) }
+            } label: {
+                Label("Нарезать на shorts", systemImage: "sparkles.rectangle.stack")
+                    .font(.system(size: 14, weight: .medium, design: .rounded))
+                    .padding(.horizontal, 22)
+                    .padding(.vertical, 11)
+                    .background(Theme.accent.opacity(0.08))
+                    .foregroundStyle(Theme.accent)
+                    .clipShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .disabled(app.isProjectOperationInProgress)
+            .padding(.top, 12)
+
             if app.isProjectOperationInProgress {
                 ProgressView().controlSize(.small).padding(.top, 12)
             }

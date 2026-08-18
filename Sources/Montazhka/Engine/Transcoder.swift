@@ -18,9 +18,18 @@ enum TranscodeError: LocalizedError {
 
 /// Склейка и микс для экспорта. AVFoundation-типы не Sendable, но после сборки
 /// композиция нигде больше не мутируется — контейнер осознанно помечен unchecked.
+/// `videoComposition` — необязательная замена автоматической (например, кроп 9:16
+/// при нарезке на shorts); nil — стандартная сборка из свойств композиции.
 struct ExportInput: @unchecked Sendable {
     let composition: AVAsset
     let audioMix: AVAudioMix?
+    var videoComposition: AVVideoComposition?
+
+    init(composition: AVAsset, audioMix: AVAudioMix?, videoComposition: AVVideoComposition? = nil) {
+        self.composition = composition
+        self.audioMix = audioMix
+        self.videoComposition = videoComposition
+    }
 }
 
 /// Входы/выходы насосов перекодирования: колбэк каждого живёт на своей
@@ -80,7 +89,13 @@ enum Transcoder {
         }
 
         // Видеокомпозиция запекает preferredTransform: вертикальные ролики не заваливаются набок.
-        let videoComposition = try await AVMutableVideoComposition.videoComposition(withPropertiesOf: composition)
+        // Для нарезки на shorts сюда может приходить композиция с кропом 9:16.
+        let videoComposition: AVVideoComposition
+        if let custom = input.videoComposition {
+            videoComposition = custom
+        } else {
+            videoComposition = try await AVMutableVideoComposition.videoComposition(withPropertiesOf: composition)
+        }
 
         let reader = try AVAssetReader(asset: composition)
         let videoOutput = AVAssetReaderVideoCompositionOutput(
