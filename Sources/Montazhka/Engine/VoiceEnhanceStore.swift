@@ -1,15 +1,18 @@
-import Foundation
 import CryptoKit
+import Foundation
 
 /// Кэш обработанного звука: один CAF на пару «исходник + настройки».
 /// Обработка долгая, поэтому результат живёт на диске (как волны в WaveformStore).
-///
-/// @unchecked Sendable: NSLock защищает только словарь inFlight; готовые файлы
-/// появляются атомарно (рендер в .work + moveItem), диск — источник правды.
-final class VoiceEnhanceStore: @unchecked Sendable {
+/// Актор последовательно управляет общими рендерами; готовые файлы появляются
+/// атомарно (рендер в .work + moveItem), диск остаётся источником правды.
+actor VoiceEnhanceStore {
+    private struct InFlight {
+        let id: UUID
+        let task: Task<URL, Error>
+    }
+
     private let cacheDir: URL
-    private let lock = NSLock()
-    private var inFlight: [String: Task<URL, Error>] = [:]
+    private var inFlight: [String: InFlight] = [:]
 
     init(cacheDir: URL) {
         self.cacheDir = cacheDir
@@ -27,23 +30,27 @@ final class VoiceEnhanceStore: @unchecked Sendable {
         if FileManager.default.fileExists(atPath: url.path) { return url }
 
         let key = url.lastPathComponent
-        let task = renderTask(key: key, url: url, path: path, settings: settings)
-        defer { clearInFlight(key: key) }
-        return try await task.value
+        let operation = renderTask(key: key, url: url, path: path, settings: settings)
+        defer {
+            if inFlight[key]?.id == operation.id { inFlight[key] = nil }
+        }
+        return try await operation.task.value
     }
 
     /// Возвращает идущий рендер или запускает новый (потокобезопасно).
-    private func renderTask(key: String, url: URL, path: String,
-                            settings: VoiceEnhanceSettings) -> Task<URL, Error> {
-        lock.lock(); defer { lock.unlock() }
+    private func renderTask(
+        key: String, url: URL, path: String,
+        settings: VoiceEnhanceSettings
+    ) -> InFlight {
         if let existing = inFlight[key] { return existing }
         let sourceHash = Self.sourceHash(for: path)
         let dir = cacheDir
-        let task = Task.detached(priority: .userInitiated) {
+        let task = Task(priority: .userInitiated) {
             let working = url.deletingPathExtension().appendingPathExtension("work.caf")
             defer { try? FileManager.default.removeItem(at: working) }
-            try VoiceEnhancer.render(sourcePath: path, settings: settings,
-                                     to: working, isCancelled: { Task.isCancelled })
+            try await VoiceEnhancer.render(
+                sourcePath: path, settings: settings,
+                to: working, isCancelled: { Task.isCancelled })
             if Task.isCancelled { throw CancellationError() }
             // Готовый файл появляется атомарно — отменённый рендер не оставит битого кэша.
             try? FileManager.default.removeItem(at: url)
@@ -51,19 +58,14 @@ final class VoiceEnhanceStore: @unchecked Sendable {
             Self.evictOldVariants(dir: dir, sourceHash: sourceHash, keep: url)
             return url
         }
-        inFlight[key] = task
-        return task
-    }
-
-    private func clearInFlight(key: String) {
-        lock.lock(); defer { lock.unlock() }
-        inFlight[key] = nil
+        let operation = InFlight(id: UUID(), task: task)
+        inFlight[key] = operation
+        return operation
     }
 
     /// Отменяет все идущие рендеры (например, пока пользователь крутит ползунки).
     func cancelAll() {
-        lock.lock(); defer { lock.unlock() }
-        for task in inFlight.values { task.cancel() }
+        for operation in inFlight.values { operation.task.cancel() }
         inFlight.removeAll()
     }
 
@@ -93,7 +95,8 @@ final class VoiceEnhanceStore: @unchecked Sendable {
             && file.pathExtension == "caf"
             && !file.lastPathComponent.contains(".work")
             && !file.lastPathComponent.contains(".tmp")
-            && file.lastPathComponent != keep.lastPathComponent {
+            && file.lastPathComponent != keep.lastPathComponent
+        {
             try? FileManager.default.removeItem(at: file)
         }
     }

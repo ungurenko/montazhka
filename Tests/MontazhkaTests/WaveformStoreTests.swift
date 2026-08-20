@@ -1,21 +1,25 @@
 import Foundation
-import XCTest
-@testable import Montazhka
+import Testing
 
-final class WaveformStoreTests: XCTestCase {
+@testable import MontazhkaKit
+
+@Suite
+struct WaveformStoreTests {
+    @Test
     func testConcurrentRequestsForOneSourceDecodeOnce() async {
         let probe = WaveformLoaderProbe()
         let store = makeStore(probe: probe)
 
         await withTaskGroup(of: [Float]?.self) { group in
             for _ in 0..<20 { group.addTask { await store.ensure(path: "/tmp/shared.mov") } }
-            for await result in group { XCTAssertEqual(result, [0.25, 0.5]) }
+            for await result in group { #expect((result) == ([0.25, 0.5])) }
         }
 
         let startedCount = await probe.startedCount
-        XCTAssertEqual(startedCount, 1)
+        #expect((startedCount) == (1))
     }
 
+    @Test
     func testDecodeConcurrencyIsBoundedToTwo() async {
         let probe = WaveformLoaderProbe()
         let store = makeStore(probe: probe)
@@ -27,21 +31,23 @@ final class WaveformStoreTests: XCTestCase {
         }
 
         let maximumActive = await probe.maximumActive
-        XCTAssertEqual(maximumActive, 2)
+        #expect((maximumActive) == (2))
     }
 
+    @Test
     func testMemoryCountLimitDoesNotRetainEveryWaveform() async {
         let probe = WaveformLoaderProbe()
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("waveform-limit-\(UUID().uuidString)")
-        let store = WaveformStore(cacheDir: root, memoryCostLimit: 1_024,
-                                  memoryCountLimit: 2, maxConcurrentDecodes: 2,
-                                  loader: probe.load)
+        let store = WaveformStore(
+            cacheDir: root, memoryCostLimit: 1_024,
+            memoryCountLimit: 2, maxConcurrentDecodes: 2,
+            loader: probe.load)
 
         for index in 0..<5 { _ = await store.ensure(path: "/tmp/cache-\(index).mov") }
         let retained = (0..<5).compactMap { store.peaks(for: "/tmp/cache-\($0).mov") }.count
 
-        XCTAssertLessThanOrEqual(retained, 2)
+        #expect((retained) <= (2))
     }
 
     private func makeStore(probe: WaveformLoaderProbe) -> WaveformStore {

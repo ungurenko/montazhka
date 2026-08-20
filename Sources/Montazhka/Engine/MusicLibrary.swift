@@ -21,10 +21,12 @@ enum MusicLibrary {
 
     private static func loadTracks() -> [MusicTrack] {
         guard let dir = musicDirectory() else { return [] }
-        let files = (try? FileManager.default.contentsOfDirectory(
-            at: dir, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]
-        )) ?? []
-        return files
+        let files =
+            (try? FileManager.default.contentsOfDirectory(
+                at: dir, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]
+            )) ?? []
+        return
+            files
             .filter { audioExtensions.contains($0.pathExtension.lowercased()) }
             .map { url in
                 let name = url.deletingPathExtension().lastPathComponent
@@ -36,16 +38,17 @@ enum MusicLibrary {
     private static func musicDirectory() -> URL? {
         // Собранное приложение: Contents/Resources/Music
         if let bundled = Bundle.main.resourceURL?.appendingPathComponent("Music"),
-           FileManager.default.fileExists(atPath: bundled.path) {
+            FileManager.default.fileExists(atPath: bundled.path)
+        {
             return bundled
         }
-        // Запуск из .build/debug (разработка, selftest): Resources/Music рядом с исходниками
-        let dev = URL(fileURLWithPath: #filePath)             // …/Sources/Montazhka/Engine/MusicLibrary.swift
-            .deletingLastPathComponent()                       // Engine
-            .deletingLastPathComponent()                       // Montazhka
-            .deletingLastPathComponent()                       // Sources
-            .deletingLastPathComponent()                       // корень проекта
-            .appendingPathComponent("Resources/Music")
+        // Запуск из .build/debug (разработка, selftest): Resources/App/Music.
+        let dev = URL(fileURLWithPath: #filePath)  // …/Sources/Montazhka/Engine/MusicLibrary.swift
+            .deletingLastPathComponent()  // Engine
+            .deletingLastPathComponent()  // Montazhka
+            .deletingLastPathComponent()  // Sources
+            .deletingLastPathComponent()  // корень проекта
+            .appendingPathComponent("Resources/App/Music")
         return FileManager.default.fileExists(atPath: dev.path) ? dev : nil
     }
 }

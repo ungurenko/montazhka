@@ -1,5 +1,5 @@
-import Foundation
 import AVFoundation
+import Foundation
 
 /// Ошибки перекодирования — с человеческим описанием для окна экспорта.
 enum TranscodeError: LocalizedError {
@@ -57,23 +57,26 @@ enum Transcoder {
     /// Целевые размеры и битрейт под выбранное качество — по реальному размеру кадра склейки.
     static func settings(for quality: ExportQuality, input: ExportInput) async throws -> Settings {
         guard let video = try? await input.composition.loadTracks(withMediaType: .video).first,
-              let naturalSize = try? await video.load(.naturalSize),
-              let transform = try? await video.load(.preferredTransform)
+            let naturalSize = try? await video.load(.naturalSize),
+            let transform = try? await video.load(.preferredTransform)
         else { throw TranscodeError.noVideoTrack }
         let rect = CGRect(origin: .zero, size: naturalSize).applying(transform)
         let display = CGSize(width: abs(rect.width), height: abs(rect.height))
         let dims = quality.targetDimensions(forDisplaySize: display)
-        return Settings(dimensions: dims,
-                        videoBitrate: quality.videoBitrate(forDimensions: dims),
-                        audioBitrate: quality.audioBitrate)
+        return Settings(
+            dimensions: dims,
+            videoBitrate: quality.videoBitrate(forDimensions: dims),
+            audioBitrate: quality.audioBitrate)
     }
 
     /// Полное перекодирование: читает склейку (с миксом музыки), кодирует H.264 + AAC.
     /// `progress` зовётся с фоновой очереди значениями 0…1.
-    static func export(input: ExportInput,
-                       settings: Settings,
-                       to url: URL,
-                       progress: @escaping @Sendable (Double) -> Void) async throws {
+    static func export(
+        input: ExportInput,
+        settings: Settings,
+        to url: URL,
+        progress: @escaping @Sendable (Double) -> Void
+    ) async throws {
         let composition = input.composition
         let audioMix = input.audioMix
         let duration = (try? await composition.load(.duration).seconds) ?? 0
@@ -100,8 +103,10 @@ enum Transcoder {
         let reader = try AVAssetReader(asset: composition)
         let videoOutput = AVAssetReaderVideoCompositionOutput(
             videoTracks: videoTracks,
-            videoSettings: [kCVPixelBufferPixelFormatTypeKey as String:
-                                kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange]
+            videoSettings: [
+                kCVPixelBufferPixelFormatTypeKey as String:
+                    kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
+            ]
         )
         videoOutput.videoComposition = videoComposition
         videoOutput.alwaysCopiesSampleData = false
@@ -120,19 +125,21 @@ enum Transcoder {
 
         try? FileManager.default.removeItem(at: url)
         let writer = try AVAssetWriter(outputURL: url, fileType: .mp4)
-        writer.shouldOptimizeForNetworkUse = true // moov в начале — стриминг в мессенджерах
+        writer.shouldOptimizeForNetworkUse = true  // moov в начале — стриминг в мессенджерах
 
-        let videoInput = AVAssetWriterInput(mediaType: .video, outputSettings: [
-            AVVideoCodecKey: AVVideoCodecType.h264,
-            AVVideoWidthKey: Int(settings.dimensions.width),
-            AVVideoHeightKey: Int(settings.dimensions.height),
-            AVVideoScalingModeKey: AVVideoScalingModeResize, // аспект совпадает: цель посчитана от кадра
-            AVVideoCompressionPropertiesKey: [
-                AVVideoAverageBitRateKey: settings.videoBitrate,
-                AVVideoProfileLevelKey: AVVideoProfileLevelH264HighAutoLevel,
-                AVVideoMaxKeyFrameIntervalDurationKey: 2.0
-            ]
-        ])
+        let videoInput = AVAssetWriterInput(
+            mediaType: .video,
+            outputSettings: [
+                AVVideoCodecKey: AVVideoCodecType.h264,
+                AVVideoWidthKey: Int(settings.dimensions.width),
+                AVVideoHeightKey: Int(settings.dimensions.height),
+                AVVideoScalingModeKey: AVVideoScalingModeResize,  // аспект совпадает: цель посчитана от кадра
+                AVVideoCompressionPropertiesKey: [
+                    AVVideoAverageBitRateKey: settings.videoBitrate,
+                    AVVideoProfileLevelKey: AVVideoProfileLevelH264HighAutoLevel,
+                    AVVideoMaxKeyFrameIntervalDurationKey: 2.0,
+                ],
+            ])
         videoInput.expectsMediaDataInRealTime = false
         guard writer.canAdd(videoInput) else { throw TranscodeError.writerFailed(nil) }
         writer.add(videoInput)
@@ -141,13 +148,15 @@ enum Transcoder {
         if audioOutput != nil {
             var layout = AudioChannelLayout()
             layout.mChannelLayoutTag = kAudioChannelLayoutTag_Stereo
-            let input = AVAssetWriterInput(mediaType: .audio, outputSettings: [
-                AVFormatIDKey: kAudioFormatMPEG4AAC,
-                AVSampleRateKey: 48000,
-                AVNumberOfChannelsKey: 2,
-                AVChannelLayoutKey: Data(bytes: &layout, count: MemoryLayout<AudioChannelLayout>.size),
-                AVEncoderBitRateKey: settings.audioBitrate
-            ])
+            let input = AVAssetWriterInput(
+                mediaType: .audio,
+                outputSettings: [
+                    AVFormatIDKey: kAudioFormatMPEG4AAC,
+                    AVSampleRateKey: 48000,
+                    AVNumberOfChannelsKey: 2,
+                    AVChannelLayoutKey: Data(bytes: &layout, count: MemoryLayout<AudioChannelLayout>.size),
+                    AVEncoderBitRateKey: settings.audioBitrate,
+                ])
             input.expectsMediaDataInRealTime = false
             guard writer.canAdd(input) else { throw TranscodeError.writerFailed(nil) }
             writer.add(input)
@@ -214,10 +223,12 @@ enum Transcoder {
     /// Перекачка одного потока ридер → писатель.
     /// ВАЖНО: только requestMediaDataWhenReady — ручной опрос isReadyForMoreMediaData
     /// виснет без живого RunLoop (--selftest). Прогресс — не чаще раза на 0.25 сек видео.
-    private static func pump(from outputParam: AVAssetReaderOutput,
-                             to inputParam: AVAssetWriterInput,
-                             label: String,
-                             onSample: (@Sendable (CMTime) -> Void)?) async {
+    private static func pump(
+        from outputParam: AVAssetReaderOutput,
+        to inputParam: AVAssetWriterInput,
+        label: String,
+        onSample: (@Sendable (CMTime) -> Void)?
+    ) async {
         // Колбэк живёт на своей последовательной очереди — гонок нет, помечаем осознанно
         nonisolated(unsafe) let output = outputParam
         nonisolated(unsafe) let input = inputParam

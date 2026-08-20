@@ -108,11 +108,20 @@ struct TimelineView: View {
         }
         .padding(12)
         .cardStyle()
+        .background {
+            TimelinePlaybackFollower(
+                controller: controller,
+                pixelsPerSecond: pps,
+                leadingInset: timelineInset,
+                followsPlayback: followPlayback,
+                viewportProxy: viewportProxy
+            )
+        }
+        .accessibilityIdentifier("editor.timeline")
         .onDrop(of: [.text], isTargeted: nil) { _ in
             finishReorder()
             return true
         }
-        .onChange(of: controller.currentTime) { _, _ in followPlayheadIfNeeded() }
         .onDisappear {
             handKeyHeld = false
             viewportProxy.onManualScroll = nil
@@ -132,9 +141,12 @@ struct TimelineView: View {
                     .foregroundStyle(Theme.pauseHighlight)
             }
             if !controller.smartEditCandidates.isEmpty {
-                Label("\(controller.smartEditCandidates.filter(\.enabled).count) умных правок", systemImage: "wand.and.sparkles")
-                    .font(.system(size: 12))
-                    .foregroundStyle(.orange)
+                Label(
+                    "\(controller.smartEditCandidates.filter(\.enabled).count) умных правок",
+                    systemImage: "wand.and.sparkles"
+                )
+                .font(.system(size: 12))
+                .foregroundStyle(.orange)
             }
             if let selection = controller.timelineSelection {
                 Label("\(TimeFormat.short(selection.duration)) выделено", systemImage: "selection.pin.in.out")
@@ -183,6 +195,19 @@ struct TimelineView: View {
                 .frame(width: width, height: rulerHeight)
                 .contentShape(Rectangle())
                 .gesture(scrubGesture)
+                .accessibilityElement()
+                .accessibilityLabel("Линейка времени")
+                .accessibilityHint("Увеличивай или уменьшай значение, чтобы перемещаться по видео")
+                .accessibilityAdjustableAction { direction in
+                    switch direction {
+                    case .increment:
+                        controller.seek(to: min(controller.duration, controller.currentTime + 1))
+                    case .decrement:
+                        controller.seek(to: max(0, controller.currentTime - 1))
+                    @unknown default:
+                        break
+                    }
+                }
 
             ZStack(alignment: .topLeading) {
                 if layout.items.isEmpty {
@@ -216,8 +241,10 @@ struct TimelineView: View {
                             RoundedRectangle(cornerRadius: 4, style: .continuous)
                                 .stroke(Color.orange.opacity(candidate.enabled ? 0.8 : 0.2), lineWidth: 1)
                         )
-                        .frame(width: max(2, CGFloat(candidate.timelineEnd - candidate.timelineStart) * pps),
-                               height: clipHeight)
+                        .frame(
+                            width: max(2, CGFloat(candidate.timelineEnd - candidate.timelineStart) * pps),
+                            height: clipHeight
+                        )
                         .offset(x: CGFloat(candidate.timelineStart) * pps)
                         .allowsHitTesting(false)
                 }
@@ -230,8 +257,10 @@ struct TimelineView: View {
                             RoundedRectangle(cornerRadius: 4, style: .continuous)
                                 .stroke(Theme.pauseHighlight.opacity(candidate.enabled ? 0.8 : 0.25), lineWidth: 1)
                         )
-                        .frame(width: max(2, CGFloat(candidate.fullEnd - candidate.fullStart) * pps),
-                               height: clipHeight)
+                        .frame(
+                            width: max(2, CGFloat(candidate.fullEnd - candidate.fullStart) * pps),
+                            height: clipHeight
+                        )
                         .offset(x: CGFloat(candidate.fullStart) * pps)
                         .allowsHitTesting(false)
                 }
@@ -239,9 +268,10 @@ struct TimelineView: View {
             .frame(width: width, alignment: .topLeading)
         }
         .overlay(alignment: .topLeading) {
-            TimelinePlayhead(controller: controller,
-                             pps: pps,
-                             height: rulerHeight + 4 + clipHeight)
+            TimelinePlayhead(
+                controller: controller,
+                pps: pps,
+                height: rulerHeight + 4 + clipHeight)
         }
     }
 
@@ -254,8 +284,9 @@ struct TimelineView: View {
                 if abs(value.translation.width) < 3 {
                     controller.seek(to: Double(value.location.x / pps))
                 } else {
-                    controller.setSelection(start: Double(value.startLocation.x / pps),
-                                            end: Double(value.location.x / pps))
+                    controller.setSelection(
+                        start: Double(value.startLocation.x / pps),
+                        end: Double(value.location.x / pps))
                 }
             }
     }
@@ -302,7 +333,8 @@ struct TimelineView: View {
             return (item.clip, CGFloat(item.start) * pps, max(3, CGFloat(item.clip.duration) * pps))
         }
         let clip = preview.clip
-        let leadingTrim = preview.edge == .start
+        let leadingTrim =
+            preview.edge == .start
             ? CGFloat(clip.start - preview.originalClip.start) * pps
             : 0
         return (
@@ -334,9 +366,12 @@ struct TimelineView: View {
         }
         guard let preview = trimPreview else { return }
         trimPreview = nil
-        guard preview.sourceTime != (preview.edge == .start
-            ? preview.originalClip.start
-            : preview.originalClip.end) else { return }
+        guard
+            preview.sourceTime
+                != (preview.edge == .start
+                    ? preview.originalClip.start
+                    : preview.originalClip.end)
+        else { return }
         controller.commitTrim(
             clipID: preview.originalClip.id,
             edge: preview.edge,
@@ -377,7 +412,8 @@ struct TimelineView: View {
                 leadingInset: timelineInset
             )
         } else {
-            targetOffset = timelineInset + CGFloat(controller.currentTime) * newScale
+            targetOffset =
+                timelineInset + CGFloat(controller.currentTime) * newScale
                 - viewportWidth / 2
         }
 
@@ -408,14 +444,30 @@ struct TimelineView: View {
         }
     }
 
-    private func followPlayheadIfNeeded() {
-        guard followPlayback, controller.isPlaying else { return }
-        let offset = TimelineViewportMath.followOffset(
-            playheadX: playheadContentX,
-            currentOffset: viewportProxy.horizontalOffset,
-            viewportWidth: viewportProxy.viewportWidth
-        )
-        viewportProxy.setHorizontalOffset(offset)
+}
+
+/// Наблюдение за 30 Гц позицией плеера не инвалидирует всю ленту клипов.
+private struct TimelinePlaybackFollower: View {
+    var controller: EditorController
+    let pixelsPerSecond: CGFloat
+    let leadingInset: CGFloat
+    let followsPlayback: Bool
+    let viewportProxy: TimelineViewportProxy
+
+    var body: some View {
+        Color.clear
+            .frame(width: 0, height: 0)
+            .onChange(of: controller.currentTime) { _, time in
+                guard followsPlayback, controller.isPlaying else { return }
+                let playheadX = leadingInset + CGFloat(time) * pixelsPerSecond
+                let offset = TimelineViewportMath.followOffset(
+                    playheadX: playheadX,
+                    currentOffset: viewportProxy.horizontalOffset,
+                    viewportWidth: viewportProxy.viewportWidth
+                )
+                viewportProxy.setHorizontalOffset(offset)
+            }
+            .accessibilityHidden(true)
     }
 }
 
@@ -537,8 +589,9 @@ private struct ClipCell: View, Equatable {
         .clipShape(RoundedRectangle(cornerRadius: Theme.radiusSmall, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: Theme.radiusSmall, style: .continuous)
-                .stroke(selected ? Theme.accent : Color.black.opacity(0.08),
-                        lineWidth: selected ? 2 : 1)
+                .stroke(
+                    selected ? Theme.accent : Color.black.opacity(0.08),
+                    lineWidth: selected ? 2 : 1)
         )
         .opacity(isDragged ? 0.5 : 1)
         .contentShape(Rectangle())
@@ -559,12 +612,15 @@ private struct ClipCell: View, Equatable {
                 width: TimelineDragPreviewMath.width(forClipWidth: width)
             )
         }
-        .onDrop(of: [.text], delegate: ReorderDropDelegate(
-            targetID: clip.id,
-            controller: controller,
-            draggedClipID: $draggedClipID,
-            orderAtDragStart: $orderAtDragStart
-        ))
+        .onDrop(
+            of: [.text],
+            delegate: ReorderDropDelegate(
+                targetID: clip.id,
+                controller: controller,
+                draggedClipID: $draggedClipID,
+                orderAtDragStart: $orderAtDragStart
+            )
+        )
         .overlay(alignment: .leading) {
             if isHovering || selected || trimPreview != nil {
                 trimHandle(edge: .start)
@@ -589,13 +645,32 @@ private struct ClipCell: View, Equatable {
             }
         }
         .onHover { isHovering = $0 }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Клип \(clip.fileName)")
+        .accessibilityValue("\(TimeFormat.spoken(clip.duration))\(selected ? ", выбран" : "")")
+        .accessibilityHint("Активируй, чтобы выбрать клип")
+        .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
+        .accessibilityAction {
+            controller.selectedClipID = clip.id
+            controller.seek(to: timelineStart)
+        }
+        .accessibilityAction(named: "Переместить влево") {
+            controller.moveClip(id: clip.id, direction: -1)
+        }
+        .accessibilityAction(named: "Переместить вправо") {
+            controller.moveClip(id: clip.id, direction: 1)
+        }
+        .accessibilityAction(named: "Удалить клип") {
+            controller.deleteClip(id: clip.id)
+        }
     }
 
     private var tapToSelectAndSeek: some Gesture {
         SpatialTapGesture()
             .onEnded { value in
                 controller.selectedClipID = clip.id
-                controller.seek(to: timelineStart + Double(value.location.x) / Double(max(1, width / CGFloat(clip.duration))))
+                controller.seek(
+                    to: timelineStart + Double(value.location.x) / Double(max(1, width / CGFloat(clip.duration))))
             }
     }
 
@@ -634,7 +709,8 @@ private struct ClipCell: View, Equatable {
                     let boundary = timelineStart + (sourceTime - originalClip.start)
                     if abs(controller.currentTime - boundary) * Double(pps) <= 6 {
                         let snapped = originalClip.start + controller.currentTime - timelineStart
-                        sourceTime = edge == .start
+                        sourceTime =
+                            edge == .start
                             ? min(originalClip.end - 0.1, max(originalClip.start, snapped))
                             : min(originalClip.end, max(originalClip.start + 0.1, snapped))
                     }
@@ -754,6 +830,7 @@ private struct ZoomButton: View {
         }
         .buttonStyle(.plain)
         .help(help)
+        .accessibilityLabel(help)
     }
 }
 
@@ -774,5 +851,7 @@ private struct ToolButton: View {
         }
         .buttonStyle(.plain)
         .help(help)
+        .accessibilityLabel(help)
+        .accessibilityValue(active ? "Включено" : "Выключено")
     }
 }

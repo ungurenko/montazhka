@@ -1,6 +1,6 @@
-import SwiftUI
 import AVFoundation
 import AppKit
+import SwiftUI
 
 /// Экран нарезки на shorts: слева плеер, справа панель с настройками,
 /// ходом анализа и кандидатами.
@@ -17,7 +17,7 @@ struct ShortsView: View {
             HStack(spacing: 12) {
                 VStack(spacing: 12) {
                     playerArea
-                    transportBar
+                    ShortsTransportBar(controller: controller)
                 }
                 sidePanel
                     .frame(width: 360)
@@ -47,6 +47,7 @@ struct ShortsView: View {
             .buttonStyle(.plain)
             .foregroundStyle(Theme.accent)
             .disabled(app.isProjectOperationInProgress)
+            .accessibilityIdentifier("shorts.back")
 
             VStack(alignment: .leading, spacing: 1) {
                 Text("Нарезка на shorts")
@@ -64,7 +65,7 @@ struct ShortsView: View {
                 .font(.system(size: 11))
                 .foregroundStyle(Theme.textSecondary)
         }
-        .padding(.leading, 84) // место под «светофор» окна
+        .padding(.leading, 84)  // место под «светофор» окна
         .padding(.trailing, 16)
         .padding(.vertical, 12)
     }
@@ -75,9 +76,15 @@ struct ShortsView: View {
         ZStack {
             RoundedRectangle(cornerRadius: Theme.radius, style: .continuous)
                 .fill(Color.black)
-            PlayerLayerView(player: controller.player)
-                .clipShape(RoundedRectangle(cornerRadius: Theme.radius, style: .continuous))
-                .onTapGesture { controller.togglePlay() }
+            Button {
+                controller.togglePlay()
+            } label: {
+                PlayerLayerView(player: controller.player)
+                    .clipShape(RoundedRectangle(cornerRadius: Theme.radius, style: .continuous))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(controller.isPlaying ? "Поставить просмотр на паузу" : "Воспроизвести просмотр")
+            .accessibilityIdentifier("shorts.player")
             if let error = controller.prepareError {
                 VStack(spacing: 10) {
                     Image(systemName: "exclamationmark.triangle.fill")
@@ -101,40 +108,6 @@ struct ShortsView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    private var transportBar: some View {
-        HStack(spacing: 14) {
-            Text(TimeFormat.short(controller.currentTime))
-                .font(.system(size: 14, weight: .medium, design: .monospaced))
-                .foregroundStyle(Theme.textPrimary)
-                .frame(width: 72, alignment: .leading)
-
-            Spacer()
-
-            Button {
-                controller.togglePlay()
-            } label: {
-                Image(systemName: controller.isPlaying ? "pause.fill" : "play.fill")
-                    .font(.system(size: 18, weight: .medium))
-                    .foregroundStyle(.white)
-                    .frame(width: 40, height: 40)
-                    .background(Theme.accent)
-                    .clipShape(Circle())
-            }
-            .buttonStyle(.plain)
-            .help("Плей/пауза (пробел)")
-
-            Spacer()
-
-            Text("Просмотр — кнопка у карточки")
-                .font(.system(size: 11))
-                .foregroundStyle(Theme.textSecondary)
-                .frame(width: 150, alignment: .trailing)
-        }
-        .padding(.horizontal, 18)
-        .padding(.vertical, 10)
-        .cardStyle()
     }
 
     // MARK: - Боковая панель
@@ -219,15 +192,17 @@ struct ShortsView: View {
 
             keyControls
 
-            Label("В OpenRouter уходит текст расшифровки — он может содержать произнесённые личные данные. Звук, видео и пути файлов остаются на Mac.",
-                  systemImage: "lock.shield.fill")
-                .font(.system(size: 10.5))
-                .foregroundStyle(Theme.textSecondary)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(10)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Theme.background)
-                .clipShape(RoundedRectangle(cornerRadius: Theme.radiusSmall, style: .continuous))
+            Label(
+                "В OpenRouter уходит текст расшифровки — он может содержать произнесённые личные данные. Звук, видео и пути файлов остаются на Mac.",
+                systemImage: "lock.shield.fill"
+            )
+            .font(.system(size: 10.5))
+            .foregroundStyle(Theme.textSecondary)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Theme.background)
+            .clipShape(RoundedRectangle(cornerRadius: Theme.radiusSmall, style: .continuous))
 
             if !SmartEditPlatform.isSupported {
                 Label("Нарезка доступна на Mac с Apple Silicon.", systemImage: "cpu")
@@ -240,11 +215,13 @@ struct ShortsView: View {
             } else if case .failed(let message) = controller.status {
                 errorLabel(message)
             } else if controller.status == .ready && controller.candidates.isEmpty {
-                Label("Не нашёл моментов, из которых получается сильный ролик.",
-                      systemImage: "checkmark.seal.fill")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(Theme.textSecondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                Label(
+                    "Не нашёл моментов, из которых получается сильный ролик.",
+                    systemImage: "checkmark.seal.fill"
+                )
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(Theme.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
             }
 
             Button {
@@ -258,6 +235,7 @@ struct ShortsView: View {
             .buttonStyle(.borderedProminent)
             .tint(Theme.accent)
             .disabled(analyzeDisabled)
+            .accessibilityIdentifier("shorts.analyze")
 
             Link("Получить ключ OpenRouter", destination: URL(string: "https://openrouter.ai/settings/keys")!)
                 .font(.system(size: 10.5, weight: .medium))
@@ -271,10 +249,8 @@ struct ShortsView: View {
     }
 
     private var analyzeDisabled: Bool {
-        controller.openRouterKeyStatus != .saved ||
-            controller.prepareError != nil ||
-            controller.sourceDuration < ShortsLimits.minSourceDuration ||
-            !SmartEditPlatform.isSupported
+        controller.openRouterKeyStatus != .saved || controller.prepareError != nil
+            || controller.sourceDuration < ShortsLimits.minSourceDuration || !SmartEditPlatform.isSupported
     }
 
     private func errorLabel(_ message: String) -> some View {
@@ -303,7 +279,9 @@ struct ShortsView: View {
                     Button("Проверить ключ") { Task { await controller.validateSavedOpenRouterKey() } }
                     Button("Заменить ключ") { replacingKey = true }
                     Divider()
-                    Button("Удалить ключ", role: .destructive) { controller.deleteOpenRouterKey() }
+                    Button("Удалить ключ", role: .destructive) {
+                        Task { await controller.deleteOpenRouterKey() }
+                    }
                 } label: {
                     Label("Настроить", systemImage: "ellipsis.circle")
                         .font(.system(size: 10.5, weight: .medium))
@@ -331,7 +309,9 @@ struct ShortsView: View {
                     }
                     .disabled(keyInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isCheckingKey)
                     if replacingKey {
-                        Button("Отмена") { keyInput = ""; replacingKey = false }
+                        Button("Отмена") {
+                            keyInput = ""; replacingKey = false
+                        }
                     }
                 }
                 if case .checking = controller.openRouterKeyStatus {
@@ -403,8 +383,10 @@ struct ShortsView: View {
     private var resultsSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Text("\(controller.candidates.count) \(Plurals.candidates(controller.candidates.count)) · выбрано \(controller.selectedCount)")
-                    .font(.system(size: 11, weight: .semibold))
+                Text(
+                    "\(controller.candidates.count) \(Plurals.candidates(controller.candidates.count)) · выбрано \(controller.selectedCount)"
+                )
+                .font(.system(size: 11, weight: .semibold))
                 Spacer()
                 Button("Искать заново") { controller.analyze() }
                     .buttonStyle(.link)
@@ -419,10 +401,12 @@ struct ShortsView: View {
 
     private func candidateCard(_ candidate: ShortCandidate) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            Toggle(isOn: Binding(
-                get: { controller.candidates.first(where: { $0.id == candidate.id })?.enabled ?? false },
-                set: { _ in controller.toggleCandidate(candidate.id) }
-            )) {
+            Toggle(
+                isOn: Binding(
+                    get: { controller.candidates.first(where: { $0.id == candidate.id })?.enabled ?? false },
+                    set: { _ in controller.toggleCandidate(candidate.id) }
+                )
+            ) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("\(candidate.rank). \(candidate.title)")
                         .font(.system(size: 12, weight: .semibold))
@@ -445,11 +429,13 @@ struct ShortsView: View {
                 .foregroundStyle(Theme.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
                 .lineLimit(3)
-            Text("Хук \(candidate.hookScore) · Отдельно \(candidate.standaloneScore) · Польза \(candidate.payoffScore) · Темп \(candidate.pacingScore)")
-                .font(.system(size: 9.5, design: .monospaced))
-                .foregroundStyle(Theme.textSecondary.opacity(0.85))
-                .lineLimit(1)
-                .minimumScaleFactor(0.8)
+            Text(
+                "Хук \(candidate.hookScore) · Отдельно \(candidate.standaloneScore) · Польза \(candidate.payoffScore) · Темп \(candidate.pacingScore)"
+            )
+            .font(.system(size: 9.5, design: .monospaced))
+            .foregroundStyle(Theme.textSecondary.opacity(0.85))
+            .lineLimit(1)
+            .minimumScaleFactor(0.8)
             HStack {
                 Text(TimeFormat.compact(candidate.duration))
                     .font(.system(size: 10, weight: .medium, design: .monospaced))
@@ -556,9 +542,11 @@ struct ShortsView: View {
                 Button {
                     controller.chooseFolderAndExport()
                 } label: {
-                    Label("Сохранить (\(controller.selectedCount))",
-                          systemImage: "square.and.arrow.down")
-                        .fontWeight(.semibold)
+                    Label(
+                        "Сохранить (\(controller.selectedCount))",
+                        systemImage: "square.and.arrow.down"
+                    )
+                    .fontWeight(.semibold)
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(Theme.accent)
@@ -576,7 +564,7 @@ struct ShortsView: View {
         monitor.install(matching: .keyDown) { event in
             if NSApp.keyWindow?.firstResponder is NSTextView { return event }
             if event.modifierFlags.contains(.command) { return event }
-            if event.keyCode == 49 { // пробел
+            if event.keyCode == 49 {  // пробел
                 controller.togglePlay()
                 return nil
             }
@@ -590,6 +578,49 @@ struct ShortsView: View {
             keyMonitor.remove()
             self.keyMonitor = nil
         }
+    }
+}
+
+/// Частые обновления времени и Play/Pause ограничены этой маленькой панелью.
+private struct ShortsTransportBar: View {
+    var controller: ShortsController
+
+    var body: some View {
+        HStack(spacing: 14) {
+            Text(TimeFormat.short(controller.currentTime))
+                .font(.system(size: 14, weight: .medium, design: .monospaced))
+                .foregroundStyle(Theme.textPrimary)
+                .frame(width: 72, alignment: .leading)
+                .accessibilityLabel("Текущая позиция")
+                .accessibilityValue(TimeFormat.short(controller.currentTime))
+
+            Spacer()
+
+            Button {
+                controller.togglePlay()
+            } label: {
+                Image(systemName: controller.isPlaying ? "pause.fill" : "play.fill")
+                    .font(.system(size: 18, weight: .medium))
+                    .foregroundStyle(.white)
+                    .frame(width: 40, height: 40)
+                    .background(Theme.accent)
+                    .clipShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .help("Плей/пауза (пробел)")
+            .accessibilityLabel(controller.isPlaying ? "Пауза" : "Воспроизвести")
+            .accessibilityIdentifier("shorts.playPause")
+
+            Spacer()
+
+            Text("Просмотр — кнопка у карточки")
+                .font(.system(size: 11))
+                .foregroundStyle(Theme.textSecondary)
+                .frame(width: 150, alignment: .trailing)
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 10)
+        .cardStyle()
     }
 }
 

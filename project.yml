@@ -1,0 +1,72 @@
+name: Montazhka
+
+options:
+  deploymentTarget:
+    macOS: "14.0"
+  createIntermediateGroups: true
+  groupSortPosition: top
+
+packages:
+  MontazhkaPackage:
+    path: .
+    group: ""
+
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    SWIFT_STRICT_CONCURRENCY: complete
+    CLANG_ENABLE_MODULES: YES
+    ARCHS: "$(ARCHS_STANDARD)"
+    ONLY_ACTIVE_ARCH: NO
+
+targets:
+  Montazhka:
+    type: application
+    platform: macOS
+    sources:
+      - path: Sources/MontazhkaExecutable
+    resources:
+      - path: Resources/App
+    dependencies:
+      - package: MontazhkaPackage
+        product: MontazhkaKit
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: ru.ungurenko.montazhka
+        PRODUCT_NAME: Montazhka
+        PRODUCT_MODULE_NAME: Montazhka
+        INFOPLIST_FILE: Resources/Info.plist
+        GENERATE_INFOPLIST_FILE: NO
+        ENABLE_HARDENED_RUNTIME: YES
+        CODE_SIGN_INJECT_BASE_ENTITLEMENTS: NO
+      configs:
+        Release:
+          DEBUG_INFORMATION_FORMAT: dwarf-with-dsym
+
+  MontazhkaUITests:
+    type: bundle.ui-testing
+    platform: macOS
+    sources:
+      - path: Tests/MontazhkaUITests
+    dependencies:
+      - target: Montazhka
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: ru.ungurenko.montazhka.uitests
+        GENERATE_INFOPLIST_FILE: YES
+
+schemes:
+  Montazhka:
+    build:
+      targets:
+        Montazhka: all
+    run:
+      config: Debug
+    test:
+      config: Debug
+      gatherCoverageData: true
+      targets:
+        - name: MontazhkaUITests
+          parallelizable: false
+    archive:
+      config: Release

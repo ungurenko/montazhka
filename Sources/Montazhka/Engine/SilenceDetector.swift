@@ -16,13 +16,15 @@ struct PauseCandidate: Identifiable, Equatable {
 
 enum SilenceDetector {
     /// Ищет тихие участки внутри каждого клипа по заранее посчитанным пикам громкости.
-    static func findPauses(clips: [Clip],
-                           peaksFor: (String) -> [Float]?,
-                           settings: DetectionSettings) -> [PauseCandidate] {
+    static func findPauses(
+        clips: [Clip],
+        peaksFor: (String) -> [Float]?,
+        settings: DetectionSettings
+    ) -> [PauseCandidate] {
         let wps = WaveformStore.windowsPerSecond
         let threshold = Float(pow(10.0, settings.thresholdDB / 20.0))
         let padding = settings.paddingMS / 1000.0
-        let minCut = 0.15 // совсем короткие вырезки не имеют смысла
+        let minCut = 0.15  // совсем короткие вырезки не имеют смысла
 
         var result: [PauseCandidate] = []
         var timelineOffset = 0.0
@@ -41,7 +43,7 @@ enum SilenceDetector {
                 if silent && runStart == nil { runStart = i }
                 if !silent, let rs = runStart {
                     runStart = nil
-                    let runFrom = Double(rs) / wps           // секунды исходника
+                    let runFrom = Double(rs) / wps  // секунды исходника
                     let runTo = Double(i) / wps
                     guard runTo - runFrom >= settings.minPauseDuration else { continue }
 
@@ -50,10 +52,12 @@ enum SilenceDetector {
                     guard cutTo - cutFrom >= minCut else { continue }
 
                     let toTimeline = { (src: Double) in timelineOffset + (src - clip.start) }
-                    result.append(PauseCandidate(start: toTimeline(cutFrom),
-                                                 end: toTimeline(cutTo),
-                                                 fullStart: toTimeline(runFrom),
-                                                 fullEnd: toTimeline(runTo)))
+                    result.append(
+                        PauseCandidate(
+                            start: toTimeline(cutFrom),
+                            end: toTimeline(cutTo),
+                            fullStart: toTimeline(runFrom),
+                            fullEnd: toTimeline(runTo)))
                 }
             }
         }

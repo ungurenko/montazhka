@@ -2,11 +2,11 @@ import SwiftUI
 
 /// Светлая палитра в стиле Apple: много воздуха, мягкие скругления.
 enum Theme {
-    static let background = Color(red: 0.96, green: 0.96, blue: 0.97)      // #F5F5F7
+    static let background = Color(red: 0.96, green: 0.96, blue: 0.97)  // #F5F5F7
     static let card = Color.white
-    static let accent = Color(red: 0.0, green: 0.478, blue: 1.0)           // системный синий
+    static let accent = Color(red: 0.0, green: 0.478, blue: 1.0)  // системный синий
     static let danger = Color(red: 1.0, green: 0.27, blue: 0.23)
-    static let pauseHighlight = Color(red: 1.0, green: 0.62, blue: 0.04)   // оранжевая подсветка пауз
+    static let pauseHighlight = Color(red: 1.0, green: 0.62, blue: 0.04)  // оранжевая подсветка пауз
     static let textPrimary = Color(red: 0.11, green: 0.11, blue: 0.12)
     static let textSecondary = Color(red: 0.43, green: 0.43, blue: 0.45)
     static let waveform = Color(red: 0.35, green: 0.6, blue: 1.0)

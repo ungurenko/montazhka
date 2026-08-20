@@ -4,3 +4,6 @@ build.noindex/
 .DS_Store
 *.icns.tmp
 Resources/AppIcon.iconset/
+.tools/
+Montazhka.xcodeproj/
+DerivedData/

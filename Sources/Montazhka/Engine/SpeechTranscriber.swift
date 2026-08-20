@@ -1,6 +1,6 @@
-import Foundation
 import AVFoundation
 import FluidAudio
+import Foundation
 
 enum SpeechTranscriptionError: LocalizedError {
     case unsupportedMac
@@ -41,34 +41,40 @@ actor ParakeetTranscriber {
         AsrModels.modelsExist(at: modelsDir, version: .v3, encoderPrecision: .int8)
     }
 
-    func transcribe(source: MediaReference,
-                    progress: (@Sendable (Double?) -> Void)? = nil) async throws -> [TranscriptWord] {
+    func transcribe(
+        source: MediaReference,
+        progress: (@Sendable (Double?) -> Void)? = nil
+    ) async throws -> [TranscriptWord] {
         #if !arch(arm64)
-        throw SpeechTranscriptionError.unsupportedMac
+            throw SpeechTranscriptionError.unsupportedMac
         #else
-        guard let sourceURL = source.resolvedURL else {
-            throw SpeechTranscriptionError.recognitionFailed("исходный файл недоступен")
-        }
-        let asr = try await ensureManager(progress: progress)
-        try Task.checkCancellation()
-        let audioURL = try await extractAudio(from: sourceURL)
-        defer { try? FileManager.default.removeItem(at: audioURL) }
-
-        do {
-            let layers = await asr.decoderLayerCount
-            var decoderState = TdtDecoderState.make(decoderLayers: layers)
-            let result = try await asr.transcribe(audioURL,
-                                                  decoderState: &decoderState,
-                                                  language: .russian)
+            guard let sourceAccess = source.makeAccessLease() else {
+                throw SpeechTranscriptionError.recognitionFailed("исходный файл недоступен")
+            }
+            let sourceURL = sourceAccess.url
+            defer { withExtendedLifetime(sourceAccess) {} }
+            let asr = try await ensureManager(progress: progress)
             try Task.checkCancellation()
-            return Self.makeWords(sourceID: source.id,
-                                  tokenTimings: result.tokenTimings ?? [],
-                                  fallbackConfidence: result.confidence)
-        } catch is CancellationError {
-            throw CancellationError()
-        } catch {
-            throw SpeechTranscriptionError.recognitionFailed(error.localizedDescription)
-        }
+            let audioURL = try await extractAudio(from: sourceURL)
+            defer { try? FileManager.default.removeItem(at: audioURL) }
+
+            do {
+                let layers = await asr.decoderLayerCount
+                var decoderState = TdtDecoderState.make(decoderLayers: layers)
+                let result = try await asr.transcribe(
+                    audioURL,
+                    decoderState: &decoderState,
+                    language: .russian)
+                try Task.checkCancellation()
+                return Self.makeWords(
+                    sourceID: source.id,
+                    tokenTimings: result.tokenTimings ?? [],
+                    fallbackConfidence: result.confidence)
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                throw SpeechTranscriptionError.recognitionFailed(error.localizedDescription)
+            }
         #endif
     }
 
@@ -117,11 +123,13 @@ actor ParakeetTranscriber {
         export.outputURL = output
         export.outputFileType = .m4a
         let cancellation = ExportSessionReference(export)
-        await withTaskCancellationHandler(operation: {
-            await export.export()
-        }, onCancel: {
-            cancellation.value.cancelExport()
-        })
+        await withTaskCancellationHandler(
+            operation: {
+                await export.export()
+            },
+            onCancel: {
+                cancellation.value.cancelExport()
+            })
         try Task.checkCancellation()
         guard export.status == .completed else {
             try? FileManager.default.removeItem(at: output)
@@ -130,21 +138,25 @@ actor ParakeetTranscriber {
         return output
     }
 
-    static func makeWords(sourceID: UUID,
-                          tokenTimings: [TokenTiming],
-                          fallbackConfidence: Float) -> [TranscriptWord] {
+    static func makeWords(
+        sourceID: UUID,
+        tokenTimings: [TokenTiming],
+        fallbackConfidence: Float
+    ) -> [TranscriptWord] {
         buildWordTimings(from: tokenTimings).map { word in
             let matching = tokenTimings.filter {
                 $0.endTime > word.startTime && $0.startTime < word.endTime
             }
-            let confidence = matching.isEmpty
+            let confidence =
+                matching.isEmpty
                 ? fallbackConfidence
                 : matching.map(\.confidence).reduce(0, +) / Float(matching.count)
-            return TranscriptWord(sourceID: sourceID,
-                                  text: word.word,
-                                  start: word.startTime,
-                                  end: word.endTime,
-                                  confidence: confidence)
+            return TranscriptWord(
+                sourceID: sourceID,
+                text: word.word,
+                start: word.startTime,
+                end: word.endTime,
+                confidence: confidence)
         }
     }
 }

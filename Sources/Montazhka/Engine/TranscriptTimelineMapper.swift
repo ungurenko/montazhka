@@ -12,8 +12,9 @@ struct MappedTranscriptWord: Equatable, Sendable {
     let confidence: Float
 
     var publicPayload: OpenRouterTranscriptWord {
-        OpenRouterTranscriptWord(id: wordID, text: text,
-                                 start: timelineStart, end: timelineEnd)
+        OpenRouterTranscriptWord(
+            id: wordID, text: text,
+            start: timelineStart, end: timelineEnd)
     }
 }
 
@@ -39,7 +40,8 @@ struct TranscriptTimelineMap: Sendable {
         guard let first = indices[firstWordID], let last = indices[lastWordID], first <= last else { return nil }
         let slice = words[first...last]
         guard let clipID = slice.first?.clipID,
-              slice.allSatisfy({ $0.clipID == clipID }) else { return nil }
+            slice.allSatisfy({ $0.clipID == clipID })
+        else { return nil }
         return slice
     }
 }
@@ -57,17 +59,18 @@ enum TranscriptTimelineMapper {
                 .sorted { $0.start < $1.start }
             for word in visible {
                 let number = mapped.count + 1
-                mapped.append(MappedTranscriptWord(
-                    wordID: String(format: "w%06d", number),
-                    text: word.text,
-                    clipID: clip.id,
-                    sourceID: clip.source.id,
-                    sourceStart: word.start,
-                    sourceEnd: word.end,
-                    timelineStart: timelineOffset + word.start - clip.start,
-                    timelineEnd: timelineOffset + word.end - clip.start,
-                    confidence: word.confidence
-                ))
+                mapped.append(
+                    MappedTranscriptWord(
+                        wordID: String(format: "w%06d", number),
+                        text: word.text,
+                        clipID: clip.id,
+                        sourceID: clip.source.id,
+                        sourceStart: word.start,
+                        sourceEnd: word.end,
+                        timelineStart: timelineOffset + word.start - clip.start,
+                        timelineEnd: timelineOffset + word.end - clip.start,
+                        confidence: word.confidence
+                    ))
             }
             timelineOffset += clip.duration
         }

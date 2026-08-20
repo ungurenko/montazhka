@@ -1,6 +1,6 @@
-import Foundation
 import AVFoundation
 import CryptoKit
+import Foundation
 
 /// Оффлайн-эквалайзер фоновой музыки: освобождает место для голоса.
 /// По практикам сведения речи с музыкой: срез гула снизу, лёгкий срез
@@ -11,23 +11,31 @@ enum MusicEQ {
     /// Версия обработки — при изменении частот кэш пересчитается сам.
     static let cacheKey = "musiceq-v1"
 
-    /// Синхронная работа с диском и движком — звать из Task.detached.
-    static func render(sourcePath: String, to outURL: URL, isCancelled: () -> Bool) throws {
+    @concurrent
+    static func render(
+        sourcePath: String,
+        to outURL: URL,
+        isCancelled: @escaping @Sendable () -> Bool
+    ) async throws {
         let asset = AVURLAsset(url: URL(fileURLWithPath: sourcePath))
-        guard let track = VoiceEnhancer.loadAudioTrackSync(asset) else { throw VoiceEnhanceError.noAudioTrack }
+        guard let track = try? await asset.loadTracks(withMediaType: .audio).first else {
+            throw VoiceEnhanceError.noAudioTrack
+        }
         let (sampleRate, sourceChannels) = VoiceEnhancer.pcmInfo(of: track, asset: asset)
         let channels = AVAudioChannelCount(min(2, max(1, sourceChannels)))
 
         guard let reader = try? AVAssetReader(asset: asset) else { throw VoiceEnhanceError.readerFailed }
-        let output = AVAssetReaderTrackOutput(track: track, outputSettings: [
-            AVFormatIDKey: kAudioFormatLinearPCM,
-            AVSampleRateKey: sampleRate,
-            AVNumberOfChannelsKey: Int(channels),
-            AVLinearPCMBitDepthKey: 32,
-            AVLinearPCMIsFloatKey: true,
-            AVLinearPCMIsNonInterleaved: false,
-            AVLinearPCMIsBigEndianKey: false
-        ])
+        let output = AVAssetReaderTrackOutput(
+            track: track,
+            outputSettings: [
+                AVFormatIDKey: kAudioFormatLinearPCM,
+                AVSampleRateKey: sampleRate,
+                AVNumberOfChannelsKey: Int(channels),
+                AVLinearPCMBitDepthKey: 32,
+                AVLinearPCMIsFloatKey: true,
+                AVLinearPCMIsNonInterleaved: false,
+                AVLinearPCMIsBigEndianKey: false,
+            ])
         output.alwaysCopiesSampleData = false
         guard reader.canAdd(output) else { throw VoiceEnhanceError.readerFailed }
         reader.add(output)
@@ -53,8 +61,9 @@ enum MusicEQ {
         engine.connect(eq, to: engine.mainMixerNode, format: format)
 
         do {
-            try engine.enableManualRenderingMode(.offline, format: format,
-                                                 maximumFrameCount: 4096)
+            try engine.enableManualRenderingMode(
+                .offline, format: format,
+                maximumFrameCount: 4096)
             try engine.start()
         } catch {
             throw VoiceEnhanceError.engineFailed
@@ -62,17 +71,21 @@ enum MusicEQ {
         defer { engine.stop() }
 
         try? FileManager.default.removeItem(at: outURL)
-        let outFile = try AVAudioFile(forWriting: outURL, settings: [
-            AVFormatIDKey: kAudioFormatLinearPCM,
-            AVSampleRateKey: sampleRate,
-            AVNumberOfChannelsKey: Int(channels),
-            AVLinearPCMBitDepthKey: 16,
-            AVLinearPCMIsFloatKey: false,
-            AVLinearPCMIsBigEndianKey: false
-        ], commonFormat: .pcmFormatFloat32, interleaved: false)
+        let outFile = try AVAudioFile(
+            forWriting: outURL,
+            settings: [
+                AVFormatIDKey: kAudioFormatLinearPCM,
+                AVSampleRateKey: sampleRate,
+                AVNumberOfChannelsKey: Int(channels),
+                AVLinearPCMBitDepthKey: 16,
+                AVLinearPCMIsFloatKey: false,
+                AVLinearPCMIsBigEndianKey: false,
+            ], commonFormat: .pcmFormatFloat32, interleaved: false)
 
-        guard let buffer = AVAudioPCMBuffer(pcmFormat: engine.manualRenderingFormat,
-                                            frameCapacity: 4096)
+        guard
+            let buffer = AVAudioPCMBuffer(
+                pcmFormat: engine.manualRenderingFormat,
+                frameCapacity: 4096)
         else { throw VoiceEnhanceError.engineFailed }
 
         var framesWritten: AVAudioFramePosition = 0
@@ -133,13 +146,16 @@ enum MusicEQ {
 }
 
 /// Кэш обработанной музыки: один CAF на исходный файл (по образцу VoiceEnhanceStore).
-///
-/// @unchecked Sendable: NSLock защищает только словарь inFlight; готовые файлы
-/// появляются атомарно (рендер в .work + moveItem), диск — источник правды.
-final class MusicEQStore: @unchecked Sendable {
+/// Актор последовательно управляет общими рендерами; готовые файлы появляются
+/// атомарно (рендер в .work + moveItem), диск остаётся источником правды.
+actor MusicEQStore {
+    private struct InFlight {
+        let id: UUID
+        let task: Task<URL, Error>
+    }
+
     private let cacheDir: URL
-    private let lock = NSLock()
-    private var inFlight: [String: Task<URL, Error>] = [:]
+    private var inFlight: [String: InFlight] = [:]
 
     init(cacheDir: URL) {
         self.cacheDir = cacheDir
@@ -151,31 +167,30 @@ final class MusicEQStore: @unchecked Sendable {
         if FileManager.default.fileExists(atPath: url.path) { return url }
 
         let key = url.lastPathComponent
-        let task = renderTask(key: key, url: url, path: path)
-        defer { clearInFlight(key: key) }
-        return try await task.value
+        let operation = renderTask(key: key, url: url, path: path)
+        defer {
+            if inFlight[key]?.id == operation.id { inFlight[key] = nil }
+        }
+        return try await operation.task.value
     }
 
-    private func renderTask(key: String, url: URL, path: String) -> Task<URL, Error> {
-        lock.lock(); defer { lock.unlock() }
+    private func renderTask(key: String, url: URL, path: String) -> InFlight {
         if let existing = inFlight[key] { return existing }
-        let task = Task.detached(priority: .userInitiated) {
+        let task = Task(priority: .userInitiated) {
             let working = url.deletingPathExtension().appendingPathExtension("work.caf")
             defer { try? FileManager.default.removeItem(at: working) }
-            try MusicEQ.render(sourcePath: path, to: working, isCancelled: { Task.isCancelled })
+            try await MusicEQ.render(
+                sourcePath: path, to: working,
+                isCancelled: { Task.isCancelled })
             if Task.isCancelled { throw CancellationError() }
             // Готовый файл появляется атомарно — отменённый рендер не оставит битого кэша.
             try? FileManager.default.removeItem(at: url)
             try FileManager.default.moveItem(at: working, to: url)
             return url
         }
-        inFlight[key] = task
-        return task
-    }
-
-    private func clearInFlight(key: String) {
-        lock.lock(); defer { lock.unlock() }
-        inFlight[key] = nil
+        let operation = InFlight(id: UUID(), task: task)
+        inFlight[key] = operation
+        return operation
     }
 
     private func cacheFileURL(source path: String) -> URL {

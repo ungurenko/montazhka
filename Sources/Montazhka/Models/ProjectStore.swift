@@ -35,8 +35,9 @@ final class ProjectStore: ProjectRepository, Sendable {
     let directories: ProjectDirectories
 
     private let baseDirectory: URL
-    private let ioQueue = DispatchQueue(label: "ru.ungurenko.montazhka.project-store",
-                                        qos: .userInitiated)
+    private let ioQueue = DispatchQueue(
+        label: "ru.ungurenko.montazhka.project-store",
+        qos: .userInitiated)
 
     var projectsDir: URL { directories.projects }
     var waveformsDir: URL { directories.waveforms }
@@ -46,7 +47,9 @@ final class ProjectStore: ProjectRepository, Sendable {
     var modelsDir: URL { directories.models }
 
     init(baseDirectory: URL? = nil) {
-        let base = baseDirectory ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        let base =
+            baseDirectory
+            ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Montazhka", isDirectory: true)
         self.baseDirectory = base
         directories = ProjectDirectories(
@@ -86,25 +89,28 @@ final class ProjectStore: ProjectRepository, Sendable {
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
         let data: Data
-        do { data = try encoder.encode(p) }
-        catch { throw ProjectStoreError.encode(error.localizedDescription) }
-        do { try data.write(to: fileURL(for: p.id), options: .atomic) }
-        catch { throw ProjectStoreError.write(error.localizedDescription) }
+        do { data = try encoder.encode(p) } catch { throw ProjectStoreError.encode(error.localizedDescription) }
+        do { try data.write(to: fileURL(for: p.id), options: .atomic) } catch {
+            throw ProjectStoreError.write(error.localizedDescription)
+        }
     }
 
     private func loadOnQueue(id: UUID) throws -> Project {
         let data: Data
-        do { data = try Data(contentsOf: fileURL(for: id)) }
-        catch { throw ProjectStoreError.read(error.localizedDescription) }
+        do { data = try Data(contentsOf: fileURL(for: id)) } catch {
+            throw ProjectStoreError.read(error.localizedDescription)
+        }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
-        do { return try decoder.decode(Project.self, from: data) }
-        catch { throw ProjectStoreError.decode(error.localizedDescription) }
+        do { return try decoder.decode(Project.self, from: data) } catch {
+            throw ProjectStoreError.decode(error.localizedDescription)
+        }
     }
 
     private func deleteOnQueue(id: UUID) throws {
-        do { try FileManager.default.trashItem(at: fileURL(for: id), resultingItemURL: nil) }
-        catch { throw ProjectStoreError.delete(error.localizedDescription) }
+        do { try FileManager.default.trashItem(at: fileURL(for: id), resultingItemURL: nil) } catch {
+            throw ProjectStoreError.delete(error.localizedDescription)
+        }
     }
 
     // MARK: - Последовательный интерфейс
@@ -149,8 +155,8 @@ final class ProjectStore: ProjectRepository, Sendable {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         let files: [URL]
-        do { files = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) }
-        catch { throw ProjectStoreError.read(error.localizedDescription) }
+        do { files = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) } catch
+        { throw ProjectStoreError.read(error.localizedDescription) }
         var projects: [ProjectMeta] = []
         var issues: [ProjectListIssue] = []
         for url in files where url.pathExtension == "json" {
@@ -158,17 +164,22 @@ final class ProjectStore: ProjectRepository, Sendable {
             do {
                 let data = try Data(contentsOf: url)
                 let project = try decoder.decode(Project.self, from: data)
-                projects.append(ProjectMeta(id: project.id, name: project.name,
-                                            updatedAt: project.updatedAt,
-                                            duration: project.totalDuration,
-                                            clipCount: project.clips.count))
+                projects.append(
+                    ProjectMeta(
+                        id: project.id, name: project.name,
+                        updatedAt: project.updatedAt,
+                        duration: project.totalDuration,
+                        clipCount: project.clips.count))
             } catch {
-                issues.append(ProjectListIssue(fileName: url.lastPathComponent,
-                                               message: error.localizedDescription))
+                issues.append(
+                    ProjectListIssue(
+                        fileName: url.lastPathComponent,
+                        message: error.localizedDescription))
             }
         }
-        return ProjectListing(projects: projects.sorted { $0.updatedAt > $1.updatedAt },
-                              issues: issues)
+        return ProjectListing(
+            projects: projects.sorted { $0.updatedAt > $1.updatedAt },
+            issues: issues)
     }
 
     private static let defaultNameFormatter: DateFormatter = {

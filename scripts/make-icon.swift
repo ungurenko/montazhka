@@ -1,5 +1,5 @@
 #!/usr/bin/env swift
-// Рисует иконку Монтажки и собирает Resources/AppIcon.icns.
+// Рисует иконку Монтажки и собирает Resources/App/AppIcon.icns.
 // Запуск: swift scripts/make-icon.swift
 
 import AppKit
@@ -87,7 +87,7 @@ func drawIcon() -> NSImage {
 
 // Сохраняем PNG всех размеров и собираем .icns
 let icon = drawIcon()
-let iconsetURL = URL(fileURLWithPath: "Resources/AppIcon.iconset")
+let iconsetURL = URL(fileURLWithPath: "Resources/App/AppIcon.iconset")
 try? FileManager.default.removeItem(at: iconsetURL)
 try! FileManager.default.createDirectory(at: iconsetURL, withIntermediateDirectories: true)
 
@@ -116,8 +116,8 @@ for entry in sizes {
 
 let task = Process()
 task.launchPath = "/usr/bin/iconutil"
-task.arguments = ["-c", "icns", "Resources/AppIcon.iconset", "-o", "Resources/AppIcon.icns"]
+task.arguments = ["-c", "icns", "Resources/App/AppIcon.iconset", "-o", "Resources/App/AppIcon.icns"]
 try! task.run()
 task.waitUntilExit()
 try? FileManager.default.removeItem(at: iconsetURL)
-print(task.terminationStatus == 0 ? "✓ Resources/AppIcon.icns готова" : "✗ iconutil failed")
+print(task.terminationStatus == 0 ? "✓ Resources/App/AppIcon.icns готова" : "✗ iconutil failed")

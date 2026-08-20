@@ -10,12 +10,12 @@ enum OpenRouterKeyStoreError: LocalizedError {
 }
 
 protocol OpenRouterKeyStoring: Sendable {
-    func load() throws -> String?
-    func save(_ key: String) throws
-    func delete() throws
+    func load() async throws -> String?
+    func save(_ key: String) async throws
+    func delete() async throws
 }
 
-struct OpenRouterKeyStore: OpenRouterKeyStoring, Sendable {
+actor OpenRouterKeyStore: OpenRouterKeyStoring {
     // Новое имя отделяет ключ от записей, созданных временно подписанными сборками.
     // После первого сохранения доступ сохраняется и для следующих обновлений приложения.
     private let service = "ru.ungurenko.montazhka.openrouter.v2"
@@ -29,8 +29,9 @@ struct OpenRouterKeyStore: OpenRouterKeyStoring, Sendable {
         let status = SecItemCopyMatching(query as CFDictionary, &result)
         if status == errSecItemNotFound { return nil }
         guard status == errSecSuccess,
-              let data = result as? Data,
-              let value = String(data: data, encoding: .utf8) else {
+            let data = result as? Data,
+            let value = String(data: data, encoding: .utf8)
+        else {
             throw OpenRouterKeyStoreError.keychain(status)
         }
         return value
@@ -40,8 +41,9 @@ struct OpenRouterKeyStore: OpenRouterKeyStoring, Sendable {
         let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { try delete(); return }
         let data = Data(trimmed.utf8)
-        let status = SecItemUpdate(baseQuery as CFDictionary,
-                                   [kSecValueData as String: data] as CFDictionary)
+        let status = SecItemUpdate(
+            baseQuery as CFDictionary,
+            [kSecValueData as String: data] as CFDictionary)
         if status == errSecItemNotFound {
             var query = baseQuery
             query[kSecValueData as String] = data
@@ -63,14 +65,14 @@ struct OpenRouterKeyStore: OpenRouterKeyStoring, Sendable {
         [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
-            kSecAttrAccount as String: account
+            kSecAttrAccount as String: account,
         ]
     }
 }
 
 /// Хранилище без доступа к связке ключей — для тестов и встроенной самопроверки.
 struct EmptyOpenRouterKeyStore: OpenRouterKeyStoring, Sendable {
-    func load() throws -> String? { nil }
-    func save(_ key: String) throws {}
-    func delete() throws {}
+    func load() async throws -> String? { nil }
+    func save(_ key: String) async throws {}
+    func delete() async throws {}
 }

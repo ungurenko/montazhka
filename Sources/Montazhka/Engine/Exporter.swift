@@ -1,8 +1,8 @@
-import Foundation
 import AVFoundation
 import AppKit
-import Observation
+import Foundation
 import OSLog
+import Observation
 
 enum ExportQuality: String, CaseIterable, Identifiable {
     case maximum, high, medium, compact
@@ -102,20 +102,68 @@ enum ExportQuality: String, CaseIterable, Identifiable {
 }
 
 /// Сохранение готового видео в MP4 с прогрессом.
+struct PreparedExport {
+    let composition: AVComposition
+    let audioMix: AVAudioMix?
+    let warning: String?
+}
+
+@MainActor
+protocol ExportPreparing {
+    func prepareExport() async throws -> PreparedExport
+}
+
+@MainActor
+protocol VideoExporting {
+    func export(
+        _ prepared: PreparedExport,
+        quality: ExportQuality,
+        to url: URL,
+        progress: @escaping @Sendable (Double) -> Void
+    ) async throws
+}
+
+@MainActor
+struct TranscodingVideoExporter: VideoExporting {
+    func export(
+        _ prepared: PreparedExport,
+        quality: ExportQuality,
+        to url: URL,
+        progress: @escaping @Sendable (Double) -> Void
+    ) async throws {
+        let input = ExportInput(composition: prepared.composition, audioMix: prepared.audioMix)
+        let settings = try await Transcoder.settings(for: quality, input: input)
+        try await Transcoder.export(
+            input: input,
+            settings: settings,
+            to: url,
+            progress: progress
+        )
+    }
+}
+
 @MainActor
 @Observable
 final class ExportModel {
     enum State: Equatable {
         case idle
+        case preparing
         case exporting
         case done(URL)
         case failed(String)
     }
 
-    var state: State = .idle
-    var progress: Double = 0
+    private(set) var state: State = .idle
+    private(set) var progress: Double = 0
+    private(set) var audioWarning: String?
 
-    private var exportTask: Task<Void, Never>?
+    @ObservationIgnored private let videoExporter: any VideoExporting
+    @ObservationIgnored private var operationTask: Task<Void, Never>?
+    @ObservationIgnored private var operationGeneration = Generation()
+
+    init(videoExporter: any VideoExporting = TranscodingVideoExporter()) {
+        self.videoExporter = videoExporter
+    }
 
     func chooseDestination(projectName: String) -> URL? {
         let panel = NSSavePanel()
@@ -126,40 +174,74 @@ final class ExportModel {
         return panel.runModal() == .OK ? panel.url : nil
     }
 
-    func export(composition: AVAsset, audioMix: AVAudioMix? = nil, quality: ExportQuality, to url: URL) {
-        state = .exporting
+    @discardableResult
+    func start(
+        preparer: any ExportPreparing,
+        quality: ExportQuality,
+        to url: URL
+    ) -> Bool {
+        guard operationTask == nil else { return false }
+        let generation = operationGeneration.advance()
+        state = .preparing
         progress = 0
+        audioWarning = nil
         let onProgress: @Sendable (Double) -> Void = { [weak self] value in
             Task { @MainActor in
-                guard let self, self.state == .exporting else { return }
+                guard let self,
+                    self.operationGeneration.isCurrent(generation),
+                    self.state == .exporting
+                else { return }
                 self.progress = value
             }
         }
-        exportTask = Task { [weak self] in
+        operationTask = Task { [weak self] in
+            guard let self else { return }
             do {
-                let input = ExportInput(composition: composition, audioMix: audioMix)
-                let settings = try await Transcoder.settings(for: quality, input: input)
-                try await Transcoder.export(input: input,
-                                            settings: settings,
-                                            to: url,
-                                            progress: onProgress)
-                guard let self, !Task.isCancelled else { return }
+                let prepared = try await preparer.prepareExport()
+                try Task.checkCancellation()
+                guard self.operationGeneration.isCurrent(generation) else { return }
+                self.audioWarning = prepared.warning
+                self.state = .exporting
+                try await self.videoExporter.export(
+                    prepared,
+                    quality: quality,
+                    to: url,
+                    progress: onProgress
+                )
+                try Task.checkCancellation()
+                guard self.operationGeneration.isCurrent(generation) else { return }
                 self.progress = 1
                 self.state = .done(url)
             } catch is CancellationError {
-                self?.state = .idle
+                guard self.operationGeneration.isCurrent(generation) else { return }
+                self.state = .idle
+                self.progress = 0
             } catch {
+                guard self.operationGeneration.isCurrent(generation) else { return }
                 Logger.export.error("Экспорт не удался: \(error.localizedDescription)")
-                self?.state = .failed("Не получилось сохранить видео: \(error.localizedDescription)")
+                self.state = .failed("Не получилось сохранить видео: \(error.localizedDescription)")
             }
-            self?.exportTask = nil
+            if self.operationGeneration.isCurrent(generation) {
+                self.operationTask = nil
+            }
         }
+        return true
     }
 
     func cancel() {
-        exportTask?.cancel()
-        exportTask = nil
+        _ = operationGeneration.advance()
+        operationTask?.cancel()
+        operationTask = nil
         state = .idle
+        progress = 0
+        audioWarning = nil
+    }
+
+    func retry() {
+        guard operationTask == nil else { return }
+        state = .idle
+        progress = 0
+        audioWarning = nil
     }
 
     func revealInFinder(_ url: URL) {

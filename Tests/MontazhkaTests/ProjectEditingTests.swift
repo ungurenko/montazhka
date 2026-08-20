@@ -1,7 +1,9 @@
-import XCTest
 import MontazhkaCore
+import Testing
 
-final class ProjectEditingTests: XCTestCase {
+@Suite
+struct ProjectEditingTests {
+    @Test
     func testCommandsChangeDocumentAndUndoRestoresWholeSnapshot() {
         var editor = ProjectEditor(project: Project(name: "Черновик"))
         var music = MusicSettings()
@@ -10,11 +12,11 @@ final class ProjectEditingTests: XCTestCase {
 
         editor.apply(.updateMusic(music))
         editor.apply(.rename("Готово"))
-        XCTAssertEqual(editor.project.name, "Готово")
-        XCTAssertEqual(editor.project.music.volume, 35)
+        #expect((editor.project.name) == ("Готово"))
+        #expect((editor.project.music.volume) == (35))
 
-        XCTAssertEqual(editor.undo()?.name, "Черновик")
-        XCTAssertEqual(editor.project.music, music)
-        XCTAssertEqual(editor.undo()?.music, MusicSettings())
+        #expect((editor.undo()?.name) == ("Черновик"))
+        #expect((editor.project.music) == (music))
+        #expect((editor.undo()?.music) == (MusicSettings()))
     }
 }

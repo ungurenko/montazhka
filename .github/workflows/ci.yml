@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: macos-15-intel
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Select Xcode
+        run: sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer
+
+      - name: Install pinned tools
+        run: ./scripts/bootstrap-tools.sh
+
+      - name: Lint
+        run: ./scripts/lint.sh
+
+      - name: Swift Testing
+        run: ./scripts/test.sh
+
+      - name: Generate Xcode project
+        run: |
+          .tools/xcodegen generate
+          ./scripts/verify-config.sh
+          git diff --exit-code -- Resources/Info.plist
+
+      - name: Xcode UI tests
+        run: >-
+          xcodebuild
+          -project Montazhka.xcodeproj
+          -scheme Montazhka
+          -destination 'platform=macOS'
+          -skipPackagePluginValidation
+          test
+
+      - name: Universal ad-hoc app
+        run: ./scripts/build-app.sh --universal --adhoc
+
+      - name: Verify architectures and signature
+        run: |
+          test "$(lipo -archs 'build.noindex/Монтажка.app/Contents/MacOS/Montazhka')" = "x86_64 arm64" || \
+            test "$(lipo -archs 'build.noindex/Монтажка.app/Contents/MacOS/Montazhka')" = "arm64 x86_64"
+          codesign --verify --deep --strict --verbose=2 'build.noindex/Монтажка.app'
+          MONTAZHKA_SELFTEST_TIMEOUT=120 'build.noindex/Монтажка.app/Contents/MacOS/Montazhka' --selftest

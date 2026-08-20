@@ -1,6 +1,7 @@
 import MontazhkaCore
 
 typealias MediaReference = MontazhkaCore.MediaReference
+typealias MediaAccessLease = MontazhkaCore.MediaAccessLease
 typealias Clip = MontazhkaCore.Clip
 typealias DetectionSettings = MontazhkaCore.DetectionSettings
 typealias VoiceEnhanceSettings = MontazhkaCore.VoiceEnhanceSettings

@@ -1,10 +1,13 @@
 import Foundation
+import Testing
 import UniformTypeIdentifiers
-import XCTest
-@testable import Montazhka
 
-final class DroppedVideoLoaderTests: XCTestCase {
+@testable import MontazhkaKit
+
+@Suite
+struct DroppedVideoLoaderTests {
     @MainActor
+    @Test
     func testLoaderPreservesProviderOrderAndSkipsNonVideo() async {
         let first = URL(fileURLWithPath: "/tmp/first.mov")
         let ignored = URL(fileURLWithPath: "/tmp/notes.txt")
@@ -15,6 +18,6 @@ final class DroppedVideoLoaderTests: XCTestCase {
 
         let urls = await DroppedVideoLoader.load(from: providers)
 
-        XCTAssertEqual(urls, [first, second])
+        #expect((urls) == ([first, second]))
     }
 }

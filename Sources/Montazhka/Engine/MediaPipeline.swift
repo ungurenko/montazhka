@@ -1,5 +1,5 @@
-import Foundation
 import AVFoundation
+import Foundation
 
 enum MediaRenderMode: Sendable {
     case preview
@@ -57,9 +57,10 @@ actor MediaPipeline {
             music: music
         )
         warnings.append(contentsOf: built.warnings)
-        return MediaRenderResult(composition: built.composition,
-                                 audioMix: built.audioMix,
-                                 warnings: warnings)
+        return MediaRenderResult(
+            composition: built.composition,
+            audioMix: built.audioMix,
+            warnings: warnings)
     }
 
     private func uniqueSources(_ clips: [Clip]) -> [MediaReference] {
@@ -67,8 +68,10 @@ actor MediaPipeline {
         return clips.compactMap { seen.insert($0.source.id).inserted ? $0.source : nil }
     }
 
-    private func resolveMusic(settings: MusicSettings,
-                              warnings: inout [CompositionWarning]) async -> MusicInput? {
+    private func resolveMusic(
+        settings: MusicSettings,
+        warnings: inout [CompositionWarning]
+    ) async -> MusicInput? {
         guard settings.enabled else { return nil }
         let url: URL?
         let name: String

@@ -1,5 +1,5 @@
-import Foundation
 import CryptoKit
+import Foundation
 
 enum SmartEditModel: String, CaseIterable, Codable, Sendable {
     case qwen = "qwen/qwen3.7-flash"
@@ -75,7 +75,8 @@ enum ReasoningChoice: Hashable, Identifiable, Sendable {
 
     static func saved(key: String) -> ReasoningChoice {
         guard let raw = UserDefaults.standard.string(forKey: key), raw != "auto",
-              let effort = ReasoningEffort(rawValue: raw) else { return .auto }
+            let effort = ReasoningEffort(rawValue: raw)
+        else { return .auto }
         return .effort(effort)
     }
 
@@ -217,8 +218,10 @@ enum SmartEditRanges {
 }
 
 enum SmartEditSelection {
-    static func shouldEnable(kind: SmartEditKind, confidence: Double,
-                             hasSafeBoundary: Bool) -> Bool {
+    static func shouldEnable(
+        kind: SmartEditKind, confidence: Double,
+        hasSafeBoundary: Bool
+    ) -> Bool {
         hasSafeBoundary && confidence >= 0.90 && kind.mayEnableAutomatically
     }
 }
@@ -226,9 +229,9 @@ enum SmartEditSelection {
 enum SmartEditPlatform {
     static var isSupported: Bool {
         #if arch(arm64)
-        true
+            true
         #else
-        false
+            false
         #endif
     }
 }

@@ -34,11 +34,13 @@ public enum TimelineOps {
         switch edge {
         case .start:
             guard sourceTime > clip.start,
-                  sourceTime <= clip.end - minimumDuration else { return clips }
+                sourceTime <= clip.end - minimumDuration
+            else { return clips }
             clip.start = sourceTime
         case .end:
             guard sourceTime < clip.end,
-                  sourceTime >= clip.start + minimumDuration else { return clips }
+                sourceTime >= clip.start + minimumDuration
+            else { return clips }
             clip.end = sourceTime
         }
         var result = clips

@@ -1,5 +1,5 @@
-import SwiftUI
 import AppKit
+import SwiftUI
 import UniformTypeIdentifiers
 
 /// Панель фоновой музыки: тумблер, список встроенных мелодий, свой файл, громкость.
@@ -51,9 +51,11 @@ struct MusicPanel: View {
                 .tint(Theme.accent)
                 .font(.system(size: 14, weight: .semibold, design: .rounded))
                 .foregroundStyle(Theme.textPrimary)
-            Text("Мелодия тихо играет под голосом всё видео: повторяется по кругу и плавно затихает в конце. Слышно сразу в предпросмотре.")
-                .font(.system(size: 11))
-                .foregroundStyle(Theme.textSecondary)
+            Text(
+                "Мелодия тихо играет под голосом всё видео: повторяется по кругу и плавно затихает в конце. Слышно сразу в предпросмотре."
+            )
+            .font(.system(size: 11))
+            .foregroundStyle(Theme.textSecondary)
         }
     }
 
@@ -70,8 +72,10 @@ struct MusicPanel: View {
             }
 
             ForEach(MusicLibrary.tracks) { track in
-                TrackRow(title: track.title,
-                         selected: settings.customPath == nil && settings.trackID == track.id) {
+                TrackRow(
+                    title: track.title,
+                    selected: settings.customPath == nil && settings.trackID == track.id
+                ) {
                     settings.customPath = nil
                     settings.trackID = track.id
                 }
@@ -124,9 +128,11 @@ struct MusicPanel: View {
                 .toggleStyle(.checkbox)
                 .font(.system(size: 13, weight: .semibold, design: .rounded))
                 .foregroundStyle(Theme.textPrimary)
-            Text("Приглушает в музыке частоты, на которых звучит речь, и верхние частоты. Голос слышно чётче. Без галочки музыка играет как в оригинале.")
-                .font(.system(size: 11))
-                .foregroundStyle(Theme.textSecondary)
+            Text(
+                "Приглушает в музыке частоты, на которых звучит речь, и верхние частоты. Голос слышно чётче. Без галочки музыка играет как в оригинале."
+            )
+            .font(.system(size: 11))
+            .foregroundStyle(Theme.textSecondary)
             if controller.musicProcessing {
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.small)

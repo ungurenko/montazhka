@@ -1,6 +1,6 @@
-import Foundation
 import AVFoundation
 import CoreVideo
+import Foundation
 
 /// Генерирует настоящий видеофайл (чёрные кадры + звук «речь/тишина») для тестов движка.
 enum TestVideoFactory {
@@ -11,25 +11,29 @@ enum TestVideoFactory {
 
     /// Участки звука с точной громкостью: (длительность сек, амплитуда синуса 0…1).
     /// `toneFrequency` — частота синуса в Гц (по умолчанию 220, «голосовая»).
-    static func make(segments: [(duration: Double, amplitude: Double)],
-                     toneFrequency: Double = 220,
-                     to url: URL) async throws {
+    static func make(
+        segments: [(duration: Double, amplitude: Double)],
+        toneFrequency: Double = 220,
+        to url: URL
+    ) async throws {
         try? FileManager.default.removeItem(at: url)
         let writer = try AVAssetWriter(outputURL: url, fileType: .mov)
 
         // Видео: 320x180, 10 к/с, чёрные кадры
-        let videoInput = AVAssetWriterInput(mediaType: .video, outputSettings: [
-            AVVideoCodecKey: AVVideoCodecType.h264,
-            AVVideoWidthKey: 320,
-            AVVideoHeightKey: 180
-        ])
+        let videoInput = AVAssetWriterInput(
+            mediaType: .video,
+            outputSettings: [
+                AVVideoCodecKey: AVVideoCodecType.h264,
+                AVVideoWidthKey: 320,
+                AVVideoHeightKey: 180,
+            ])
         videoInput.expectsMediaDataInRealTime = false
         let adaptor = AVAssetWriterInputPixelBufferAdaptor(
             assetWriterInput: videoInput,
             sourcePixelBufferAttributes: [
                 kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
                 kCVPixelBufferWidthKey as String: 320,
-                kCVPixelBufferHeightKey as String: 180
+                kCVPixelBufferHeightKey as String: 180,
             ]
         )
         writer.add(videoInput)
@@ -48,12 +52,14 @@ enum TestVideoFactory {
             mReserved: 0
         )
         var formatDesc: CMAudioFormatDescription?
-        CMAudioFormatDescriptionCreate(allocator: nil, asbd: &asbd,
-                                       layoutSize: 0, layout: nil,
-                                       magicCookieSize: 0, magicCookie: nil,
-                                       extensions: nil, formatDescriptionOut: &formatDesc)
-        let audioInput = AVAssetWriterInput(mediaType: .audio, outputSettings: nil,
-                                            sourceFormatHint: formatDesc)
+        CMAudioFormatDescriptionCreate(
+            allocator: nil, asbd: &asbd,
+            layoutSize: 0, layout: nil,
+            magicCookieSize: 0, magicCookie: nil,
+            extensions: nil, formatDescriptionOut: &formatDesc)
+        let audioInput = AVAssetWriterInput(
+            mediaType: .audio, outputSettings: nil,
+            sourceFormatHint: formatDesc)
         audioInput.expectsMediaDataInRealTime = false
         writer.add(audioInput)
 
@@ -126,9 +132,11 @@ enum TestVideoFactory {
                         continuation.resume()
                         return
                     }
-                    io.adaptor.append(io.frame,
-                                      withPresentationTime: CMTime(seconds: state.frameTime,
-                                                                   preferredTimescale: 600))
+                    io.adaptor.append(
+                        io.frame,
+                        withPresentationTime: CMTime(
+                            seconds: state.frameTime,
+                            preferredTimescale: 600))
                     state.frameTime += 0.1
                 }
             }
@@ -149,19 +157,23 @@ enum TestVideoFactory {
         }
     }
 
-    private static func makeAudioSampleBuffer(samples: [Int16],
-                                              formatDesc: CMAudioFormatDescription) throws -> CMSampleBuffer {
+    private static func makeAudioSampleBuffer(
+        samples: [Int16],
+        formatDesc: CMAudioFormatDescription
+    ) throws -> CMSampleBuffer {
         let dataLength = samples.count * 2
         var blockBuffer: CMBlockBuffer?
-        CMBlockBufferCreateWithMemoryBlock(allocator: nil, memoryBlock: nil,
-                                           blockLength: dataLength, blockAllocator: nil,
-                                           customBlockSource: nil, offsetToData: 0,
-                                           dataLength: dataLength, flags: 0,
-                                           blockBufferOut: &blockBuffer)
+        CMBlockBufferCreateWithMemoryBlock(
+            allocator: nil, memoryBlock: nil,
+            blockLength: dataLength, blockAllocator: nil,
+            customBlockSource: nil, offsetToData: 0,
+            dataLength: dataLength, flags: 0,
+            blockBufferOut: &blockBuffer)
         guard let block = blockBuffer else { throw NSError(domain: "test", code: 3) }
         _ = samples.withUnsafeBytes {
-            CMBlockBufferReplaceDataBytes(with: $0.baseAddress!, blockBuffer: block,
-                                          offsetIntoDestination: 0, dataLength: dataLength)
+            CMBlockBufferReplaceDataBytes(
+                with: $0.baseAddress!, blockBuffer: block,
+                offsetIntoDestination: 0, dataLength: dataLength)
         }
         var sampleBuffer: CMSampleBuffer?
         CMAudioSampleBufferCreateReadyWithPacketDescriptions(

@@ -165,15 +165,17 @@ struct SmartEditPanel: View {
 
             keyControls
 
-            Label("В OpenRouter уходит текст расшифровки — он может содержать произнесённые личные данные. Звук, видео и пути файлов остаются на Mac.",
-                  systemImage: "lock.shield.fill")
-                .font(.system(size: 10.5))
-                .foregroundStyle(Theme.textSecondary)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(10)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Theme.background)
-                .clipShape(RoundedRectangle(cornerRadius: Theme.radiusSmall, style: .continuous))
+            Label(
+                "В OpenRouter уходит текст расшифровки — он может содержать произнесённые личные данные. Звук, видео и пути файлов остаются на Mac.",
+                systemImage: "lock.shield.fill"
+            )
+            .font(.system(size: 10.5))
+            .foregroundStyle(Theme.textSecondary)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Theme.background)
+            .clipShape(RoundedRectangle(cornerRadius: Theme.radiusSmall, style: .continuous))
 
             if !SmartEditPlatform.isSupported {
                 Label("Умный монтаж доступен на Mac с Apple Silicon.", systemImage: "cpu")
@@ -199,7 +201,9 @@ struct SmartEditPanel: View {
                     Button("Проверить ключ") { Task { await controller.validateSavedOpenRouterKey() } }
                     Button("Заменить ключ") { replacingKey = true }
                     Divider()
-                    Button("Удалить ключ", role: .destructive) { controller.deleteOpenRouterKey() }
+                    Button("Удалить ключ", role: .destructive) {
+                        Task { await controller.deleteOpenRouterKey() }
+                    }
                 } label: {
                     Label("Настроить", systemImage: "ellipsis.circle")
                         .font(.system(size: 10.5, weight: .medium))
@@ -227,7 +231,9 @@ struct SmartEditPanel: View {
                     }
                     .disabled(keyInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isCheckingKey)
                     if replacingKey {
-                        Button("Отмена") { keyInput = ""; replacingKey = false }
+                        Button("Отмена") {
+                            keyInput = ""; replacingKey = false
+                        }
                     }
                 }
                 keyStatusText
@@ -283,8 +289,9 @@ struct SmartEditPanel: View {
             }
             .buttonStyle(.borderedProminent)
             .tint(Theme.accent)
-            .disabled(controller.openRouterKeyStatus != .saved ||
-                      controller.project.clips.isEmpty || !SmartEditPlatform.isSupported)
+            .disabled(
+                controller.openRouterKeyStatus != .saved || controller.project.clips.isEmpty
+                    || !SmartEditPlatform.isSupported)
         }
     }
 
@@ -383,18 +390,22 @@ struct SmartEditPanel: View {
                 .background(Theme.danger.opacity(0.07))
                 .clipShape(RoundedRectangle(cornerRadius: Theme.radiusSmall, style: .continuous))
         } else if controller.smartEditStatus == .ready && controller.smartEditCandidates.isEmpty {
-            Label("Речь уже звучит чисто — надёжных вырезок не нашёл",
-                  systemImage: "checkmark.seal.fill")
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(Theme.textSecondary)
-                .fixedSize(horizontal: false, vertical: true)
+            Label(
+                "Речь уже звучит чисто — надёжных вырезок не нашёл",
+                systemImage: "checkmark.seal.fill"
+            )
+            .font(.system(size: 12, weight: .medium))
+            .foregroundStyle(Theme.textSecondary)
+            .fixedSize(horizontal: false, vertical: true)
         } else if !controller.smartEditCandidates.isEmpty {
             let obvious = controller.smartEditCandidates.filter { $0.kind != .semanticRepeat }
             let semantic = controller.smartEditCandidates.filter { $0.kind == .semanticRepeat }
             VStack(alignment: .leading, spacing: 12) {
                 HStack {
-                    Text("\(controller.smartEditCandidates.count) предложений · экономия \(TimeFormat.spoken(selectedDuration))")
-                        .font(.system(size: 11, weight: .semibold))
+                    Text(
+                        "\(controller.smartEditCandidates.count) предложений · экономия \(TimeFormat.spoken(selectedDuration))"
+                    )
+                    .font(.system(size: 11, weight: .semibold))
                     Spacer()
                     if !obvious.isEmpty {
                         Button(obvious.allSatisfy(\.enabled) ? "Снять явные" : "Выбрать явные") {
@@ -419,10 +430,12 @@ struct SmartEditPanel: View {
 
     private func candidateRow(_ candidate: SmartEditCandidate) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            Toggle(isOn: Binding(
-                get: { controller.smartEditCandidates.first(where: { $0.id == candidate.id })?.enabled ?? false },
-                set: { _ in controller.toggleSmartEditCandidate(candidate.id) }
-            )) {
+            Toggle(
+                isOn: Binding(
+                    get: { controller.smartEditCandidates.first(where: { $0.id == candidate.id })?.enabled ?? false },
+                    set: { _ in controller.toggleSmartEditCandidate(candidate.id) }
+                )
+            ) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(candidate.originalText)
                         .font(.system(size: 11, weight: .medium))

@@ -18,15 +18,12 @@ final class OpenRouterKeyManager {
         status = .checking
         let store = self.store
         refreshTask = Task { [weak self] in
-            let result = await Task.detached(priority: .utility) {
-                do {
-                    return try store.load() == nil
-                        ? OpenRouterKeyStatus.missing
-                        : OpenRouterKeyStatus.saved
-                } catch {
-                    return OpenRouterKeyStatus.failed(error.localizedDescription)
-                }
-            }.value
+            let result: OpenRouterKeyStatus
+            do {
+                result = try await store.load() == nil ? .missing : .saved
+            } catch {
+                result = .failed(error.localizedDescription)
+            }
             guard !Task.isCancelled else { return }
             self?.status = result
         }
@@ -41,7 +38,7 @@ final class OpenRouterKeyManager {
         status = .checking
         do {
             try await OpenRouterClient().validateKey(trimmed)
-            try store.save(trimmed)
+            try await store.save(trimmed)
             status = .saved
         } catch {
             status = .failed(error.localizedDescription)
@@ -50,7 +47,7 @@ final class OpenRouterKeyManager {
 
     func validateSaved() async {
         do {
-            guard let key = try store.load() else {
+            guard let key = try await store.load() else {
                 status = .missing
                 return
             }
@@ -62,9 +59,9 @@ final class OpenRouterKeyManager {
         }
     }
 
-    func delete() -> Bool {
+    func delete() async -> Bool {
         do {
-            try store.delete()
+            try await store.delete()
             status = .missing
             return true
         } catch {
@@ -73,7 +70,7 @@ final class OpenRouterKeyManager {
         }
     }
 
-    func load() throws -> String? { try store.load() }
+    func load() async throws -> String? { try await store.load() }
 
     func cancel() {
         refreshTask?.cancel()

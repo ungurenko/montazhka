@@ -1,5 +1,5 @@
-import Foundation
 import AVFoundation
+import Foundation
 import Observation
 
 /// Самопроверка движка: математика ленты, извлечение волны, поиск пауз, склейка, экспорт.
@@ -24,10 +24,11 @@ enum SelfTest {
     /// Главный поток остаётся крутить цикл событий (нужен системным колбэкам),
     /// а тесты по завершении сами выходят из процесса.
     static func run() -> Never {
-        setvbuf(stdout, nil, _IONBF, 0) // вывод без буферизации — виден сразу
+        setvbuf(stdout, nil, _IONBF, 0)  // вывод без буферизации — виден сразу
         // Сторожевой таймер: молчаливое зависание — тоже провал.
         // Таймаут можно переопределить: MONTAZHKA_SELFTEST_TIMEOUT=<секунды>.
-        let timeout = ProcessInfo.processInfo.environment["MONTAZHKA_SELFTEST_TIMEOUT"]
+        let timeout =
+            ProcessInfo.processInfo.environment["MONTAZHKA_SELFTEST_TIMEOUT"]
             .flatMap(UInt64.init) ?? 120
         Task.detached {
             try? await Task.sleep(nanoseconds: timeout * 1_000_000_000)
@@ -85,7 +86,7 @@ enum SelfTest {
         Task.detached {
             do {
                 let segments: [(duration: Double, loud: Bool)] = [
-                    (3.0, true), (2.0, false), (3.0, true), (1.5, false), (2.5, true)
+                    (3.0, true), (2.0, false), (3.0, true), (1.5, false), (2.5, true),
                 ]
                 try await TestVideoFactory.make(segments: segments, to: URL(fileURLWithPath: path))
                 print("✓ демо-видео: \(path)")
@@ -109,35 +110,40 @@ enum SelfTest {
 
         // Вырезка из середины делит клип на два
         var result = TimelineOps.removingRange(clips: [clip(0, 10)], start: 3, end: 5)
-        check(result.count == 2
-              && approx(result[0].end, 3, 0.001)
-              && approx(result[1].start, 5, 0.001),
-              "вырезка из середины делит клип на два")
+        check(
+            result.count == 2
+                && approx(result[0].end, 3, 0.001)
+                && approx(result[1].start, 5, 0.001),
+            "вырезка из середины делит клип на два")
 
         // Вырезка через границу двух клипов
         result = TimelineOps.removingRange(clips: [clip(0, 4), clip(0, 6)], start: 3, end: 6)
         let total = result.reduce(0) { $0 + $1.duration }
-        check(result.count == 2 && approx(total, 7, 0.001),
-              "вырезка через границу клипов сохраняет остаток (7 сек)")
+        check(
+            result.count == 2 && approx(total, 7, 0.001),
+            "вырезка через границу клипов сохраняет остаток (7 сек)")
 
         // Вырезка целого клипа
         result = TimelineOps.removingRange(clips: [clip(0, 4), clip(0, 6)], start: 0, end: 4)
-        check(result.count == 1 && approx(result[0].duration, 6, 0.001),
-              "вырезка целого клипа убирает его совсем")
+        check(
+            result.count == 1 && approx(result[0].duration, 6, 0.001),
+            "вырезка целого клипа убирает его совсем")
 
         let layoutClips = [clip(0, 2), clip(4, 7), clip(10, 14)]
         let layout = TimelineLayout(clips: layoutClips)
-        check(layout.items.map(\.start) == [0, 2, 5]
-              && layout.items.map(\.clip.id) == layoutClips.map(\.id)
-              && approx(layout.duration, 9, 0.001),
-              "раскладка ленты одним проходом сохраняет порядок и начала")
+        check(
+            layout.items.map(\.start) == [0, 2, 5]
+                && layout.items.map(\.clip.id) == layoutClips.map(\.id)
+                && approx(layout.duration, 9, 0.001),
+            "раскладка ленты одним проходом сохраняет порядок и начала")
 
         let sharedSource = MediaReference(path: "/tmp/shared.mov")
         let repeated = (0..<78).map { index in
             Clip(source: sharedSource, start: Double(index), end: Double(index + 1))
         }
-        check(uniqueMediaSources(in: repeated).map(\.id) == [sharedSource.id],
-              "78 фрагментов одного файла дают одну проверку исходника")
+        check(
+            uniqueMediaSources(in: repeated).map(\.id) == [sharedSource.id],
+            "78 фрагментов одного файла дают одну проверку исходника")
 
         let availableURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("montazhka-available-\(UUID().uuidString).mov")
@@ -147,41 +153,45 @@ enum SelfTest {
         let mixedSources = uniqueMediaSources(in: [
             Clip(source: availableSource, start: 0, end: 1),
             Clip(source: missingSource, start: 0, end: 1),
-            Clip(source: missingSource, start: 1, end: 2)
+            Clip(source: missingSource, start: 1, end: 2),
         ])
         let missing = unavailableMediaSources(mixedSources)
-        let paths = resolvedMediaPaths(mixedSources)
-        check(missing.map(\.id) == [missingSource.id]
-              && paths == [availableURL.path],
-              "проверка путей в фоне пропускает доступный и объединяет отсутствующий исходник")
+        let paths = mixedSources.compactMap { $0.resolvedURL?.path }
+        check(
+            missing.map(\.id) == [missingSource.id]
+                && paths == [availableURL.path],
+            "проверка путей в фоне пропускает доступный и объединяет отсутствующий исходник")
         try? FileManager.default.removeItem(at: availableURL)
 
         var sourceCheckGeneration = Generation()
         let staleCheck = sourceCheckGeneration.advance()
         let currentCheck = sourceCheckGeneration.advance()
-        check(!sourceCheckGeneration.isCurrent(staleCheck)
-              && sourceCheckGeneration.isCurrent(currentCheck),
-              "поздний результат проверки исходников не заменяет новое состояние")
+        check(
+            !sourceCheckGeneration.isCurrent(staleCheck)
+                && sourceCheckGeneration.isCurrent(currentCheck),
+            "поздний результат проверки исходников не заменяет новое состояние")
 
         // Разрез
         let sourceClip = clip(2, 12)
         if let split = TimelineOps.splitting(clips: [sourceClip], at: 0, offset: 4) {
-            check(split.count == 2
-                  && split[0].id != split[1].id
-                  && split[0].id == sourceClip.id
-                  && approx(split[0].start, 2, 0.001)
-                  && approx(split[0].duration, 4, 0.001)
-                  && approx(split[0].end, 6, 0.001)
-                  && approx(split[1].start, 6, 0.001)
-                  && approx(split[1].duration, 6, 0.001)
-                  && approx(split[1].end, 12, 0.001)
-                  && approx(split[0].duration + split[1].duration, sourceClip.duration, 0.001),
-                  "разрез даёт два самостоятельных куска с точными границами")
+            check(
+                split.count == 2
+                    && split[0].id != split[1].id
+                    && split[0].id == sourceClip.id
+                    && approx(split[0].start, 2, 0.001)
+                    && approx(split[0].duration, 4, 0.001)
+                    && approx(split[0].end, 6, 0.001)
+                    && approx(split[1].start, 6, 0.001)
+                    && approx(split[1].duration, 6, 0.001)
+                    && approx(split[1].end, 12, 0.001)
+                    && approx(split[0].duration + split[1].duration, sourceClip.duration, 0.001),
+                "разрез даёт два самостоятельных куска с точными границами")
         } else {
             check(false, "разрез даёт два куска без потери длительности")
         }
-        check(TimelineOps.splitting(clips: [clip(0, 10)], at: 0, offset: 0.01) == nil,
-              "разрез у самого края отклоняется")
+        check(
+            TimelineOps.splitting(clips: [clip(0, 10)], at: 0, offset: 0.01) == nil,
+            "разрез у самого края отклоняется")
     }
 
     private final class ObservationProbe: @unchecked Sendable {
@@ -195,9 +205,10 @@ enum SelfTest {
             let root = FileManager.default.temporaryDirectory
                 .appendingPathComponent("montazhka-observation-\(UUID().uuidString)", isDirectory: true)
             defer { try? FileManager.default.removeItem(at: root) }
-            let controller = EditorController(project: Project(name: "Observation"),
-                                              store: ProjectStore(baseDirectory: root),
-                                              openRouterKeyStore: EmptyOpenRouterKeyStore())
+            let controller = EditorController(
+                project: Project(name: "Observation"),
+                store: ProjectStore(baseDirectory: root),
+                openRouterKeyStore: EmptyOpenRouterKeyStore())
             let probe = ObservationProbe()
 
             withObservationTracking {
@@ -215,8 +226,9 @@ enum SelfTest {
             await controller.shutdown()
             return (playback: probe.playbackChanged, project: probe.projectChanged)
         }.value
-        check(result.playback && !result.project,
-              "время воспроизведения обновляется без инвалидации проекта")
+        check(
+            result.playback && !result.project,
+            "время воспроизведения обновляется без инвалидации проекта")
     }
 
     private static func testMissingSourceInvalidation() async {
@@ -225,19 +237,22 @@ enum SelfTest {
                 .appendingPathComponent("montazhka-missing-race-\(UUID().uuidString)", isDirectory: true)
             let missing = MediaReference(path: "/tmp/montazhka-stale-\(UUID().uuidString).mov")
             let clip = Clip(source: missing, start: 0, end: 1)
-            let controller = EditorController(project: Project(name: "Гонка", clips: [clip]),
-                                              store: ProjectStore(baseDirectory: root),
-                                              openRouterKeyStore: EmptyOpenRouterKeyStore())
+            let controller = EditorController(
+                project: Project(name: "Гонка", clips: [clip]),
+                store: ProjectStore(baseDirectory: root),
+                openRouterKeyStore: EmptyOpenRouterKeyStore())
             controller.deleteClip(id: clip.id)
             try? await Task.sleep(nanoseconds: 100_000_000)
-            let isClean = controller.missingSources.isEmpty
+            let isClean =
+                controller.missingSources.isEmpty
                 && controller.missingFilesMessage == nil
             await controller.shutdown()
             try? FileManager.default.removeItem(at: root)
             return isClean
         }.value
-        check(result,
-              "поздняя проверка удалённого исходника не возвращает предупреждение")
+        check(
+            result,
+            "поздняя проверка удалённого исходника не возвращает предупреждение")
     }
 
     private static func testProjectListing() async {
@@ -246,22 +261,24 @@ enum SelfTest {
             .appendingPathComponent("montazhka-listing-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let store = ProjectStore(baseDirectory: root)
-        let valid = Project(name: "Исправный", clips: [
-            Clip(sourcePath: "/tmp/video.mov", start: 2, end: 7)
-        ])
+        let valid = Project(
+            name: "Исправный",
+            clips: [
+                Clip(sourcePath: "/tmp/video.mov", start: 2, end: 7)
+            ])
         let legacyID = UUID()
 
         do {
             try await store.save(valid)
             let legacy = """
-            {
-              "id":"\(legacyID.uuidString)",
-              "name":"Старый проект",
-              "clips":[],
-              "createdAt":"2026-01-01T00:00:00Z",
-              "updatedAt":"2026-01-01T00:00:00Z"
-            }
-            """
+                {
+                  "id":"\(legacyID.uuidString)",
+                  "name":"Старый проект",
+                  "clips":[],
+                  "createdAt":"2026-01-01T00:00:00Z",
+                  "updatedAt":"2026-01-01T00:00:00Z"
+                }
+                """
             try Data(legacy.utf8).write(
                 to: store.projectsDir.appendingPathComponent("legacy.json")
             )
@@ -269,17 +286,18 @@ enum SelfTest {
                 to: store.projectsDir.appendingPathComponent("damaged.json")
             )
             let newer = """
-            {"id":"\(UUID().uuidString)","schemaVersion":999,"name":"Из будущего","clips":[]}
-            """
+                {"id":"\(UUID().uuidString)","schemaVersion":999,"name":"Из будущего","clips":[]}
+                """
             try Data(newer.utf8).write(
                 to: store.projectsDir.appendingPathComponent("newer.json")
             )
 
             let listing = try await store.listProjects()
-            check(Set(listing.projects.map(\.id)) == Set([valid.id, legacyID])
-                  && listing.projects.first?.duration == 5
-                  && listing.issues.count == 2,
-                  "фоновый список сохраняет текущую, старую, новую и повреждённую схемы")
+            check(
+                Set(listing.projects.map(\.id)) == Set([valid.id, legacyID])
+                    && listing.projects.first?.duration == 5
+                    && listing.issues.count == 2,
+                "фоновый список сохраняет текущую, старую, новую и повреждённую схемы")
         } catch {
             check(false, "фоновый список сохраняет текущую, старую, новую и повреждённую схемы")
         }
@@ -292,8 +310,9 @@ enum SelfTest {
         var history = EditHistory<Int>(limit: 3)
 
         check(!history.canUndo && !history.canRedo, "новая история пуста")
-        check(history.undo(current: 0) == nil && history.redo(current: 0) == nil,
-              "отмена и повтор на пустой истории ничего не возвращают")
+        check(
+            history.undo(current: 0) == nil && history.redo(current: 0) == nil,
+            "отмена и повтор на пустой истории ничего не возвращают")
 
         // Правки: 1 → 2 → 3 (record сохраняет состояние ДО правки)
         history.record(1)
@@ -303,8 +322,9 @@ enum SelfTest {
         let undone = history.undo(current: 3)
         check(undone == 2 && history.canRedo, "отмена возвращает предыдущий снимок (2)")
         check(history.undo(current: 2) == 1, "вторая отмена возвращает первый снимок (1)")
-        check(history.redo(current: 1) == 2 && history.redo(current: 2) == 3,
-              "повтор проходит цепочку обратно (2, затем 3)")
+        check(
+            history.redo(current: 1) == 2 && history.redo(current: 2) == 3,
+            "повтор проходит цепочку обратно (2, затем 3)")
         check(!history.canRedo, "после полного повтора повторять нечего")
 
         // Новая правка сбрасывает ветку повтора
@@ -315,9 +335,10 @@ enum SelfTest {
         // Лимит: старые снимки вытесняются
         var capped = EditHistory<Int>(limit: 3)
         for value in 1...5 { capped.record(value) }
-        check(capped.undo(current: 6) == 5 && capped.undo(current: 5) == 4
-              && capped.undo(current: 4) == 3 && !capped.canUndo,
-              "лимит 3: остаются только три последних снимка")
+        check(
+            capped.undo(current: 6) == 5 && capped.undo(current: 5) == 4
+                && capped.undo(current: 4) == 3 && !capped.canUndo,
+            "лимит 3: остаются только три последних снимка")
     }
 
     // MARK: - Оценка размера экспорта
@@ -326,32 +347,42 @@ enum SelfTest {
         print("Оценка размера экспорта:")
         let fullHD = CGSize(width: 1920, height: 1080)
 
-        check(ExportQuality.compact.targetDimensions(forDisplaySize: fullHD) == CGSize(width: 1280, height: 720),
-              "компактное: 1920×1080 → 1280×720")
-        check(ExportQuality.compact.targetDimensions(forDisplaySize: CGSize(width: 1080, height: 1920))
-              == CGSize(width: 720, height: 1280),
-              "компактное: вертикальное 1080×1920 → 720×1280")
-        check(ExportQuality.medium.targetDimensions(forDisplaySize: CGSize(width: 3840, height: 2160))
-              == CGSize(width: 1920, height: 1080),
-              "среднее: 4K ужимается до Full HD")
-        check(ExportQuality.maximum.targetDimensions(forDisplaySize: CGSize(width: 3840, height: 2160))
-              == CGSize(width: 3840, height: 2160),
-              "максимальное: 4K остаётся как есть")
-        check(ExportQuality.compact.targetDimensions(forDisplaySize: CGSize(width: 320, height: 180))
-              == CGSize(width: 320, height: 180),
-              "маленькое видео не растягивается")
+        check(
+            ExportQuality.compact.targetDimensions(forDisplaySize: fullHD) == CGSize(width: 1280, height: 720),
+            "компактное: 1920×1080 → 1280×720")
+        check(
+            ExportQuality.compact.targetDimensions(forDisplaySize: CGSize(width: 1080, height: 1920))
+                == CGSize(width: 720, height: 1280),
+            "компактное: вертикальное 1080×1920 → 720×1280")
+        check(
+            ExportQuality.medium.targetDimensions(forDisplaySize: CGSize(width: 3840, height: 2160))
+                == CGSize(width: 1920, height: 1080),
+            "среднее: 4K ужимается до Full HD")
+        check(
+            ExportQuality.maximum.targetDimensions(forDisplaySize: CGSize(width: 3840, height: 2160))
+                == CGSize(width: 3840, height: 2160),
+            "максимальное: 4K остаётся как есть")
+        check(
+            ExportQuality.compact.targetDimensions(forDisplaySize: CGSize(width: 320, height: 180))
+                == CGSize(width: 320, height: 180),
+            "маленькое видео не растягивается")
         let odd = ExportQuality.medium.targetDimensions(forDisplaySize: CGSize(width: 1279, height: 717))
-        check(Int(odd.width) % 2 == 0 && Int(odd.height) % 2 == 0,
-              "стороны кадра всегда чётные (получено \(Int(odd.width))×\(Int(odd.height)))")
+        check(
+            Int(odd.width) % 2 == 0 && Int(odd.height) % 2 == 0,
+            "стороны кадра всегда чётные (получено \(Int(odd.width))×\(Int(odd.height)))")
 
-        check(ExportQuality.compact.estimatedBytes(duration: 300, displaySize: fullHD) == 81_744_000,
-              "компактное, 5 мин Full HD: 81 744 000 байт (≈ 82 МБ)")
-        check(ExportQuality.medium.estimatedBytes(duration: 300, displaySize: fullHD) == 180_492_000,
-              "среднее, 5 мин Full HD: 180 492 000 байт (≈ 180 МБ)")
-        check(ExportQuality.compact.estimateText(duration: 300, displaySize: fullHD) == "≈ 82 МБ",
-              "подпись «≈ 82 МБ»")
-        check(ExportQuality.maximum.estimateText(duration: 1200, displaySize: fullHD) == "≈ 2.5 ГБ",
-              "длинное видео подписывается в гигабайтах")
+        check(
+            ExportQuality.compact.estimatedBytes(duration: 300, displaySize: fullHD) == 81_744_000,
+            "компактное, 5 мин Full HD: 81 744 000 байт (≈ 82 МБ)")
+        check(
+            ExportQuality.medium.estimatedBytes(duration: 300, displaySize: fullHD) == 180_492_000,
+            "среднее, 5 мин Full HD: 180 492 000 байт (≈ 180 МБ)")
+        check(
+            ExportQuality.compact.estimateText(duration: 300, displaySize: fullHD) == "≈ 82 МБ",
+            "подпись «≈ 82 МБ»")
+        check(
+            ExportQuality.maximum.estimateText(duration: 1200, displaySize: fullHD) == "≈ 2.5 ГБ",
+            "длинное видео подписывается в гигабайтах")
     }
 
     /// Типы верхнеуровневых кусков MP4-файла по порядку — для проверки, что `moov`
@@ -365,12 +396,12 @@ enum SelfTest {
             for i in 0..<4 { size = size << 8 | Int(data[offset + i]) }
             guard let type = String(bytes: data[(offset + 4)..<(offset + 8)], encoding: .ascii) else { break }
             atoms.append(type)
-            if size == 1 { // 64-битный размер в следующих 8 байтах
+            if size == 1 {  // 64-битный размер в следующих 8 байтах
                 guard offset + 16 <= data.count else { break }
                 size = 0
                 for i in 8..<16 { size = size << 8 | Int(data[offset + i]) }
             } else if size == 0 {
-                break // кусок до конца файла
+                break  // кусок до конца файла
             }
             guard size >= 8 else { break }
             offset += size
@@ -384,7 +415,7 @@ enum SelfTest {
         print("Звук и экспорт (на сгенерированном видео 12 сек):")
         // Речь 0–3, тишина 3–5, речь 5–8, тишина 8–9.5, речь 9.5–12
         let segments: [(duration: Double, loud: Bool)] = [
-            (3.0, true), (2.0, false), (3.0, true), (1.5, false), (2.5, true)
+            (3.0, true), (2.0, false), (3.0, true), (1.5, false), (2.5, true),
         ]
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("montazhka-selftest-\(UUID().uuidString).mov")
@@ -413,22 +444,26 @@ enum SelfTest {
         // Поиск пауз
         let clip = Clip(sourcePath: url.path, start: 0, end: 12)
         var settings = DetectionSettings(thresholdDB: -40, minPauseDuration: 0.8, paddingMS: 150)
-        var found = SilenceDetector.findPauses(clips: [clip],
-                                               peaksFor: { store.peaks(for: $0) },
-                                               settings: settings)
+        var found = SilenceDetector.findPauses(
+            clips: [clip],
+            peaksFor: { store.peaks(for: $0) },
+            settings: settings)
         check(found.count == 2, "найдены обе паузы (найдено: \(found.count))")
         if found.count == 2 {
-            check(approx(found[0].start, 3.15, 0.3) && approx(found[0].end, 4.85, 0.3),
-                  "первая пауза на своём месте (~3.2–4.8)")
-            check(approx(found[1].start, 8.15, 0.3) && approx(found[1].end, 9.35, 0.3),
-                  "вторая пауза на своём месте (~8.2–9.3)")
+            check(
+                approx(found[0].start, 3.15, 0.3) && approx(found[0].end, 4.85, 0.3),
+                "первая пауза на своём месте (~3.2–4.8)")
+            check(
+                approx(found[1].start, 8.15, 0.3) && approx(found[1].end, 9.35, 0.3),
+                "вторая пауза на своём месте (~8.2–9.3)")
         }
 
         // Фильтр по минимальной длине
         settings.minPauseDuration = 1.8
-        found = SilenceDetector.findPauses(clips: [clip],
-                                           peaksFor: { store.peaks(for: $0) },
-                                           settings: settings)
+        found = SilenceDetector.findPauses(
+            clips: [clip],
+            peaksFor: { store.peaks(for: $0) },
+            settings: settings)
         check(found.count == 1, "минимальная длина 1.8 сек отсекает короткую паузу")
 
         // Вырезаем паузы и склеиваем: 12 − 2 − 1.5 = 8.5 сек
@@ -440,20 +475,26 @@ enum SelfTest {
         let (composition, voiceMix) = await CompositionBuilder.build(clips: clips)
         let duration = (try? await composition.load(.duration).seconds) ?? 0
         check(approx(duration, 8.5, 0.2), "длительность склейки 8.5 сек (получено \(String(format: "%.2f", duration)))")
-        check(voiceMix != nil && voiceMix?.inputParameters.count == 1,
-              "на голосовых стыках построены микрозатухания по 8 мс")
+        check(
+            voiceMix != nil && voiceMix?.inputParameters.count == 1,
+            "на голосовых стыках построены микрозатухания по 8 мс")
 
         // Экспорт собственным перекодировщиком (компактное качество)
         let out = FileManager.default.temporaryDirectory
             .appendingPathComponent("montazhka-selftest-\(UUID().uuidString).mp4")
         defer { try? FileManager.default.removeItem(at: out) }
         do {
-            let settings = try await Transcoder.settings(for: .compact,
-                                                         input: ExportInput(composition: composition,
-                                                                            audioMix: voiceMix))
-            try await Transcoder.export(input: ExportInput(composition: composition,
-                                                           audioMix: voiceMix),
-                                        settings: settings, to: out) { _ in }
+            let settings = try await Transcoder.settings(
+                for: .compact,
+                input: ExportInput(
+                    composition: composition,
+                    audioMix: voiceMix))
+            try await Transcoder.export(
+                input: ExportInput(
+                    composition: composition,
+                    audioMix: voiceMix),
+                settings: settings, to: out
+            ) { _ in }
             check(true, "экспорт завершился")
         } catch {
             check(false, "экспорт завершился (ошибка: \(error.localizedDescription))")
@@ -462,18 +503,21 @@ enum SelfTest {
 
         let exported = AVURLAsset(url: out)
         let exportedDuration = (try? await exported.load(.duration).seconds) ?? 0
-        check(approx(exportedDuration, 8.5, 0.3),
-              "длительность готового MP4 8.5 сек (получено \(String(format: "%.2f", exportedDuration)))")
+        check(
+            approx(exportedDuration, 8.5, 0.3),
+            "длительность готового MP4 8.5 сек (получено \(String(format: "%.2f", exportedDuration)))")
         let videoTracks = (try? await exported.loadTracks(withMediaType: .video)) ?? []
         let audioTracks = (try? await exported.loadTracks(withMediaType: .audio)) ?? []
         check(!videoTracks.isEmpty && !audioTracks.isEmpty, "в готовом файле есть и видео, и звук")
 
         // Размер не больше оценки с запасом (VBR может недобрать — это нормально)
-        let estimate = ExportQuality.compact.estimatedBytes(duration: 8.5,
-                                                            displaySize: CGSize(width: 320, height: 180))
+        let estimate = ExportQuality.compact.estimatedBytes(
+            duration: 8.5,
+            displaySize: CGSize(width: 320, height: 180))
         let actualSize = (try? FileManager.default.attributesOfItem(atPath: out.path)[.size] as? Int64) ?? 0
-        check(actualSize > 0 && actualSize <= Int64(Double(estimate) * 1.4),
-              "размер файла в пределах оценки (\(actualSize) байт при оценке \(estimate))")
+        check(
+            actualSize > 0 && actualSize <= Int64(Double(estimate) * 1.4),
+            "размер файла в пределах оценки (\(actualSize) байт при оценке \(estimate))")
 
         // moov раньше mdat — файл можно смотреть в мессенджере не скачивая целиком
         let atoms = topLevelAtoms(of: out)
@@ -490,7 +534,7 @@ enum SelfTest {
         print("Улучшение голоса (на сгенерированном видео 12 сек):")
         // Громкая речь / шумная «тишина» / тихая речь / шум / громкая речь
         let segments: [(duration: Double, amplitude: Double)] = [
-            (3.0, 0.4), (2.0, 0.005), (3.0, 0.1), (2.0, 0.005), (2.0, 0.4)
+            (3.0, 0.4), (2.0, 0.005), (3.0, 0.1), (2.0, 0.005), (2.0, 0.4),
         ]
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("montazhka-selftest-voice-\(UUID().uuidString).mov")
@@ -510,10 +554,9 @@ enum SelfTest {
         let settings = VoiceEnhanceSettings(enabled: true, leveling: 70, noiseReduction: 90, presence: 50)
         let outURL = cacheDir.appendingPathComponent("enhanced.caf")
         do {
-            try await Task.detached {
-                try VoiceEnhancer.render(sourcePath: url.path, settings: settings,
-                                         to: outURL, isCancelled: { false })
-            }.value
+            try await VoiceEnhancer.render(
+                sourcePath: url.path, settings: settings,
+                to: outURL, isCancelled: { false })
         } catch {
             check(false, "обработка звука (\(error))")
             return
@@ -523,13 +566,15 @@ enum SelfTest {
         // Длительность сохранилась
         let enhancedAsset = AVURLAsset(url: outURL)
         let enhancedDuration = (try? await enhancedAsset.load(.duration).seconds) ?? 0
-        check(approx(enhancedDuration, 12.0, 0.05),
-              "длительность не поплыла (получено \(String(format: "%.3f", enhancedDuration)))")
+        check(
+            approx(enhancedDuration, 12.0, 0.05),
+            "длительность не поплыла (получено \(String(format: "%.3f", enhancedDuration)))")
 
         // RMS по сегментам: волна оригинала и обработанного
         let waveStore = WaveformStore(cacheDir: cacheDir)
         guard let origPeaks = await waveStore.ensure(path: url.path),
-              let enhPeaks = await waveStore.ensure(path: outURL.path) else {
+            let enhPeaks = await waveStore.ensure(path: outURL.path)
+        else {
             check(false, "извлечение волны для сравнения")
             return
         }
@@ -539,9 +584,9 @@ enum SelfTest {
             guard b > a else { return 0 }
             return Double(peaks[a..<b].reduce(0, +)) / Double(b - a)
         }
-        let origLoud = rms(origPeaks, 0.3, 2.7)      // речь 0.4
-        let origNoise = rms(origPeaks, 3.3, 4.7)     // шум 0.005
-        let origQuiet = rms(origPeaks, 5.3, 7.7)     // тихая речь 0.1
+        let origLoud = rms(origPeaks, 0.3, 2.7)  // речь 0.4
+        let origNoise = rms(origPeaks, 3.3, 4.7)  // шум 0.005
+        let origQuiet = rms(origPeaks, 5.3, 7.7)  // тихая речь 0.1
         let enhLoud = rms(enhPeaks, 0.3, 2.7)
         let enhNoise = rms(enhPeaks, 3.3, 4.7)
         let enhQuiet = rms(enhPeaks, 5.3, 7.7)
@@ -550,13 +595,17 @@ enum SelfTest {
         if origLoud > 0, enhLoud > 0 {
             let origRatio = origNoise / origLoud
             let enhRatio = enhNoise / enhLoud
-            check(enhRatio < 0.5 * origRatio,
-                  "шум в паузах приглушён (было \(String(format: "%.4f", origRatio)), стало \(String(format: "%.4f", enhRatio)))")
+            check(
+                enhRatio < 0.5 * origRatio,
+                "шум в паузах приглушён (было \(String(format: "%.4f", origRatio)), стало \(String(format: "%.4f", enhRatio)))"
+            )
             // Выравнивание: разрыв громкой и тихой речи сократился
             let origSpread = origLoud / max(origQuiet, 0.0001)
             let enhSpread = enhLoud / max(enhQuiet, 0.0001)
-            check(enhSpread < 0.75 * origSpread,
-                  "громкость выровнена (разрыв был \(String(format: "%.2f", origSpread)), стал \(String(format: "%.2f", enhSpread)))")
+            check(
+                enhSpread < 0.75 * origSpread,
+                "громкость выровнена (разрыв был \(String(format: "%.2f", origSpread)), стал \(String(format: "%.2f", enhSpread)))"
+            )
         } else {
             check(false, "волна обработанного файла не пустая")
         }
@@ -564,57 +613,67 @@ enum SelfTest {
         // Нет клиппинга
         var filePeak: Float = 0
         if let file = try? AVAudioFile(forReading: outURL, commonFormat: .pcmFormatFloat32, interleaved: false),
-           let buf = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: 32768) {
+            let buf = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: 32768)
+        {
             while file.framePosition < file.length {
                 guard (try? file.read(into: buf)) != nil, buf.frameLength > 0,
-                      let data = buf.floatChannelData else { break }
+                    let data = buf.floatChannelData
+                else { break }
                 for ch in 0..<Int(buf.format.channelCount) {
                     for i in 0..<Int(buf.frameLength) { filePeak = max(filePeak, abs(data[ch][i])) }
                 }
             }
         }
-        check(filePeak > 0 && filePeak <= 0.99,
-              "нет перегруза (пик \(String(format: "%.3f", filePeak)))")
+        check(
+            filePeak > 0 && filePeak <= 0.99,
+            "нет перегруза (пик \(String(format: "%.3f", filePeak)))")
 
         // Кэш: первый ensure рендерит, второй отдаёт тот же файл мгновенно
         let enhanceStore = VoiceEnhanceStore(cacheDir: cacheDir)
         if let first = try? await enhanceStore.ensure(source: url.path, settings: settings) {
-            let firstMTime = (try? FileManager.default.attributesOfItem(atPath: first.path))?[.modificationDate] as? Date
+            let firstMTime =
+                (try? FileManager.default.attributesOfItem(atPath: first.path))?[.modificationDate] as? Date
             let second = try? await enhanceStore.ensure(source: url.path, settings: settings)
             let secondMTime = second.flatMap {
                 (try? FileManager.default.attributesOfItem(atPath: $0.path))?[.modificationDate] as? Date
             }
-            check(second == first && firstMTime == secondMTime,
-                  "повторная обработка берётся из кэша")
+            check(
+                second == first && firstMTime == secondMTime,
+                "повторная обработка берётся из кэша")
 
             // Склейка с улучшенным звуком: длительность верна, звук на месте
             let clip = Clip(sourcePath: url.path, start: 1.0, end: 11.0)
-            let (composition, _) = await CompositionBuilder.build(clips: [clip],
-                                                                  enhancedAudio: [url.path: first])
+            let (composition, _) = await CompositionBuilder.build(
+                clips: [clip],
+                enhancedAudio: [url.path: first])
             let compDuration = (try? await composition.load(.duration).seconds) ?? 0
             let compAudio = (try? await composition.loadTracks(withMediaType: .audio)) ?? []
             var audioDuration = 0.0
             if let audioTrack = compAudio.first,
-               let trackRange = try? await audioTrack.load(.timeRange) {
+                let trackRange = try? await audioTrack.load(.timeRange)
+            {
                 audioDuration = trackRange.duration.seconds
             }
-            check(approx(compDuration, 10.0, 0.1) && approx(audioDuration, 10.0, 0.1),
-                  "склейка с улучшенным звуком: 10 сек видео и звука (получено \(String(format: "%.2f", compDuration)) / \(String(format: "%.2f", audioDuration)))")
+            check(
+                approx(compDuration, 10.0, 0.1) && approx(audioDuration, 10.0, 0.1),
+                "склейка с улучшенным звуком: 10 сек видео и звука (получено \(String(format: "%.2f", compDuration)) / \(String(format: "%.2f", audioDuration)))"
+            )
         } else {
             check(false, "обработка через кэш-хранилище")
         }
 
         // Старые проекты без нового поля открываются
         let oldJSON = """
-        {"id":"\(UUID().uuidString)","name":"Старый проект","clips":[],
-         "createdAt":"2026-01-01T00:00:00Z","updatedAt":"2026-01-01T00:00:00Z",
-         "detection":{"thresholdDB":-40,"minPauseDuration":0.8,"paddingMS":150}}
-        """
+            {"id":"\(UUID().uuidString)","name":"Старый проект","clips":[],
+             "createdAt":"2026-01-01T00:00:00Z","updatedAt":"2026-01-01T00:00:00Z",
+             "detection":{"thresholdDB":-40,"minPauseDuration":0.8,"paddingMS":150}}
+            """
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         let decoded = try? decoder.decode(Project.self, from: Data(oldJSON.utf8))
-        check(decoded != nil && decoded?.voiceEnhance == VoiceEnhanceSettings(),
-              "старый проект без настроек голоса открывается с настройками по умолчанию")
+        check(
+            decoded != nil && decoded?.voiceEnhance == VoiceEnhanceSettings(),
+            "старый проект без настроек голоса открывается с настройками по умолчанию")
     }
 
     // MARK: - Фоновая музыка
@@ -623,7 +682,7 @@ enum SelfTest {
         print("Фоновая музыка (видео 12 сек, мелодия 3 сек):")
         // Видео: речь 0–3, тишина 3–6, речь 6–9, тишина 9–12 — в тишине слышно только музыку
         let videoSegments: [(duration: Double, amplitude: Double)] = [
-            (3.0, 0.4), (3.0, 0.0), (3.0, 0.4), (3.0, 0.0)
+            (3.0, 0.4), (3.0, 0.0), (3.0, 0.4), (3.0, 0.0),
         ]
         let videoURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("montazhka-selftest-music-video-\(UUID().uuidString).mov")
@@ -651,13 +710,16 @@ enum SelfTest {
         check(audioTracks.count == 2, "в склейке две звуковые дорожки (получено \(audioTracks.count))")
         var musicCoverage = 0.0
         if audioTracks.count == 2,
-           let range = try? await audioTracks[1].load(.timeRange) {
+            let range = try? await audioTracks[1].load(.timeRange)
+        {
             musicCoverage = (range.start + range.duration).seconds
         }
-        check(approx(musicCoverage, 12.0, 0.1),
-              "музыка по кругу покрывает всё видео (получено \(String(format: "%.2f", musicCoverage)))")
-        check(audioMix != nil && audioMix?.inputParameters.count == 1,
-              "микс громкости построен для музыкальной дорожки")
+        check(
+            approx(musicCoverage, 12.0, 0.1),
+            "музыка по кругу покрывает всё видео (получено \(String(format: "%.2f", musicCoverage)))")
+        check(
+            audioMix != nil && audioMix?.inputParameters.count == 1,
+            "микс громкости построен для музыкальной дорожки")
 
         // Экспорт с музыкой и без — в «тишине» музыкальная версия заметно громче.
         // Идёт через собственный перекодировщик: заодно проверяем, что микс музыки
@@ -666,11 +728,15 @@ enum SelfTest {
             let out = FileManager.default.temporaryDirectory
                 .appendingPathComponent("montazhka-selftest-music-out-\(UUID().uuidString).mp4")
             do {
-                let settings = try await Transcoder.settings(for: .medium,
-                                                             input: ExportInput(composition: asset,
-                                                                                audioMix: mix))
-                try await Transcoder.export(input: ExportInput(composition: asset, audioMix: mix),
-                                            settings: settings, to: out) { _ in }
+                let settings = try await Transcoder.settings(
+                    for: .medium,
+                    input: ExportInput(
+                        composition: asset,
+                        audioMix: mix))
+                try await Transcoder.export(
+                    input: ExportInput(composition: asset, audioMix: mix),
+                    settings: settings, to: out
+                ) { _ in }
                 return out
             } catch {
                 return nil
@@ -679,7 +745,8 @@ enum SelfTest {
 
         let (plainComposition, _) = await CompositionBuilder.build(clips: [clip])
         guard let withMusic = await exportMP4(composition, mix: audioMix),
-              let withoutMusic = await exportMP4(plainComposition, mix: nil) else {
+            let withoutMusic = await exportMP4(plainComposition, mix: nil)
+        else {
             check(false, "экспорт с музыкой завершился")
             return
         }
@@ -695,7 +762,8 @@ enum SelfTest {
         defer { try? FileManager.default.removeItem(at: cacheDir) }
         let waveStore = WaveformStore(cacheDir: cacheDir)
         guard let musicPeaks = await waveStore.ensure(path: withMusic.path),
-              let plainPeaks = await waveStore.ensure(path: withoutMusic.path) else {
+            let plainPeaks = await waveStore.ensure(path: withoutMusic.path)
+        else {
             check(false, "извлечение волны готовых файлов")
             return
         }
@@ -707,24 +775,28 @@ enum SelfTest {
         // Окно тишины 3.5–5.5: без музыки почти ноль, с музыкой — слышный фон
         let silenceWithMusic = rms(musicPeaks, 3.5, 5.5)
         let silencePlain = rms(plainPeaks, 3.5, 5.5)
-        check(silenceWithMusic > max(silencePlain * 3, 0.01),
-              "музыка слышна в паузах речи (фон \(String(format: "%.4f", silenceWithMusic)) против \(String(format: "%.4f", silencePlain)))")
+        check(
+            silenceWithMusic > max(silencePlain * 3, 0.01),
+            "музыка слышна в паузах речи (фон \(String(format: "%.4f", silenceWithMusic)) против \(String(format: "%.4f", silencePlain)))"
+        )
         // Затухание: последние полсекунды тише середины паузы
         let tail = rms(musicPeaks, 11.6, 11.95)
-        check(tail < silenceWithMusic * 0.6,
-              "в конце музыка затихает (хвост \(String(format: "%.4f", tail)))")
+        check(
+            tail < silenceWithMusic * 0.6,
+            "в конце музыка затихает (хвост \(String(format: "%.4f", tail)))")
 
         // Старый проект без поля музыки открывается с выключенной музыкой
         let oldJSON = """
-        {"id":"\(UUID().uuidString)","name":"Старый проект","clips":[],
-         "createdAt":"2026-01-01T00:00:00Z","updatedAt":"2026-01-01T00:00:00Z",
-         "detection":{"thresholdDB":-40,"minPauseDuration":0.8,"paddingMS":150}}
-        """
+            {"id":"\(UUID().uuidString)","name":"Старый проект","clips":[],
+             "createdAt":"2026-01-01T00:00:00Z","updatedAt":"2026-01-01T00:00:00Z",
+             "detection":{"thresholdDB":-40,"minPauseDuration":0.8,"paddingMS":150}}
+            """
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         let decoded = try? decoder.decode(Project.self, from: Data(oldJSON.utf8))
-        check(decoded != nil && decoded?.music == MusicSettings(),
-              "старый проект без настроек музыки открывается с музыкой по умолчанию (выключена)")
+        check(
+            decoded != nil && decoded?.music == MusicSettings(),
+            "старый проект без настроек музыки открывается с музыкой по умолчанию (выключена)")
     }
 
     // MARK: - Эквалайзер музыки («не мешать голосу»)
@@ -743,15 +815,14 @@ enum SelfTest {
             let out = cacheDir.appendingPathComponent("tone-\(Int(frequency))-eq.caf")
             do {
                 try await TestVideoFactory.make(segments: [(4.0, 0.3)], toneFrequency: frequency, to: src)
-                try await Task.detached {
-                    try MusicEQ.render(sourcePath: src.path, to: out, isCancelled: { false })
-                }.value
+                try await MusicEQ.render(sourcePath: src.path, to: out, isCancelled: { false })
             } catch {
                 return nil
             }
             let waveStore = WaveformStore(cacheDir: cacheDir)
             guard let origPeaks = await waveStore.ensure(path: src.path),
-                  let eqPeaks = await waveStore.ensure(path: out.path) else { return nil }
+                let eqPeaks = await waveStore.ensure(path: out.path)
+            else { return nil }
             func rms(_ peaks: [Float]) -> Double {
                 let inner = peaks.dropFirst(50).dropLast(50)
                 guard !inner.isEmpty else { return 0 }
@@ -764,15 +835,19 @@ enum SelfTest {
             check(false, "обработка тона 2500 Гц")
             return
         }
-        check(speech.processed < speech.original * 0.75,
-              "зона речи приглушена (было \(String(format: "%.3f", speech.original)), стало \(String(format: "%.3f", speech.processed)))")
+        check(
+            speech.processed < speech.original * 0.75,
+            "зона речи приглушена (было \(String(format: "%.3f", speech.original)), стало \(String(format: "%.3f", speech.processed)))"
+        )
 
         guard let low = await renderedRMS(frequency: 220) else {
             check(false, "обработка тона 220 Гц")
             return
         }
-        check(low.processed > low.original * 0.55,
-              "низкий тон почти не тронут (было \(String(format: "%.3f", low.original)), стало \(String(format: "%.3f", low.processed)))")
+        check(
+            low.processed > low.original * 0.55,
+            "низкий тон почти не тронут (было \(String(format: "%.3f", low.original)), стало \(String(format: "%.3f", low.processed)))"
+        )
 
         // Кэш-хранилище: второй запрос отдаёт готовый файл
         let store = MusicEQStore(cacheDir: cacheDir)
@@ -787,8 +862,9 @@ enum SelfTest {
         // Настройки музыки без поля галочки читаются с включённой подстройкой
         let json = #"{"enabled":true,"volume":18}"#
         let decoded = try? JSONDecoder().decode(MusicSettings.self, from: Data(json.utf8))
-        check(decoded?.eqEnabled == true,
-              "настройки музыки без галочки читаются с включённой подстройкой под голос")
+        check(
+            decoded?.eqEnabled == true,
+            "настройки музыки без галочки читаются с включённой подстройкой под голос")
 
         // Сравнение настроек «изменилась только громкость»
         var base = MusicSettings()
@@ -797,9 +873,11 @@ enum SelfTest {
         volumeOnly.volume = 55
         var trackChanged = base
         trackChanged.trackID = "calm"
-        check(volumeOnly.differsOnlyByVolume(from: base),
-              "сдвиг громкости распознаётся как «изменилась только громкость»")
-        check(!trackChanged.differsOnlyByVolume(from: base),
-              "смена мелодии — это не «только громкость»")
+        check(
+            volumeOnly.differsOnlyByVolume(from: base),
+            "сдвиг громкости распознаётся как «изменилась только громкость»")
+        check(
+            !trackChanged.differsOnlyByVolume(from: base),
+            "смена мелодии — это не «только громкость»")
     }
 }

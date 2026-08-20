@@ -249,9 +249,10 @@ struct TimelineInputMonitor: NSViewRepresentable {
             let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
 
             if event.keyCode == 4,
-               !modifiers.contains(.command),
-               !modifiers.contains(.control),
-               !modifiers.contains(.option) { // H / Р
+                !modifiers.contains(.command),
+                !modifiers.contains(.control),
+                !modifiers.contains(.option)
+            {  // H / Р
                 parent.onHandKeyChanged(isDown)
                 return nil
             }

@@ -1,0 +1,77 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Semantic version without v, for example 1.1.0
+        required: true
+        type: string
+      build_number:
+        description: Positive CFBundleVersion
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-15-intel
+    timeout-minutes: 60
+    env:
+      MONTAZHKA_SIGNING_IDENTITY: ${{ secrets.DEVELOPER_ID_APPLICATION }}
+      NOTARY_KEYCHAIN_PROFILE: montazhka-ci
+      NOTARY_KEYCHAIN_PATH: ${{ runner.temp }}/montazhka-release.keychain-db
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Select Xcode
+        run: sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer
+
+      - name: Install pinned tools
+        run: ./scripts/bootstrap-tools.sh
+
+      - name: Import Developer ID certificate
+        env:
+          CERTIFICATE_BASE64: ${{ secrets.DEVELOPER_ID_CERTIFICATE_BASE64 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.DEVELOPER_ID_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.RELEASE_KEYCHAIN_PASSWORD }}
+        run: |
+          certificate_path="$RUNNER_TEMP/developer-id.p12"
+          keychain_path="$NOTARY_KEYCHAIN_PATH"
+          echo "$CERTIFICATE_BASE64" | base64 --decode > "$certificate_path"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$keychain_path"
+          security set-keychain-settings -lut 21600 "$keychain_path"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$keychain_path"
+          security import "$certificate_path" -P "$CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$keychain_path"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$keychain_path"
+          security list-keychains -d user -s "$keychain_path"
+
+      - name: Store notarization credentials
+        env:
+          NOTARY_KEY_BASE64: ${{ secrets.APP_STORE_CONNECT_PRIVATE_KEY_BASE64 }}
+          NOTARY_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          NOTARY_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+        run: |
+          key_path="$RUNNER_TEMP/AuthKey_$NOTARY_KEY_ID.p8"
+          echo "$NOTARY_KEY_BASE64" | base64 --decode > "$key_path"
+          xcrun notarytool store-credentials "$NOTARY_KEYCHAIN_PROFILE" \
+            --keychain "$NOTARY_KEYCHAIN_PATH" \
+            --key "$key_path" \
+            --key-id "$NOTARY_KEY_ID" \
+            --issuer "$NOTARY_ISSUER_ID"
+
+      - name: Build, sign and notarize
+        run: ./scripts/release.sh '${{ inputs.version }}' '${{ inputs.build_number }}'
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "v${{ inputs.version }}" \
+            build.noindex/release/*.zip \
+            build.noindex/release/*.sha256 \
+            --target "$GITHUB_SHA" \
+            --title "Монтажка v${{ inputs.version }}" \
+            --generate-notes

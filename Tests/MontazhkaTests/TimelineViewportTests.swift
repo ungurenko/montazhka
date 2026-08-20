@@ -1,32 +1,32 @@
-import XCTest
-@testable import Montazhka
+import Testing
 
-final class TimelineViewportTests: XCTestCase {
+@testable import MontazhkaKit
+
+@Suite
+struct TimelineViewportTests {
+    @Test
     func testDragPreviewNeverUsesFullWidthOfALongClip() {
-        XCTAssertEqual(TimelineDragPreviewMath.width(forClipWidth: 12_000), 240)
-        XCTAssertEqual(TimelineDragPreviewMath.width(forClipWidth: 160), 160)
-        XCTAssertEqual(TimelineDragPreviewMath.width(forClipWidth: 20), 80)
+        #expect((TimelineDragPreviewMath.width(forClipWidth: 12_000)) == (240))
+        #expect((TimelineDragPreviewMath.width(forClipWidth: 160)) == (160))
+        #expect((TimelineDragPreviewMath.width(forClipWidth: 20)) == (80))
     }
 
+    @Test
     func testScaleStaysWithinEditingLimits() {
-        XCTAssertEqual(TimelineViewportMath.clampedPixelsPerSecond(2), 3)
-        XCTAssertEqual(TimelineViewportMath.clampedPixelsPerSecond(40), 40)
-        XCTAssertEqual(TimelineViewportMath.clampedPixelsPerSecond(11_000), 240)
+        #expect((TimelineViewportMath.clampedPixelsPerSecond(2)) == (3))
+        #expect((TimelineViewportMath.clampedPixelsPerSecond(40)) == (40))
+        #expect((TimelineViewportMath.clampedPixelsPerSecond(11_000)) == (240))
     }
 
+    @Test
     func testOffsetClampsToScrollableContent() {
-        XCTAssertEqual(
-            TimelineViewportMath.clampedOffset(-20, contentWidth: 1_000, viewportWidth: 300),
-            0,
-            accuracy: 0.0001
-        )
-        XCTAssertEqual(
-            TimelineViewportMath.clampedOffset(900, contentWidth: 1_000, viewportWidth: 300),
-            700,
-            accuracy: 0.0001
-        )
+        #expect(
+            abs((TimelineViewportMath.clampedOffset(-20, contentWidth: 1_000, viewportWidth: 300)) - (0)) <= (0.0001))
+        #expect(
+            abs((TimelineViewportMath.clampedOffset(900, contentWidth: 1_000, viewportWidth: 300)) - (700)) <= (0.0001))
     }
 
+    @Test
     func testZoomKeepsTimeUnderPointerFixed() {
         let offset = TimelineViewportMath.offsetKeepingAnchor(
             currentOffset: 100,
@@ -36,30 +36,25 @@ final class TimelineViewportTests: XCTestCase {
             leadingInset: 12
         )
 
-        XCTAssertEqual(offset, 388, accuracy: 0.0001)
+        #expect(abs((offset) - (388)) <= (0.0001))
     }
 
+    @Test
     func testPlaybackFollowingStartsAtMidpointAndCentersOffscreenPlayhead() {
-        XCTAssertEqual(
-            TimelineViewportMath.followOffset(
-                playheadX: 600, currentOffset: 400, viewportWidth: 500
-            ),
-            400,
-            accuracy: 0.0001
-        )
-        XCTAssertEqual(
-            TimelineViewportMath.followOffset(
-                playheadX: 700, currentOffset: 400, viewportWidth: 500
-            ),
-            450,
-            accuracy: 0.0001
-        )
-        XCTAssertEqual(
-            TimelineViewportMath.followOffset(
-                playheadX: 100, currentOffset: 400, viewportWidth: 500
-            ),
-            -150,
-            accuracy: 0.0001
-        )
+        #expect(
+            abs(
+                (TimelineViewportMath.followOffset(
+                    playheadX: 600, currentOffset: 400, viewportWidth: 500
+                )) - (400)) <= (0.0001))
+        #expect(
+            abs(
+                (TimelineViewportMath.followOffset(
+                    playheadX: 700, currentOffset: 400, viewportWidth: 500
+                )) - (450)) <= (0.0001))
+        #expect(
+            abs(
+                (TimelineViewportMath.followOffset(
+                    playheadX: 100, currentOffset: 400, viewportWidth: 500
+                )) - (-150)) <= (0.0001))
     }
 }

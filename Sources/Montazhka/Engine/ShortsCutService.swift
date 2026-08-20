@@ -8,19 +8,23 @@ actor ShortsCutService {
     private let openRouter: OpenRouterClient
     private let waveforms: WaveformStore
 
-    init(transcriptStore: TranscriptStore, openRouter: OpenRouterClient,
-         waveforms: WaveformStore) {
+    init(
+        transcriptStore: TranscriptStore, openRouter: OpenRouterClient,
+        waveforms: WaveformStore
+    ) {
         self.transcriptStore = transcriptStore
         self.openRouter = openRouter
         self.waveforms = waveforms
     }
 
-    func analyze(source: MediaReference,
-                 sourceDuration: Double,
-                 count: ShortsCount,
-                 model: SmartEditModel, effort: String?, apiKey: String,
-                 thresholdDB: Double,
-                 status: @escaping @Sendable (ShortsStatus) async -> Void) async throws -> [ShortCandidate] {
+    func analyze(
+        source: MediaReference,
+        sourceDuration: Double,
+        count: ShortsCount,
+        model: SmartEditModel, effort: String?, apiKey: String,
+        thresholdDB: Double,
+        status: @escaping @Sendable (ShortsStatus) async -> Void
+    ) async throws -> [ShortCandidate] {
         guard sourceDuration >= ShortsLimits.minSourceDuration else { throw ShortsError.tooShort }
 
         try await openRouter.ensureModelAvailable(model, apiKey: apiKey)
@@ -62,7 +66,9 @@ actor ShortsCutService {
             } catch is CancellationError {
                 throw CancellationError()
             } catch {
-                Logger.network.error("Shorts: карта окна \(index + 1)/\(windows.count) не собралась: \(error.localizedDescription, privacy: .public)")
+                Logger.network.error(
+                    "Shorts: карта окна \(index + 1)/\(windows.count) не собралась: \(error.localizedDescription, privacy: .public)"
+                )
             }
         }
         let videoMap = mapLines.joined(separator: "\n")
@@ -88,10 +94,12 @@ actor ShortsCutService {
                     // а кандидаты разных окон должны быть уникальны.
                     let uniqueID = "w\(index)-\(proposal.id)"
                     guard contexts[uniqueID] == nil,
-                          let range = timelineMap.range(firstWordID: proposal.firstWordID,
-                                                        lastWordID: proposal.lastWordID),
-                          let trimmed = ShortsWindowPlanner.trimmedToMaxDuration(range),
-                          let first = trimmed.first, let last = trimmed.last else { continue }
+                        let range = timelineMap.range(
+                            firstWordID: proposal.firstWordID,
+                            lastWordID: proposal.lastWordID),
+                        let trimmed = ShortsWindowPlanner.trimmedToMaxDuration(range),
+                        let first = trimmed.first, let last = trimmed.last
+                    else { continue }
                     let excerpt = trimmed.map(\.text).joined(separator: " ")
                     let uniqueProposal = ShortsProposalDTO(
                         id: uniqueID,
@@ -117,7 +125,9 @@ actor ShortsCutService {
             } catch {
                 failedWindows += 1
                 lastWindowError = error
-                Logger.network.error("Shorts: окно \(index + 1)/\(windows.count) не ответило: \(error.localizedDescription, privacy: .public)")
+                Logger.network.error(
+                    "Shorts: окно \(index + 1)/\(windows.count) не ответило: \(error.localizedDescription, privacy: .public)"
+                )
             }
         }
         guard !ordered.isEmpty else {
@@ -150,7 +160,9 @@ actor ShortsCutService {
         } catch is CancellationError {
             throw CancellationError()
         } catch {
-            Logger.network.error("Shorts: отбор недоступен, фолбэк по порядку предложений: \(error.localizedDescription, privacy: .public)")
+            Logger.network.error(
+                "Shorts: отбор недоступен, фолбэк по порядку предложений: \(error.localizedDescription, privacy: .public)"
+            )
             decisions = Self.fallbackDecisions(proposals: ordered, desiredCount: count.desired)
         }
         try Task.checkCancellation()
@@ -164,7 +176,8 @@ actor ShortsCutService {
         if !accepted.isEmpty {
             let verifyInputs: [ShortsVerifyInput] = accepted.compactMap { decision in
                 guard let proposal = Self.proposalByID(decision.clipID, in: ordered),
-                      let context = contexts[decision.clipID] else { return nil }
+                    let context = contexts[decision.clipID]
+                else { return nil }
                 return ShortsVerifyInput(
                     id: proposal.id, title: decision.title,
                     hook: proposal.hook, pattern: proposal.pattern,
@@ -181,30 +194,36 @@ actor ShortsCutService {
             } catch is CancellationError {
                 throw CancellationError()
             } catch {
-                Logger.network.error("Shorts: проверка недоступна, оставляю решения отбора: \(error.localizedDescription, privacy: .public)")
+                Logger.network.error(
+                    "Shorts: проверка недоступна, оставляю решения отбора: \(error.localizedDescription, privacy: .public)"
+                )
             }
         }
 
         var candidates: [ShortCandidate] = []
         for decision in accepted where !rejectedIDs.contains(decision.clipID) {
             guard let proposal = Self.proposalByID(decision.clipID, in: ordered),
-                  let context = contexts[decision.clipID] else { continue }
-            guard let boundary = ShortsBoundaryResolver.resolve(
-                first: context.first, last: context.last, peaks: peaks,
-                sourceDuration: sourceDuration, thresholdDB: thresholdDB) else { continue }
+                let context = contexts[decision.clipID]
+            else { continue }
+            guard
+                let boundary = ShortsBoundaryResolver.resolve(
+                    first: context.first, last: context.last, peaks: peaks,
+                    sourceDuration: sourceDuration, thresholdDB: thresholdDB)
+            else { continue }
             let confidence = min(proposal.confidence, decision.confidence)
-            candidates.append(ShortCandidate(
-                id: UUID(), rank: candidates.count + 1,
-                title: decision.title, reason: decision.reason,
-                hook: proposal.hook, pattern: proposal.pattern,
-                excerpt: context.excerpt,
-                start: boundary.start, end: boundary.end,
-                confidence: confidence,
-                hookScore: proposal.hookScore,
-                standaloneScore: proposal.standaloneScore,
-                payoffScore: proposal.payoffScore,
-                pacingScore: proposal.pacingScore,
-                enabled: false))
+            candidates.append(
+                ShortCandidate(
+                    id: UUID(), rank: candidates.count + 1,
+                    title: decision.title, reason: decision.reason,
+                    hook: proposal.hook, pattern: proposal.pattern,
+                    excerpt: context.excerpt,
+                    start: boundary.start, end: boundary.end,
+                    confidence: confidence,
+                    hookScore: proposal.hookScore,
+                    standaloneScore: proposal.standaloneScore,
+                    payoffScore: proposal.payoffScore,
+                    pacingScore: proposal.pacingScore,
+                    enabled: false))
         }
 
         candidates = ShortsWindowPlanner.deduplicated(candidates)
@@ -227,13 +246,16 @@ actor ShortsCutService {
     }
 
     /// Фолбэк, когда проход-отбор недоступен: принимаем предложения по порядку.
-    static func fallbackDecisions(proposals: [ShortsProposalDTO],
-                                  desiredCount: Int?) -> [ShortsRankDTO] {
+    static func fallbackDecisions(
+        proposals: [ShortsProposalDTO],
+        desiredCount: Int?
+    ) -> [ShortsRankDTO] {
         let limit = min(desiredCount ?? ShortsLimits.maxCandidates, ShortsLimits.maxCandidates)
         return proposals.prefix(limit).enumerated().map { index, proposal in
-            ShortsRankDTO(clipID: proposal.id, decision: .accept, rank: index + 1,
-                          title: proposal.title, reason: proposal.reason,
-                          confidence: proposal.confidence)
+            ShortsRankDTO(
+                clipID: proposal.id, decision: .accept, rank: index + 1,
+                title: proposal.title, reason: proposal.reason,
+                confidence: proposal.confidence)
         }
     }
 
@@ -257,10 +279,13 @@ actor ShortsCutService {
 
     /// Компактная строка карты для контекста других проходов: время — о чём
     /// кусок — пики. Без JSON, только сущности и тайминги.
-    private static func mapLine(for map: ShortsMapEnvelope,
-                                windowWords: ArraySlice<MappedTranscriptWord>) -> String? {
+    private static func mapLine(
+        for map: ShortsMapEnvelope,
+        windowWords: ArraySlice<MappedTranscriptWord>
+    ) -> String? {
         guard let first = windowWords.first, let last = windowWords.last,
-              !map.summary.isEmpty else { return nil }
+            !map.summary.isEmpty
+        else { return nil }
         var line = "[\(clock(first.sourceStart))–\(clock(last.sourceEnd))] \(map.summary)"
         let wordsByID = Dictionary(uniqueKeysWithValues: windowWords.map { ($0.wordID, $0) })
         let peaks = map.peaks.compactMap { peak -> String? in

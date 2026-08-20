@@ -1,9 +1,12 @@
 import Foundation
-import XCTest
-@testable import Montazhka
+import Testing
 
-final class AppModelPersistenceTests: XCTestCase {
+@testable import MontazhkaKit
+
+@Suite
+struct AppModelPersistenceTests {
     @MainActor
+    @Test
     func testLatestProjectSelectionWinsWhenOlderLoadFinishesLast() async throws {
         let repository = ControlledProjectRepository()
         let app = AppModel(store: repository)
@@ -19,11 +22,12 @@ final class AppModelPersistenceTests: XCTestCase {
         repository.completeLoad(first)
         try await Task.sleep(for: .milliseconds(30))
 
-        XCTAssertEqual(app.editor?.project.id, second.id)
+        #expect((app.editor?.project.id) == (second.id))
         if let editor = app.editor { await editor.shutdown() }
     }
 
     @MainActor
+    @Test
     func testClosingKeepsEditorVisibleUntilFinalSaveCompletes() async throws {
         let repository = ControlledProjectRepository()
         repository.blocksSaves = true
@@ -37,12 +41,12 @@ final class AppModelPersistenceTests: XCTestCase {
 
         app.closeProject()
         try await waitUntil { repository.pendingSaveCount == 1 }
-        XCTAssertNotNil(app.editor)
-        XCTAssertTrue(app.isProjectOperationInProgress)
+        #expect((app.editor) != nil)
+        #expect(app.isProjectOperationInProgress)
 
         repository.completeNextSave()
         try await waitUntil { app.editor == nil }
-        XCTAssertFalse(app.isProjectOperationInProgress)
+        #expect(!(app.isProjectOperationInProgress))
     }
 
     @MainActor
@@ -54,7 +58,7 @@ final class AppModelPersistenceTests: XCTestCase {
             if condition() { return }
             try await Task.sleep(for: .milliseconds(10))
         }
-        XCTFail("Условие не выполнилось вовремя")
+        Issue.record("Условие не выполнилось вовремя")
     }
 }
 
@@ -81,8 +85,10 @@ private final class ControlledProjectRepository: ProjectRepository, @unchecked S
             transcripts: root.appendingPathComponent("Transcripts"),
             models: root.appendingPathComponent("Models")
         )
-        for url in [directories.projects, directories.waveforms, directories.enhancedAudio,
-                    directories.musicEQ, directories.transcripts, directories.models] {
+        for url in [
+            directories.projects, directories.waveforms, directories.enhancedAudio,
+            directories.musicEQ, directories.transcripts, directories.models,
+        ] {
             try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         }
     }

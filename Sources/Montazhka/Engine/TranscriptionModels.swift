@@ -1,5 +1,5 @@
-import Foundation
 import CryptoKit
+import Foundation
 
 struct TranscriptWord: Identifiable, Codable, Equatable, Sendable {
     var id: UUID
@@ -11,8 +11,10 @@ struct TranscriptWord: Identifiable, Codable, Equatable, Sendable {
 
     var duration: Double { max(0, end - start) }
 
-    init(id: UUID = UUID(), sourceID: UUID, text: String, start: Double,
-         end: Double, confidence: Float) {
+    init(
+        id: UUID = UUID(), sourceID: UUID, text: String, start: Double,
+        end: Double, confidence: Float
+    ) {
         self.id = id
         self.sourceID = sourceID
         self.text = text
@@ -21,10 +23,13 @@ struct TranscriptWord: Identifiable, Codable, Equatable, Sendable {
         self.confidence = confidence
     }
 
-    init(id: UUID = UUID(), sourceID: UUID, text: String, start: Double,
-         duration: Double, confidence: Float) {
-        self.init(id: id, sourceID: sourceID, text: text, start: start,
-                  end: start + duration, confidence: confidence)
+    init(
+        id: UUID = UUID(), sourceID: UUID, text: String, start: Double,
+        duration: Double, confidence: Float
+    ) {
+        self.init(
+            id: id, sourceID: sourceID, text: text, start: start,
+            end: start + duration, confidence: confidence)
     }
 }
 
@@ -56,16 +61,20 @@ actor TranscriptStore {
         self.transcriber = ParakeetTranscriber(modelsDir: modelsDir)
     }
 
-    func ensure(source: MediaReference,
-                progress: (@Sendable (Double?) -> Void)? = nil) async throws -> [TranscriptWord] {
+    func ensure(
+        source: MediaReference,
+        progress: (@Sendable (Double?) -> Void)? = nil
+    ) async throws -> [TranscriptWord] {
         let url = cacheURL(for: source)
         if let document = try? load(from: url),
-           document.schemaVersion == TranscriptDocument.currentVersion,
-           document.model == "parakeet-tdt-0.6b-v3-int8",
-           document.language == "ru" {
+            document.schemaVersion == TranscriptDocument.currentVersion,
+            document.model == "parakeet-tdt-0.6b-v3-int8",
+            document.language == "ru"
+        {
             return document.words.map {
-                TranscriptWord(sourceID: source.id, text: $0.text, start: $0.start,
-                               end: $0.end, confidence: $0.confidence)
+                TranscriptWord(
+                    sourceID: source.id, text: $0.text, start: $0.start,
+                    end: $0.end, confidence: $0.confidence)
             }
         }
 

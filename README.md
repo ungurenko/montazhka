@@ -25,7 +25,7 @@
 - Каждый вариант проходит два ИИ-прохода и локальную проверку тихих границ. Явные безопасные исправления отмечаются заранее, смысловые повторы всегда ждут ручной галочки.
 - Все выбранные правки применяются одним действием и целиком возвращаются одним `Cmd+Z`.
 
-Функция требует Mac с Apple Silicon и ключ [OpenRouter](https://openrouter.ai/settings/keys). Ключ хранится в защищённом Keychain macOS.
+Функция требует Mac с Apple Silicon и ключ [OpenRouter](https://openrouter.ai/settings/keys). Ключ хранится в защищённом Keychain macOS. Базовый редактор и экспорт работают на Intel и Apple Silicon.
 
 ## ✂️ Как работает нарезка на shorts
 
@@ -51,23 +51,40 @@
 
 ## 🔧 Для разработчика (и AI-агентов)
 
-Нативное приложение: Swift 6 + SwiftUI + AVFoundation, macOS 14+. Собирается **без Xcode** —
-достаточно Command Line Tools.
+Нативное приложение: Swift 6 + SwiftUI + AVFoundation, macOS 14+. SwiftPM-сборке достаточно Command Line Tools; UI-тестам, архивированию и notarization нужен полный Xcode.
 
 ```bash
-scripts/build-app.sh            # собрать build.noindex/Монтажка.app
-scripts/build-app.sh --install  # собрать и поставить в /Applications
-swift build && .build/debug/Montazhka --selftest   # самопроверка движка
-swift scripts/make-icon.swift   # перегенерировать иконку
+./scripts/bootstrap-tools.sh                  # XcodeGen 2.45.4 + SwiftLint 0.65.0
+./scripts/lint.sh                             # swift-format + SwiftLint
+./scripts/test.sh                             # 82 теста на Swift Testing
+./scripts/build-app.sh --adhoc                # локальная .app для текущей архитектуры
+./scripts/build-app.sh --universal --adhoc    # локальная universal .app
+MONTAZHKA_SELFTEST_TIMEOUT=30 .build/release/Montazhka --selftest
+.tools/xcodegen generate                      # Montazhka.xcodeproj для Xcode и UI-тестов
 ```
+
+Готовое приложение находится в `build.noindex/Монтажка.app`. Установка в `/Applications` выполняется только с явным флагом `--install`.
+
+### Публичный релиз
+
+Релизная сборка — universal (`arm64` + `x86_64`), с Hardened Runtime, подписью Developer ID Application, notarization и Gatekeeper-проверкой:
+
+```bash
+MONTAZHKA_SIGNING_IDENTITY="Developer ID Application: …" NOTARY_KEYCHAIN_PROFILE=montazhka ./scripts/release.sh 1.1.0 2
+```
+
+Скрипт создаёт ZIP и SHA-256 в `build.noindex/release`, но сам ничего не публикует. Публичная загрузка выполняется отдельным ручным workflow `Release` в GitHub Actions. Нужные имена secrets перечислены прямо в `.github/workflows/release.yml`.
+
+App Sandbox пока намеренно выключен: прямой канал распространения использует Developer ID и notarization, а включение sandbox требует отдельной миграции существующих данных из Application Support. Решение и обязательные меры защиты зафиксированы в [`docs/ADR-0001-direct-distribution-without-sandbox.md`](docs/ADR-0001-direct-distribution-without-sandbox.md).
 
 ### Архитектура
 
 ```
 Sources/
 ├── MontazhkaCore/          # модели проекта, операции ленты и полная история правок
-└── Montazhka/
-    ├── main.swift          # вход: GUI или --selftest
+├── MontazhkaExecutable/    # тонкий host: GUI или --selftest
+└── Montazhka/              # библиотека MontazhkaKit
+    ├── AppEntry.swift      # единая точка входа для SwiftPM и Xcode-host
     ├── App.swift           # SwiftUI-приложение и навигация
     ├── Models/             # версионное JSON-хранилище проектов
     ├── Engine/
@@ -88,6 +105,7 @@ Sources/
     ├── Views/                  # редактор, лента и панели инструментов
     └── SelfTest/               # сквозная самопроверка на сгенерированном видео
 Tests/MontazhkaTests/        # миграции, монтаж, медиасборка и умный монтаж
+Tests/MontazhkaUITests/      # Xcode UI smoke-тест доступности стартового экрана
 ```
 
 Ключевые принципы:

@@ -31,8 +31,10 @@ enum ShortsWindowPlanner {
     /// отсортирован по рангу: из пересечения остаётся более сильный.
     static func deduplicated(_ candidates: [ShortCandidate]) -> [ShortCandidate] {
         var kept: [ShortCandidate] = []
-        for candidate in candidates where
-            !kept.contains(where: { $0.start < candidate.end && candidate.start < $0.end }) {
+        for candidate in candidates
+        where
+            !kept.contains(where: { $0.start < candidate.end && candidate.start < $0.end })
+        {
             kept.append(candidate)
         }
         return kept
@@ -47,18 +49,22 @@ enum ShortsWindowPlanner {
         guard let first = words.first else { return nil }
         var upper = words.endIndex
         while upper > words.startIndex,
-              words[upper - 1].sourceEnd - first.sourceStart > ShortsLimits.maxDuration {
+            words[upper - 1].sourceEnd - first.sourceStart > ShortsLimits.maxDuration
+        {
             upper = words.index(before: upper)
         }
         let trimmed = words[words.startIndex..<upper]
         guard let last = trimmed.last,
-              last.sourceEnd - first.sourceStart >= ShortsLimits.discardBelow else { return nil }
+            last.sourceEnd - first.sourceStart >= ShortsLimits.discardBelow
+        else { return nil }
         return trimmed
     }
 
-    private static func firstIndex(of words: [MappedTranscriptWord],
-                                   atOrAfter time: Double,
-                                   from start: Int) -> Int {
+    private static func firstIndex(
+        of words: [MappedTranscriptWord],
+        atOrAfter time: Double,
+        from start: Int
+    ) -> Int {
         var index = start
         while index < words.count, words[index].timelineStart < time { index += 1 }
         return index

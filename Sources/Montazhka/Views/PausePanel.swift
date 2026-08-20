@@ -172,10 +172,13 @@ private struct CandidateRow: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            Toggle("", isOn: Binding(
-                get: { candidate.enabled },
-                set: { _ in controller.toggleCandidate(candidate.id) }
-            ))
+            Toggle(
+                "",
+                isOn: Binding(
+                    get: { candidate.enabled },
+                    set: { _ in controller.toggleCandidate(candidate.id) }
+                )
+            )
             .toggleStyle(.checkbox)
             .labelsHidden()
 

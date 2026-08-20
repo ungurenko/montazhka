@@ -1,5 +1,5 @@
-import Foundation
 import AVFoundation
+import Foundation
 
 /// Фоновая музыка для склейки: файл и громкость 0…1.
 struct MusicInput {
@@ -21,7 +21,8 @@ enum CompositionWarning: Equatable {
         case .videoInsertFailed(let name): return "Не удалось вставить видео «\(name)» в монтаж."
         case .audioInsertFailed(let name): return "Не удалось вставить звук «\(name)» в монтаж."
         case .musicUnavailable(let name): return "Музыка «\(name)» недоступна — видео будет без неё."
-        case .musicEQFallback(let name): return "Не удалось настроить музыку «\(name)» под голос — используется исходная мелодия."
+        case .musicEQFallback(let name):
+            return "Не удалось настроить музыку «\(name)» под голос — используется исходная мелодия."
         case .voiceFallback(let name): return "Не удалось обработать голос в «\(name)» — используется исходный звук."
         }
     }
@@ -45,6 +46,7 @@ struct MediaSourceLoadPlan {
 
     let sources: [Source]
     let clipSourceIndices: [Int]
+    let accessLeases: [MediaAccessLease]
 
     init(clips: [Clip], enhancedAudio: [String: URL]) {
         struct Key: Hashable {
@@ -55,9 +57,13 @@ struct MediaSourceLoadPlan {
         var sourceIndices: [Key: Int] = [:]
         var plannedSources: [Source] = []
         var plannedClipIndices: [Int] = []
+        var leasesBySourceID: [UUID: MediaAccessLease] = [:]
 
         for clip in clips {
-            let sourceURL = clip.url.standardizedFileURL
+            if leasesBySourceID[clip.source.id] == nil {
+                leasesBySourceID[clip.source.id] = clip.source.makeAccessLease()
+            }
+            let sourceURL = (leasesBySourceID[clip.source.id]?.url ?? clip.url).standardizedFileURL
             let enhancedURL = enhancedAudio[clip.sourcePath]?.standardizedFileURL
             let key = Key(sourcePath: sourceURL.path, enhancedPath: enhancedURL?.path)
             if let existing = sourceIndices[key] {
@@ -66,14 +72,17 @@ struct MediaSourceLoadPlan {
             }
             let index = plannedSources.count
             sourceIndices[key] = index
-            plannedSources.append(Source(sourceURL: sourceURL,
-                                         enhancedURL: enhancedURL,
-                                         displayName: clip.fileName))
+            plannedSources.append(
+                Source(
+                    sourceURL: sourceURL,
+                    enhancedURL: enhancedURL,
+                    displayName: clip.fileName))
             plannedClipIndices.append(index)
         }
 
         sources = plannedSources
         clipSourceIndices = plannedClipIndices
+        accessLeases = Array(leasesBySourceID.values)
     }
 }
 
@@ -83,26 +92,34 @@ enum CompositionBuilder {
     /// звук берётся из них (тайм-координаты совпадают), видео — из оригинала.
     /// `music` — фоновая мелодия: повторяется по кругу на всю длину,
     /// возвращаемый `audioMix` держит её тихой и плавно гасит по краям.
-    static func build(clips: [Clip],
-                      enhancedAudio: [String: URL] = [:],
-                      music: MusicInput? = nil) async -> (composition: AVMutableComposition, audioMix: AVAudioMix?) {
+    static func build(
+        clips: [Clip],
+        enhancedAudio: [String: URL] = [:],
+        music: MusicInput? = nil
+    ) async -> (composition: AVMutableComposition, audioMix: AVAudioMix?) {
         let result = await buildResult(clips: clips, enhancedAudio: enhancedAudio, music: music)
         return (result.composition, result.audioMix)
     }
 
-    static func buildResult(clips: [Clip],
-                            enhancedAudio: [String: URL] = [:],
-                            music: MusicInput? = nil) async -> CompositionBuildResult {
+    static func buildResult(
+        clips: [Clip],
+        enhancedAudio: [String: URL] = [:],
+        music: MusicInput? = nil
+    ) async -> CompositionBuildResult {
         let composition = AVMutableComposition()
-        guard let videoTrack = composition.addMutableTrack(withMediaType: .video,
-                                                           preferredTrackID: kCMPersistentTrackID_Invalid),
-              let audioTrack = composition.addMutableTrack(withMediaType: .audio,
-                                                           preferredTrackID: kCMPersistentTrackID_Invalid)
+        guard
+            let videoTrack = composition.addMutableTrack(
+                withMediaType: .video,
+                preferredTrackID: kCMPersistentTrackID_Invalid),
+            let audioTrack = composition.addMutableTrack(
+                withMediaType: .audio,
+                preferredTrackID: kCMPersistentTrackID_Invalid)
         else { return CompositionBuildResult(composition: composition, audioMix: nil, warnings: []) }
 
         // Фаза 1 — каждый уникальный исходник открываем один раз.
         // Группы по четыре не дают большому проекту забить AVFoundation сотнями задач.
         let plan = MediaSourceLoadPlan(clips: clips, enhancedAudio: enhancedAudio)
+        defer { withExtendedLifetime(plan.accessLeases) {} }
         var loadedSources = Array<LoadedSource?>(repeating: nil, count: plan.sources.count)
         for batchStart in stride(from: 0, to: plan.sources.count, by: 4) {
             guard !Task.isCancelled else { break }
@@ -128,8 +145,9 @@ enum CompositionBuilder {
         var previousDuration = CMTime.zero
         for (clipIndex, clip) in clips.enumerated() {
             guard !Task.isCancelled,
-                  plan.clipSourceIndices.indices.contains(clipIndex),
-                  let source = loadedSources[plan.clipSourceIndices[clipIndex]] else { break }
+                plan.clipSourceIndices.indices.contains(clipIndex),
+                let source = loadedSources[plan.clipSourceIndices[clipIndex]]
+            else { break }
             let rangeStart = CMTime(seconds: clip.start, preferredTimescale: 60_000)
             let rangeEnd = CMTime(seconds: clip.end, preferredTimescale: 60_000)
             let range = CMTimeRange(start: rangeStart, duration: rangeEnd - rangeStart)
@@ -151,7 +169,8 @@ enum CompositionBuilder {
             if let enhanced = source.enhancedAudio {
                 let clamped = range.intersection(enhanced.range)
                 if clamped.duration.seconds > 0,
-                   (try? audioTrack.insertTimeRange(clamped, of: enhanced.track, at: cursor)) != nil {
+                    (try? audioTrack.insertTimeRange(clamped, of: enhanced.track, at: cursor)) != nil
+                {
                     audioInserted = true
                 }
             }
@@ -164,9 +183,12 @@ enum CompositionBuilder {
                 }
             }
             if previousAudioInserted, audioInserted {
-                voiceJoints.append((time: clipStart,
-                                    leftDuration: previousDuration,
-                                    rightDuration: range.duration))
+                voiceJoints.append(
+                    (
+                        time: clipStart,
+                        leftDuration: previousDuration,
+                        rightDuration: range.duration
+                    ))
             }
             previousAudioInserted = audioInserted
             previousDuration = range.duration
@@ -182,11 +204,14 @@ enum CompositionBuilder {
                 mixParameters.append(musicParameters)
             }
         }
-        let audioMix: AVAudioMix? = mixParameters.isEmpty ? nil : {
-            let mix = AVMutableAudioMix()
-            mix.inputParameters = mixParameters
-            return mix
-        }()
+        let audioMix: AVAudioMix? =
+            mixParameters.isEmpty
+            ? nil
+            : {
+                let mix = AVMutableAudioMix()
+                mix.inputParameters = mixParameters
+                return mix
+            }()
         return CompositionBuildResult(composition: composition, audioMix: audioMix, warnings: warnings)
     }
 
@@ -200,10 +225,12 @@ enum CompositionBuilder {
         let params = AVMutableAudioMixInputParameters(track: track)
         params.setVolume(1, at: .zero)
         for joint in safeJoints {
-            params.setVolumeRamp(fromStartVolume: 1, toEndVolume: 0,
-                                 timeRange: CMTimeRange(start: joint.time - fade, duration: fade))
-            params.setVolumeRamp(fromStartVolume: 0, toEndVolume: 1,
-                                 timeRange: CMTimeRange(start: joint.time, duration: fade))
+            params.setVolumeRamp(
+                fromStartVolume: 1, toEndVolume: 0,
+                timeRange: CMTimeRange(start: joint.time - fade, duration: fade))
+            params.setVolumeRamp(
+                fromStartVolume: 0, toEndVolume: 1,
+                timeRange: CMTimeRange(start: joint.time, duration: fade))
         }
         return params
     }
@@ -246,32 +273,39 @@ enum CompositionBuilder {
         (try? await asset.loadTracks(withMediaType: .audio))?.first
     }
 
-    private static func loadEnhancedAudio(url: URL?) async -> (track: AVAssetTrack, range: CMTimeRange, asset: AVURLAsset)? {
+    private static func loadEnhancedAudio(url: URL?) async -> (
+        track: AVAssetTrack, range: CMTimeRange, asset: AVURLAsset
+    )? {
         guard let url else { return nil }
         let asset = AVURLAsset(url: url)
         guard let audio = try? await asset.loadTracks(withMediaType: .audio).first,
-              let trackRange = try? await audio.load(.timeRange) else { return nil }
+            let trackRange = try? await audio.load(.timeRange)
+        else { return nil }
         return (audio, trackRange, asset)
     }
 
     /// Вставляет мелодию по кругу на всю длительность и строит микс:
     /// плавный вход в начале, ровный тихий уровень, затухание в конце.
-    private static func addMusicTrack(_ music: MusicInput,
-                                      to composition: AVMutableComposition,
-                                      totalDuration: CMTime) async -> AVMutableAudioMixInputParameters? {
+    private static func addMusicTrack(
+        _ music: MusicInput,
+        to composition: AVMutableComposition,
+        totalDuration: CMTime
+    ) async -> AVMutableAudioMixInputParameters? {
         let asset = AVURLAsset(url: music.url)
         guard let source = try? await asset.loadTracks(withMediaType: .audio).first,
-              let sourceRange = try? await source.load(.timeRange),
-              sourceRange.duration.seconds > 0.1,
-              let musicTrack = composition.addMutableTrack(withMediaType: .audio,
-                                                           preferredTrackID: kCMPersistentTrackID_Invalid)
+            let sourceRange = try? await source.load(.timeRange),
+            sourceRange.duration.seconds > 0.1,
+            let musicTrack = composition.addMutableTrack(
+                withMediaType: .audio,
+                preferredTrackID: kCMPersistentTrackID_Invalid)
         else { return nil }
 
         // Луп: целые проигрыши + обрезанный хвост до конца видео.
         var cursor = CMTime.zero
         while cursor < totalDuration {
             let remaining = totalDuration - cursor
-            let piece = remaining < sourceRange.duration
+            let piece =
+                remaining < sourceRange.duration
                 ? CMTimeRange(start: sourceRange.start, duration: remaining)
                 : sourceRange
             guard (try? musicTrack.insertTimeRange(piece, of: source, at: cursor)) != nil else { break }
@@ -283,13 +317,17 @@ enum CompositionBuilder {
         let fadeIn = min(1.0, total / 4)
         let fadeOut = min(3.0, total / 3)
         let params = AVMutableAudioMixInputParameters(track: musicTrack)
-        params.setVolumeRamp(fromStartVolume: 0, toEndVolume: level,
-                             timeRange: CMTimeRange(start: .zero,
-                                                    duration: CMTime(seconds: fadeIn, preferredTimescale: 600)))
+        params.setVolumeRamp(
+            fromStartVolume: 0, toEndVolume: level,
+            timeRange: CMTimeRange(
+                start: .zero,
+                duration: CMTime(seconds: fadeIn, preferredTimescale: 600)))
         params.setVolume(level, at: CMTime(seconds: fadeIn, preferredTimescale: 600))
-        params.setVolumeRamp(fromStartVolume: level, toEndVolume: 0,
-                             timeRange: CMTimeRange(start: CMTime(seconds: total - fadeOut, preferredTimescale: 600),
-                                                    duration: CMTime(seconds: fadeOut, preferredTimescale: 600)))
+        params.setVolumeRamp(
+            fromStartVolume: level, toEndVolume: 0,
+            timeRange: CMTimeRange(
+                start: CMTime(seconds: total - fadeOut, preferredTimescale: 600),
+                duration: CMTime(seconds: fadeOut, preferredTimescale: 600)))
         return params
     }
 }

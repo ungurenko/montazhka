@@ -143,154 +143,179 @@ actor OpenRouterClient {
         return byID
     }
 
-    func propose(words: [OpenRouterTranscriptWord], model: SmartEditModel,
-                 effort: String? = nil, apiKey: String) async throws -> ProposalEnvelope {
+    func propose(
+        words: [OpenRouterTranscriptWord], model: SmartEditModel,
+        effort: String? = nil, apiKey: String
+    ) async throws -> ProposalEnvelope {
         let user = try SmartEditPrompts.proposalUser(words: words)
-        let content = try await chat(model: model, apiKey: apiKey,
-                                     system: SmartEditPrompts.editorSystem,
-                                     user: user, schema: .proposals,
-                                     reasoningEffort: effort)
-        do { return try Self.decodeProposals(content, words: words) }
-        catch where model == .qwen {
-            let repaired = try await chat(model: model, apiKey: apiKey,
-                                          system: "Ты исправляешь только JSON-формат.",
-                                          user: SmartEditPrompts.repairUser(content, contract: "proposal_schema_v1"),
-                                          schema: .jsonObject,
-                                          reasoningEffort: "minimal")
+        let content = try await chat(
+            model: model, apiKey: apiKey,
+            system: SmartEditPrompts.editorSystem,
+            user: user, schema: .proposals,
+            reasoningEffort: effort)
+        do { return try Self.decodeProposals(content, words: words) } catch  where model == .qwen {
+            let repaired = try await chat(
+                model: model, apiKey: apiKey,
+                system: "Ты исправляешь только JSON-формат.",
+                user: SmartEditPrompts.repairUser(content, contract: "proposal_schema_v1"),
+                schema: .jsonObject,
+                reasoningEffort: "minimal")
             return try Self.decodeProposals(repaired, words: words)
         }
     }
 
-    func review(words: [OpenRouterTranscriptWord], proposals: ProposalEnvelope,
-                model: SmartEditModel, effort: String? = nil,
-                apiKey: String) async throws -> ReviewEnvelope {
+    func review(
+        words: [OpenRouterTranscriptWord], proposals: ProposalEnvelope,
+        model: SmartEditModel, effort: String? = nil,
+        apiKey: String
+    ) async throws -> ReviewEnvelope {
         let user = try SmartEditPrompts.reviewUser(words: words, proposals: proposals)
-        let content = try await chat(model: model, apiKey: apiKey,
-                                     system: SmartEditPrompts.reviewerSystem,
-                                     user: user, schema: .reviews,
-                                     reasoningEffort: effort)
-        do { return try Self.decodeReviews(content, proposals: proposals, words: words) }
-        catch where model == .qwen {
-            let repaired = try await chat(model: model, apiKey: apiKey,
-                                          system: "Ты исправляешь только JSON-формат.",
-                                          user: SmartEditPrompts.repairUser(content, contract: "review_schema_v1"),
-                                          schema: .jsonObject,
-                                          reasoningEffort: "minimal")
+        let content = try await chat(
+            model: model, apiKey: apiKey,
+            system: SmartEditPrompts.reviewerSystem,
+            user: user, schema: .reviews,
+            reasoningEffort: effort)
+        do { return try Self.decodeReviews(content, proposals: proposals, words: words) } catch  where model == .qwen {
+            let repaired = try await chat(
+                model: model, apiKey: apiKey,
+                system: "Ты исправляешь только JSON-формат.",
+                user: SmartEditPrompts.repairUser(content, contract: "review_schema_v1"),
+                schema: .jsonObject,
+                reasoningEffort: "minimal")
             return try Self.decodeReviews(repaired, proposals: proposals, words: words)
         }
     }
 
     /// Нарезка на shorts, проход 0: карта окна — о чём кусок и где сильные места.
-    func mapShortsWindow(words: [OpenRouterTranscriptWord], model: SmartEditModel,
-                         effort: String? = nil, apiKey: String) async throws -> ShortsMapEnvelope {
+    func mapShortsWindow(
+        words: [OpenRouterTranscriptWord], model: SmartEditModel,
+        effort: String? = nil, apiKey: String
+    ) async throws -> ShortsMapEnvelope {
         let user = try ShortsPrompts.mapUser(words: words)
-        let content = try await chat(model: model, apiKey: apiKey,
-                                     system: ShortsPrompts.mapperSystem,
-                                     user: user, schema: .shortsMap,
-                                     reasoningEffort: effort)
-        do { return try Self.decodeShortsMap(content, words: words) }
-        catch is CancellationError {
+        let content = try await chat(
+            model: model, apiKey: apiKey,
+            system: ShortsPrompts.mapperSystem,
+            user: user, schema: .shortsMap,
+            reasoningEffort: effort)
+        do { return try Self.decodeShortsMap(content, words: words) } catch is CancellationError {
             throw CancellationError()
         } catch {
-            let repaired = try await chat(model: model, apiKey: apiKey,
-                                          system: "Ты исправляешь только JSON-формат.",
-                                          user: SmartEditPrompts.repairUser(content, contract: "shorts_map_schema_v1"),
-                                          schema: .jsonObject,
-                                          reasoningEffort: "minimal")
+            let repaired = try await chat(
+                model: model, apiKey: apiKey,
+                system: "Ты исправляешь только JSON-формат.",
+                user: SmartEditPrompts.repairUser(content, contract: "shorts_map_schema_v1"),
+                schema: .jsonObject,
+                reasoningEffort: "minimal")
             return try Self.decodeShortsMap(repaired, words: words)
         }
     }
 
     /// Нарезка на shorts, проход 1: предложения по одному окну транскрипта.
     /// videoMap — карта всего видео, чтобы окно видело контекст соседей.
-    func proposeShorts(words: [OpenRouterTranscriptWord], model: SmartEditModel,
-                       effort: String? = nil, apiKey: String,
-                       videoMap: String = "") async throws -> ShortsProposalEnvelope {
+    func proposeShorts(
+        words: [OpenRouterTranscriptWord], model: SmartEditModel,
+        effort: String? = nil, apiKey: String,
+        videoMap: String = ""
+    ) async throws -> ShortsProposalEnvelope {
         let user = try ShortsPrompts.proposalUser(words: words, videoMap: videoMap)
-        let content = try await chat(model: model, apiKey: apiKey,
-                                     system: ShortsPrompts.selectorSystem,
-                                     user: user, schema: .shortsProposals,
-                                     reasoningEffort: effort)
-        do { return try Self.decodeShortsProposals(content, words: words) }
-        catch is CancellationError {
+        let content = try await chat(
+            model: model, apiKey: apiKey,
+            system: ShortsPrompts.selectorSystem,
+            user: user, schema: .shortsProposals,
+            reasoningEffort: effort)
+        do { return try Self.decodeShortsProposals(content, words: words) } catch is CancellationError {
             throw CancellationError()
         } catch {
             // Модели иногда заворачивают JSON в markdown или эхо-обёртку —
             // чиним отдельным вызовом независимо от модели.
-            let repaired = try await chat(model: model, apiKey: apiKey,
-                                          system: "Ты исправляешь только JSON-формат.",
-                                          user: SmartEditPrompts.repairUser(content, contract: "shorts_clips_schema_v1"),
-                                          schema: .jsonObject,
-                                          reasoningEffort: "minimal")
+            let repaired = try await chat(
+                model: model, apiKey: apiKey,
+                system: "Ты исправляешь только JSON-формат.",
+                user: SmartEditPrompts.repairUser(content, contract: "shorts_clips_schema_v1"),
+                schema: .jsonObject,
+                reasoningEffort: "minimal")
             return try Self.decodeShortsProposals(repaired, words: words)
         }
     }
 
     /// Нарезка на shorts, проход 2: отбор и ранжирование кандидатов по сводкам.
-    func rankShorts(proposals: [ShortsRankInput], desiredCount: Int?,
-                    model: SmartEditModel, effort: String? = nil, apiKey: String,
-                    videoMap: String = "") async throws -> ShortsRankingEnvelope {
-        let user = try ShortsPrompts.rankUser(proposals: proposals, desiredCount: desiredCount,
-                                              videoMap: videoMap)
-        let content = try await chat(model: model, apiKey: apiKey,
-                                     system: ShortsPrompts.rankerSystem,
-                                     user: user, schema: .shortsRanking,
-                                     reasoningEffort: effort)
-        do { return try Self.decodeShortsRanking(content, proposals: proposals) }
-        catch is CancellationError {
+    func rankShorts(
+        proposals: [ShortsRankInput], desiredCount: Int?,
+        model: SmartEditModel, effort: String? = nil, apiKey: String,
+        videoMap: String = ""
+    ) async throws -> ShortsRankingEnvelope {
+        let user = try ShortsPrompts.rankUser(
+            proposals: proposals, desiredCount: desiredCount,
+            videoMap: videoMap)
+        let content = try await chat(
+            model: model, apiKey: apiKey,
+            system: ShortsPrompts.rankerSystem,
+            user: user, schema: .shortsRanking,
+            reasoningEffort: effort)
+        do { return try Self.decodeShortsRanking(content, proposals: proposals) } catch is CancellationError {
             throw CancellationError()
         } catch {
-            let repaired = try await chat(model: model, apiKey: apiKey,
-                                          system: "Ты исправляешь только JSON-формат.",
-                                          user: SmartEditPrompts.repairUser(content, contract: "shorts_decisions_schema_v1"),
-                                          schema: .jsonObject,
-                                          reasoningEffort: "minimal")
+            let repaired = try await chat(
+                model: model, apiKey: apiKey,
+                system: "Ты исправляешь только JSON-формат.",
+                user: SmartEditPrompts.repairUser(content, contract: "shorts_decisions_schema_v1"),
+                schema: .jsonObject,
+                reasoningEffort: "minimal")
             return try Self.decodeShortsRanking(repaired, proposals: proposals)
         }
     }
 
     /// Нарезка на shorts, проход 3: «тест холодного зрителя» для отобранных
     /// роликов — слабые отсеиваются с приговором в одно предложение.
-    func verifyShorts(inputs: [ShortsVerifyInput], videoMap: String,
-                      model: SmartEditModel, effort: String? = nil,
-                      apiKey: String) async throws -> ShortsVerdictEnvelope {
+    func verifyShorts(
+        inputs: [ShortsVerifyInput], videoMap: String,
+        model: SmartEditModel, effort: String? = nil,
+        apiKey: String
+    ) async throws -> ShortsVerdictEnvelope {
         let user = try ShortsPrompts.verifyUser(inputs: inputs, videoMap: videoMap)
-        let content = try await chat(model: model, apiKey: apiKey,
-                                     system: ShortsPrompts.verifierSystem,
-                                     user: user, schema: .shortsVerdicts,
-                                     reasoningEffort: effort)
-        do { return try Self.decodeShortsVerdicts(content, inputs: inputs) }
-        catch is CancellationError {
+        let content = try await chat(
+            model: model, apiKey: apiKey,
+            system: ShortsPrompts.verifierSystem,
+            user: user, schema: .shortsVerdicts,
+            reasoningEffort: effort)
+        do { return try Self.decodeShortsVerdicts(content, inputs: inputs) } catch is CancellationError {
             throw CancellationError()
         } catch {
-            let repaired = try await chat(model: model, apiKey: apiKey,
-                                          system: "Ты исправляешь только JSON-формат.",
-                                          user: SmartEditPrompts.repairUser(content, contract: "shorts_verdicts_schema_v1"),
-                                          schema: .jsonObject,
-                                          reasoningEffort: "minimal")
+            let repaired = try await chat(
+                model: model, apiKey: apiKey,
+                system: "Ты исправляешь только JSON-формат.",
+                user: SmartEditPrompts.repairUser(content, contract: "shorts_verdicts_schema_v1"),
+                schema: .jsonObject,
+                reasoningEffort: "minimal")
             return try Self.decodeShortsVerdicts(repaired, inputs: inputs)
         }
     }
 
-    private enum OutputSchema { case proposals, reviews, jsonObject, shortsProposals, shortsRanking, shortsMap, shortsVerdicts }
+    private enum OutputSchema {
+        case proposals, reviews, jsonObject, shortsProposals, shortsRanking, shortsMap, shortsVerdicts
+    }
 
-    private func chat(model: SmartEditModel, apiKey: String, system: String,
-                      user: String, schema: OutputSchema,
-                      reasoningEffort: String? = nil) async throws -> String {
+    private func chat(
+        model: SmartEditModel, apiKey: String, system: String,
+        user: String, schema: OutputSchema,
+        reasoningEffort: String? = nil
+    ) async throws -> String {
         var request = URLRequest(url: baseURL.appendingPathComponent("chat/completions"))
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         authorize(&request, key: apiKey)
-        request.httpBody = try encoder.encode(ChatRequest(
-            model: model.rawValue,
-            messages: [.init(role: "system", content: system), .init(role: "user", content: user)],
-            provider: .init(dataCollection: "deny", requireParameters: true, allowFallbacks: true),
-            responseFormat: responseFormat(for: schema, strict: model.usesStrictSchema),
-            reasoning: reasoningEffort.map { ChatRequest.Reasoning(effort: $0) }
-        ))
+        request.httpBody = try encoder.encode(
+            ChatRequest(
+                model: model.rawValue,
+                messages: [.init(role: "system", content: system), .init(role: "user", content: user)],
+                provider: .init(dataCollection: "deny", requireParameters: true, allowFallbacks: true),
+                responseFormat: responseFormat(for: schema, strict: model.usesStrictSchema),
+                reasoning: reasoningEffort.map { ChatRequest.Reasoning(effort: $0) }
+            ))
         let data = try await data(for: request, retry: true)
         guard let content = try decoder.decode(ChatResponse.self, from: data).choices.first?.message.content,
-              !content.isEmpty else { throw OpenRouterError.damagedResponse }
+            !content.isEmpty
+        else { throw OpenRouterError.damagedResponse }
         return content
     }
 
@@ -345,26 +370,31 @@ actor OpenRouterClient {
         }
     }
 
-    static func decodeProposals(_ content: String,
-                                words: [OpenRouterTranscriptWord]) throws -> ProposalEnvelope {
+    static func decodeProposals(
+        _ content: String,
+        words: [OpenRouterTranscriptWord]
+    ) throws -> ProposalEnvelope {
         let decoder = JSONDecoder()
         let wordIndices = try validatedWordIndices(words)
         guard let data = content.data(using: .utf8),
-              let envelope = try? decoder.decode(ProposalEnvelope.self, from: data),
-              envelope.schemaVersion == 1,
-              Set(envelope.edits.map(\.id)).count == envelope.edits.count,
-              envelope.edits.allSatisfy({
-                  !$0.id.isEmpty && !$0.reason.isEmpty && (0...1).contains($0.confidence) &&
-                      validRange(first: $0.firstWordID, last: $0.lastWordID,
-                                 wordIndices: wordIndices) != nil
-              })
+            let envelope = try? decoder.decode(ProposalEnvelope.self, from: data),
+            envelope.schemaVersion == 1,
+            Set(envelope.edits.map(\.id)).count == envelope.edits.count,
+            envelope.edits.allSatisfy({
+                !$0.id.isEmpty && !$0.reason.isEmpty && (0...1).contains($0.confidence)
+                    && validRange(
+                        first: $0.firstWordID, last: $0.lastWordID,
+                        wordIndices: wordIndices) != nil
+            })
         else { throw OpenRouterError.damagedResponse }
         return envelope
     }
 
-    static func decodeReviews(_ content: String,
-                              proposals: ProposalEnvelope,
-                              words: [OpenRouterTranscriptWord]) throws -> ReviewEnvelope {
+    static func decodeReviews(
+        _ content: String,
+        proposals: ProposalEnvelope,
+        words: [OpenRouterTranscriptWord]
+    ) throws -> ReviewEnvelope {
         let decoder = JSONDecoder()
         let wordIndices = try validatedWordIndices(words)
         guard Set(proposals.edits.map(\.id)).count == proposals.edits.count else {
@@ -372,23 +402,23 @@ actor OpenRouterClient {
         }
         let proposalsByID = Dictionary(uniqueKeysWithValues: proposals.edits.map { ($0.id, $0) })
         guard let data = content.data(using: .utf8),
-              let envelope = try? decoder.decode(ReviewEnvelope.self, from: data),
-              envelope.schemaVersion == 1,
-              Set(envelope.decisions.map(\.editID)).count == envelope.decisions.count,
-              envelope.decisions.allSatisfy({ review in
-                  guard let proposal = proposalsByID[review.editID],
-                        !review.reason.isEmpty,
-                        (0...1).contains(review.confidence),
-                        let proposalRange = validRange(
-                            first: proposal.firstWordID, last: proposal.lastWordID,
-                            wordIndices: wordIndices),
-                        let reviewRange = validRange(
-                            first: review.firstWordID, last: review.lastWordID,
-                            wordIndices: wordIndices)
-                  else { return false }
-                  return reviewRange.lowerBound >= proposalRange.lowerBound &&
-                      reviewRange.upperBound <= proposalRange.upperBound
-              })
+            let envelope = try? decoder.decode(ReviewEnvelope.self, from: data),
+            envelope.schemaVersion == 1,
+            Set(envelope.decisions.map(\.editID)).count == envelope.decisions.count,
+            envelope.decisions.allSatisfy({ review in
+                guard let proposal = proposalsByID[review.editID],
+                    !review.reason.isEmpty,
+                    (0...1).contains(review.confidence),
+                    let proposalRange = validRange(
+                        first: proposal.firstWordID, last: proposal.lastWordID,
+                        wordIndices: wordIndices),
+                    let reviewRange = validRange(
+                        first: review.firstWordID, last: review.lastWordID,
+                        wordIndices: wordIndices)
+                else { return false }
+                return reviewRange.lowerBound >= proposalRange.lowerBound
+                    && reviewRange.upperBound <= proposalRange.upperBound
+            })
         else { throw OpenRouterError.damagedResponse }
         return envelope
     }
@@ -397,88 +427,97 @@ actor OpenRouterClient {
     /// невалидные клипы просто отфильтровываются, чтобы одно слабое место
     /// ответа не губило всё окно. Длительность здесь не проверяется — длинные
     /// фрагменты позже ужимает сервис.
-    static func decodeShortsProposals(_ content: String,
-                                      words: [OpenRouterTranscriptWord]) throws -> ShortsProposalEnvelope {
+    static func decodeShortsProposals(
+        _ content: String,
+        words: [OpenRouterTranscriptWord]
+    ) throws -> ShortsProposalEnvelope {
         let decoder = JSONDecoder()
         guard let data = Self.extractedEnvelopeData(content),
-              let envelope = try? decoder.decode(ShortsProposalEnvelope.self, from: data),
-              envelope.schemaVersion == 1 else {
-            Logger.network.error("Shorts proposals: повреждённый ответ: \(content.prefix(400), privacy: .public)")
+            let envelope = try? decoder.decode(ShortsProposalEnvelope.self, from: data),
+            envelope.schemaVersion == 1
+        else {
+            Logger.network.error("Shorts proposals: повреждённый ответ (\(content.utf8.count) байт)")
             throw OpenRouterError.damagedResponse
         }
         let wordTimes = try validatedWordIndices(words)
         var seenIDs = Set<String>()
         let clips = envelope.clips.filter { clip in
-            seenIDs.insert(clip.id).inserted &&
-                !clip.id.isEmpty && !clip.title.isEmpty && !clip.reason.isEmpty &&
-                (0...1).contains(clip.confidence) &&
-                validRange(first: clip.firstWordID, last: clip.lastWordID,
-                           wordIndices: wordTimes) != nil
+            seenIDs.insert(clip.id).inserted && !clip.id.isEmpty && !clip.title.isEmpty && !clip.reason.isEmpty
+                && (0...1).contains(clip.confidence)
+                && validRange(
+                    first: clip.firstWordID, last: clip.lastWordID,
+                    wordIndices: wordTimes) != nil
         }
         return ShortsProposalEnvelope(schemaVersion: 1, clips: clips)
     }
 
     /// Ленентный декодер отбора: неизвестные и повторные кандидаты отбрасываются,
     /// правила рангов нормализует сервис — модели иногда путают нумерацию.
-    static func decodeShortsRanking(_ content: String,
-                                    proposals: [ShortsRankInput]) throws -> ShortsRankingEnvelope {
+    static func decodeShortsRanking(
+        _ content: String,
+        proposals: [ShortsRankInput]
+    ) throws -> ShortsRankingEnvelope {
         let decoder = JSONDecoder()
         let proposalIDs = Set(proposals.map(\.id))
         guard !proposalIDs.isEmpty,
-              let data = Self.extractedEnvelopeData(content),
-              let envelope = try? decoder.decode(ShortsRankingEnvelope.self, from: data),
-              envelope.schemaVersion == 1 else {
-            Logger.network.error("Shorts decisions: повреждённый ответ: \(content.prefix(400), privacy: .public)")
+            let data = Self.extractedEnvelopeData(content),
+            let envelope = try? decoder.decode(ShortsRankingEnvelope.self, from: data),
+            envelope.schemaVersion == 1
+        else {
+            Logger.network.error("Shorts decisions: повреждённый ответ (\(content.utf8.count) байт)")
             throw OpenRouterError.damagedResponse
         }
         var seenIDs = Set<String>()
         let decisions = envelope.decisions.filter { decision in
-            seenIDs.insert(decision.clipID).inserted &&
-                proposalIDs.contains(decision.clipID) &&
-                !decision.title.isEmpty && !decision.reason.isEmpty &&
-                (0...1).contains(decision.confidence)
+            seenIDs.insert(decision.clipID).inserted && proposalIDs.contains(decision.clipID) && !decision.title.isEmpty
+                && !decision.reason.isEmpty && (0...1).contains(decision.confidence)
         }
         return ShortsRankingEnvelope(schemaVersion: 1, decisions: decisions)
     }
 
     /// Ленентный декодер карты: пики с битыми диапазонами слов отфильтровываются,
     /// конверт жив, даже если summary короткий — он опционален по смыслу.
-    static func decodeShortsMap(_ content: String,
-                                words: [OpenRouterTranscriptWord]) throws -> ShortsMapEnvelope {
+    static func decodeShortsMap(
+        _ content: String,
+        words: [OpenRouterTranscriptWord]
+    ) throws -> ShortsMapEnvelope {
         let decoder = JSONDecoder()
         guard let data = Self.extractedEnvelopeData(content),
-              let envelope = try? decoder.decode(ShortsMapEnvelope.self, from: data),
-              envelope.schemaVersion == 1 else {
-            Logger.network.error("Shorts map: повреждённый ответ: \(content.prefix(400), privacy: .public)")
+            let envelope = try? decoder.decode(ShortsMapEnvelope.self, from: data),
+            envelope.schemaVersion == 1
+        else {
+            Logger.network.error("Shorts map: повреждённый ответ (\(content.utf8.count) байт)")
             throw OpenRouterError.damagedResponse
         }
         let wordIndices = try validatedWordIndices(words)
         let peaks = envelope.peaks.filter {
-            !$0.what.isEmpty &&
-                validRange(first: $0.firstWordID, last: $0.lastWordID,
-                           wordIndices: wordIndices) != nil
+            !$0.what.isEmpty
+                && validRange(
+                    first: $0.firstWordID, last: $0.lastWordID,
+                    wordIndices: wordIndices) != nil
         }
         return ShortsMapEnvelope(schemaVersion: 1, summary: envelope.summary, peaks: peaks)
     }
 
     /// Ленентный декодер вердиктов: неизвестные и повторные кандидаты
     /// отбрасываются, пропущенного кандидата сервис трактует как «оставить».
-    static func decodeShortsVerdicts(_ content: String,
-                                     inputs: [ShortsVerifyInput]) throws -> ShortsVerdictEnvelope {
+    static func decodeShortsVerdicts(
+        _ content: String,
+        inputs: [ShortsVerifyInput]
+    ) throws -> ShortsVerdictEnvelope {
         let decoder = JSONDecoder()
         let inputIDs = Set(inputs.map(\.id))
         guard !inputIDs.isEmpty,
-              let data = Self.extractedEnvelopeData(content),
-              let envelope = try? decoder.decode(ShortsVerdictEnvelope.self, from: data),
-              envelope.schemaVersion == 1 else {
-            Logger.network.error("Shorts verdicts: повреждённый ответ: \(content.prefix(400), privacy: .public)")
+            let data = Self.extractedEnvelopeData(content),
+            let envelope = try? decoder.decode(ShortsVerdictEnvelope.self, from: data),
+            envelope.schemaVersion == 1
+        else {
+            Logger.network.error("Shorts verdicts: повреждённый ответ (\(content.utf8.count) байт)")
             throw OpenRouterError.damagedResponse
         }
         var seenIDs = Set<String>()
         let verdicts = envelope.verdicts.filter {
-            seenIDs.insert($0.clipID).inserted &&
-                inputIDs.contains($0.clipID) &&
-                !$0.verdict.isEmpty
+            seenIDs.insert($0.clipID).inserted && inputIDs.contains($0.clipID) && !$0.verdict.isEmpty
         }
         return ShortsVerdictEnvelope(schemaVersion: 1, verdicts: verdicts)
     }
@@ -501,7 +540,8 @@ actor OpenRouterClient {
         if let dict = object as? [String: Any] {
             for key in ["schema", "json_schema", "jsonSchema"] where dict["schema_version"] == nil {
                 if let inner = dict[key], JSONSerialization.isValidJSONObject(inner),
-                   let innerData = try? JSONSerialization.data(withJSONObject: inner) {
+                    let innerData = try? JSONSerialization.data(withJSONObject: inner)
+                {
                     return innerData
                 }
             }
@@ -528,20 +568,38 @@ actor OpenRouterClient {
         wordIndices: [String: Int]
     ) -> ClosedRange<Int>? {
         guard let firstIndex = wordIndices[first],
-              let lastIndex = wordIndices[last],
-              firstIndex <= lastIndex else { return nil }
+            let lastIndex = wordIndices[last],
+            firstIndex <= lastIndex
+        else { return nil }
         return firstIndex...lastIndex
     }
 
     private func responseFormat(for schema: OutputSchema, strict: Bool) -> ResponseFormat {
         guard strict, schema != .jsonObject else { return .init(type: "json_object", jsonSchema: nil) }
         switch schema {
-        case .proposals: return .init(type: "json_schema", jsonSchema: .init(name: "smart_edit_proposals", strict: true, schema: Self.proposalSchema))
-        case .reviews: return .init(type: "json_schema", jsonSchema: .init(name: "smart_edit_reviews", strict: true, schema: Self.reviewSchema))
-        case .shortsProposals: return .init(type: "json_schema", jsonSchema: .init(name: "shorts_clips", strict: true, schema: Self.shortsProposalSchema))
-        case .shortsRanking: return .init(type: "json_schema", jsonSchema: .init(name: "shorts_decisions", strict: true, schema: Self.shortsRankingSchema))
-        case .shortsMap: return .init(type: "json_schema", jsonSchema: .init(name: "shorts_map", strict: true, schema: Self.shortsMapSchema))
-        case .shortsVerdicts: return .init(type: "json_schema", jsonSchema: .init(name: "shorts_verdicts", strict: true, schema: Self.shortsVerdictsSchema))
+        case .proposals:
+            return .init(
+                type: "json_schema",
+                jsonSchema: .init(name: "smart_edit_proposals", strict: true, schema: Self.proposalSchema))
+        case .reviews:
+            return .init(
+                type: "json_schema",
+                jsonSchema: .init(name: "smart_edit_reviews", strict: true, schema: Self.reviewSchema))
+        case .shortsProposals:
+            return .init(
+                type: "json_schema",
+                jsonSchema: .init(name: "shorts_clips", strict: true, schema: Self.shortsProposalSchema))
+        case .shortsRanking:
+            return .init(
+                type: "json_schema",
+                jsonSchema: .init(name: "shorts_decisions", strict: true, schema: Self.shortsRankingSchema))
+        case .shortsMap:
+            return .init(
+                type: "json_schema", jsonSchema: .init(name: "shorts_map", strict: true, schema: Self.shortsMapSchema))
+        case .shortsVerdicts:
+            return .init(
+                type: "json_schema",
+                jsonSchema: .init(name: "shorts_verdicts", strict: true, schema: Self.shortsVerdictsSchema))
         case .jsonObject: return .init(type: "json_object", jsonSchema: nil)
         }
     }
@@ -594,7 +652,8 @@ private struct ChatRequest: Encodable {
     struct Provider: Encodable {
         let dataCollection: String; let requireParameters: Bool; let allowFallbacks: Bool
         enum CodingKeys: String, CodingKey {
-            case dataCollection = "data_collection", requireParameters = "require_parameters", allowFallbacks = "allow_fallbacks"
+            case dataCollection = "data_collection", requireParameters = "require_parameters", allowFallbacks =
+                "allow_fallbacks"
         }
     }
     /// Подсказка глубины «рассуждений» для reasoning-моделей: на творческом
@@ -605,7 +664,9 @@ private struct ChatRequest: Encodable {
     let provider: Provider
     let responseFormat: ResponseFormat
     let reasoning: Reasoning?
-    enum CodingKeys: String, CodingKey { case model, messages, provider, reasoning; case responseFormat = "response_format" }
+    enum CodingKeys: String, CodingKey {
+        case model, messages, provider, reasoning; case responseFormat = "response_format"
+    }
 }
 
 private struct ResponseFormat: Encodable {
@@ -623,77 +684,109 @@ private indirect enum JSONSchema: Encodable, Sendable {
     case integer(constant: Int?)
     case boolean
 
-    static let proposals: JSONSchema = .object(properties: [
-        "schema_version": .integer(constant: 1),
-        "edits": .array(items: .object(properties: [
-            "id": .string(), "kind": .string(enumValues: SmartEditKind.allCases.map(\.rawValue)),
-            "first_word_id": .string(), "last_word_id": .string(), "reason": .string(),
-            "confidence": .number(minimum: 0, maximum: 1)
-        ], required: ["id", "kind", "first_word_id", "last_word_id", "reason", "confidence"], additionalProperties: false))
-    ], required: ["schema_version", "edits"], additionalProperties: false)
+    static let proposals: JSONSchema = .object(
+        properties: [
+            "schema_version": .integer(constant: 1),
+            "edits": .array(
+                items: .object(
+                    properties: [
+                        "id": .string(), "kind": .string(enumValues: SmartEditKind.allCases.map(\.rawValue)),
+                        "first_word_id": .string(), "last_word_id": .string(), "reason": .string(),
+                        "confidence": .number(minimum: 0, maximum: 1),
+                    ], required: ["id", "kind", "first_word_id", "last_word_id", "reason", "confidence"],
+                    additionalProperties: false)),
+        ], required: ["schema_version", "edits"], additionalProperties: false)
 
-    static let reviews: JSONSchema = .object(properties: [
-        "schema_version": .integer(constant: 1),
-        "decisions": .array(items: .object(properties: [
-            "edit_id": .string(), "decision": .string(enumValues: ["accept", "reject"]),
-            "first_word_id": .string(), "last_word_id": .string(), "reason": .string(),
-            "confidence": .number(minimum: 0, maximum: 1)
-        ], required: ["edit_id", "decision", "first_word_id", "last_word_id", "reason", "confidence"], additionalProperties: false))
-    ], required: ["schema_version", "decisions"], additionalProperties: false)
+    static let reviews: JSONSchema = .object(
+        properties: [
+            "schema_version": .integer(constant: 1),
+            "decisions": .array(
+                items: .object(
+                    properties: [
+                        "edit_id": .string(), "decision": .string(enumValues: ["accept", "reject"]),
+                        "first_word_id": .string(), "last_word_id": .string(), "reason": .string(),
+                        "confidence": .number(minimum: 0, maximum: 1),
+                    ], required: ["edit_id", "decision", "first_word_id", "last_word_id", "reason", "confidence"],
+                    additionalProperties: false)),
+        ], required: ["schema_version", "decisions"], additionalProperties: false)
 
-    static let shortsProposals: JSONSchema = .object(properties: [
-        "schema_version": .integer(constant: 1),
-        "clips": .array(items: .object(properties: [
-            "id": .string(), "first_word_id": .string(), "last_word_id": .string(),
-            "title": .string(), "reason": .string(),
-            "hook": .string(), "pattern": .string(), "topic": .string(),
-            "hook_score": .number(minimum: 0, maximum: 10),
-            "standalone_score": .number(minimum: 0, maximum: 10),
-            "payoff_score": .number(minimum: 0, maximum: 10),
-            "pacing_score": .number(minimum: 0, maximum: 10),
-            "confidence": .number(minimum: 0, maximum: 1)
-        ], required: ["id", "first_word_id", "last_word_id", "title", "reason",
-                      "hook", "pattern", "topic", "hook_score", "standalone_score",
-                      "payoff_score", "pacing_score", "confidence"], additionalProperties: false))
-    ], required: ["schema_version", "clips"], additionalProperties: false)
+    static let shortsProposals: JSONSchema = .object(
+        properties: [
+            "schema_version": .integer(constant: 1),
+            "clips": .array(
+                items: .object(
+                    properties: [
+                        "id": .string(), "first_word_id": .string(), "last_word_id": .string(),
+                        "title": .string(), "reason": .string(),
+                        "hook": .string(), "pattern": .string(), "topic": .string(),
+                        "hook_score": .number(minimum: 0, maximum: 10),
+                        "standalone_score": .number(minimum: 0, maximum: 10),
+                        "payoff_score": .number(minimum: 0, maximum: 10),
+                        "pacing_score": .number(minimum: 0, maximum: 10),
+                        "confidence": .number(minimum: 0, maximum: 1),
+                    ],
+                    required: [
+                        "id", "first_word_id", "last_word_id", "title", "reason",
+                        "hook", "pattern", "topic", "hook_score", "standalone_score",
+                        "payoff_score", "pacing_score", "confidence",
+                    ], additionalProperties: false)),
+        ], required: ["schema_version", "clips"], additionalProperties: false)
 
-    static let shortsRanking: JSONSchema = .object(properties: [
-        "schema_version": .integer(constant: 1),
-        "decisions": .array(items: .object(properties: [
-            "clip_id": .string(), "decision": .string(enumValues: ["accept", "reject"]),
-            "rank": .integer(constant: nil), "title": .string(), "reason": .string(),
-            "confidence": .number(minimum: 0, maximum: 1)
-        ], required: ["clip_id", "decision", "rank", "title", "reason", "confidence"], additionalProperties: false))
-    ], required: ["schema_version", "decisions"], additionalProperties: false)
+    static let shortsRanking: JSONSchema = .object(
+        properties: [
+            "schema_version": .integer(constant: 1),
+            "decisions": .array(
+                items: .object(
+                    properties: [
+                        "clip_id": .string(), "decision": .string(enumValues: ["accept", "reject"]),
+                        "rank": .integer(constant: nil), "title": .string(), "reason": .string(),
+                        "confidence": .number(minimum: 0, maximum: 1),
+                    ], required: ["clip_id", "decision", "rank", "title", "reason", "confidence"],
+                    additionalProperties: false)),
+        ], required: ["schema_version", "decisions"], additionalProperties: false)
 
-    static let shortsMap: JSONSchema = .object(properties: [
-        "schema_version": .integer(constant: 1),
-        "summary": .string(),
-        "peaks": .array(items: .object(properties: [
-            "first_word_id": .string(), "last_word_id": .string(), "what": .string()
-        ], required: ["first_word_id", "last_word_id", "what"], additionalProperties: false))
-    ], required: ["schema_version", "summary", "peaks"], additionalProperties: false)
+    static let shortsMap: JSONSchema = .object(
+        properties: [
+            "schema_version": .integer(constant: 1),
+            "summary": .string(),
+            "peaks": .array(
+                items: .object(
+                    properties: [
+                        "first_word_id": .string(), "last_word_id": .string(), "what": .string(),
+                    ], required: ["first_word_id", "last_word_id", "what"], additionalProperties: false)),
+        ], required: ["schema_version", "summary", "peaks"], additionalProperties: false)
 
-    static let shortsVerdicts: JSONSchema = .object(properties: [
-        "schema_version": .integer(constant: 1),
-        "verdicts": .array(items: .object(properties: [
-            "clip_id": .string(), "keep": .boolean, "verdict": .string()
-        ], required: ["clip_id", "keep", "verdict"], additionalProperties: false))
-    ], required: ["schema_version", "verdicts"], additionalProperties: false)
+    static let shortsVerdicts: JSONSchema = .object(
+        properties: [
+            "schema_version": .integer(constant: 1),
+            "verdicts": .array(
+                items: .object(
+                    properties: [
+                        "clip_id": .string(), "keep": .boolean, "verdict": .string(),
+                    ], required: ["clip_id", "keep", "verdict"], additionalProperties: false)),
+        ], required: ["schema_version", "verdicts"], additionalProperties: false)
 
     func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: Keys.self)
         switch self {
         case .object(let properties, let required, let additional):
-            try c.encode("object", forKey: .type); try c.encode(properties, forKey: .properties)
-            try c.encode(required, forKey: .required); try c.encode(additional, forKey: .additionalProperties)
-        case .array(let items): try c.encode("array", forKey: .type); try c.encode(items, forKey: .items)
+            try c.encode("object", forKey: .type)
+            try c.encode(properties, forKey: .properties)
+            try c.encode(required, forKey: .required)
+            try c.encode(additional, forKey: .additionalProperties)
+        case .array(let items):
+            try c.encode("array", forKey: .type)
+            try c.encode(items, forKey: .items)
         case .string(let values):
-            try c.encode("string", forKey: .type); try c.encodeIfPresent(values, forKey: .enumValues)
+            try c.encode("string", forKey: .type)
+            try c.encodeIfPresent(values, forKey: .enumValues)
         case .number(let minimum, let maximum):
-            try c.encode("number", forKey: .type); try c.encodeIfPresent(minimum, forKey: .minimum); try c.encodeIfPresent(maximum, forKey: .maximum)
+            try c.encode("number", forKey: .type)
+            try c.encodeIfPresent(minimum, forKey: .minimum)
+            try c.encodeIfPresent(maximum, forKey: .maximum)
         case .integer(let constant):
-            try c.encode("integer", forKey: .type); try c.encodeIfPresent(constant, forKey: .constant)
+            try c.encode("integer", forKey: .type)
+            try c.encodeIfPresent(constant, forKey: .constant)
         case .boolean:
             try c.encode("boolean", forKey: .type)
         }

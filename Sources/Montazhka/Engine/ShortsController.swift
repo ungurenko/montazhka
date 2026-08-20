@@ -1,9 +1,37 @@
-import Foundation
 import AVFoundation
 import AppKit
-import SwiftUI
-import Observation
+import Foundation
 import OSLog
+import Observation
+import SwiftUI
+
+struct ShortsPreviewRequest {
+    let candidateID: UUID
+    let sourceURL: URL
+    let cropVertical: Bool
+    let displaySize: CGSize
+}
+
+@MainActor
+protocol ShortsPreviewBuilding {
+    func makeItem(for request: ShortsPreviewRequest) async throws -> AVPlayerItem
+}
+
+@MainActor
+struct DefaultShortsPreviewBuilder: ShortsPreviewBuilding {
+    func makeItem(for request: ShortsPreviewRequest) async throws -> AVPlayerItem {
+        let asset = AVURLAsset(url: request.sourceURL)
+        let item = AVPlayerItem(asset: asset)
+        if request.cropVertical {
+            item.videoComposition = await ShortsExporter.verticalCropComposition(
+                for: asset,
+                displaySize: request.displaySize
+            )
+        }
+        try Task.checkCancellation()
+        return item
+    }
+}
 
 /// Экран нарезки на shorts: анализ отдельного файла, просмотр кандидатов,
 /// пакетный экспорт. Живёт независимо от проекта.
@@ -52,12 +80,17 @@ final class ShortsController {
     private let service: ShortsCutService
     private let openRouter: OpenRouterClient
     private let keyManager: OpenRouterKeyManager
+    private let previewBuilder: any ShortsPreviewBuilding
 
     static let reasoningKey = "shorts.reasoningEffort"
 
-    @ObservationIgnored private var analysisTask: Task<Void, Never>?
-    @ObservationIgnored private var analysisGeneration = Generation()
+    @ObservationIgnored private let analysisOperation = LatestOperation()
     @ObservationIgnored private var exportTask: Task<Void, Never>?
+    @ObservationIgnored private let prepareOperation = LatestOperation()
+    @ObservationIgnored private let reasoningOperation = LatestOperation()
+    @ObservationIgnored private let previewOperation = LatestOperation()
+    @ObservationIgnored private let seekOperation = LatestOperation()
+    @ObservationIgnored private var sourceAccess: MediaAccessLease?
     @ObservationIgnored private var previewBoundary: Any?
     @ObservationIgnored private var previewingID: UUID?
     @ObservationIgnored private var timeObserver: Any?
@@ -65,21 +98,29 @@ final class ShortsController {
 
     var fileName: String { source.displayName }
 
-    init(sourceURL: URL,
-         store: any ProjectRepository,
-         openRouterKeyStore: any OpenRouterKeyStoring = OpenRouterKeyStore()) {
-        self.source = MediaReference(url: sourceURL)
+    init(
+        sourceURL: URL,
+        store: any ProjectRepository,
+        openRouterKeyStore: any OpenRouterKeyStoring = OpenRouterKeyStore(),
+        previewBuilder: any ShortsPreviewBuilding = DefaultShortsPreviewBuilder()
+    ) {
+        let source = MediaReference(url: sourceURL)
+        self.source = source
+        sourceAccess = source.makeAccessLease()
         let waveformStore = WaveformStore(cacheDir: store.directories.waveforms)
         self.waveforms = waveformStore
-        let transcriptStore = TranscriptStore(cacheDir: store.directories.transcripts,
-                                              modelsDir: store.directories.models)
+        let transcriptStore = TranscriptStore(
+            cacheDir: store.directories.transcripts,
+            modelsDir: store.directories.models)
         self.transcriptStore = transcriptStore
         let openRouter = OpenRouterClient()
         self.openRouter = openRouter
-        self.service = ShortsCutService(transcriptStore: transcriptStore,
-                                        openRouter: openRouter,
-                                        waveforms: waveformStore)
+        self.service = ShortsCutService(
+            transcriptStore: transcriptStore,
+            openRouter: openRouter,
+            waveforms: waveformStore)
         self.keyManager = OpenRouterKeyManager(store: openRouterKeyStore)
+        self.previewBuilder = previewBuilder
         attachObservers()
         keyManager.refresh()
     }
@@ -88,10 +129,14 @@ final class ShortsController {
         player.pause()
         player.replaceCurrentItem(with: nil)
         isPlaying = false
-        analysisTask?.cancel()
+        analysisOperation.cancel()
         exportTask?.cancel()
-        _ = analysisGeneration.advance()
+        prepareOperation.cancel()
+        reasoningOperation.cancel()
+        previewOperation.cancel()
+        seekOperation.cancel()
         keyManager.cancel()
+        sourceAccess = nil
         cancelPreviewStop()
         if let timeObserver { player.removeTimeObserver(timeObserver) }
         if let endObserver { NotificationCenter.default.removeObserver(endObserver) }
@@ -103,21 +148,27 @@ final class ShortsController {
     func prepare() {
         guard sourceDuration == 0, prepareError == nil else { return }
         let asset = AVURLAsset(url: sourceURL)
-        Task { [weak self] in
+        prepareOperation.start { [weak self] token in
             guard let self else { return }
             guard let duration = try? await asset.load(.duration).seconds, duration.isFinite else {
+                guard self.prepareOperation.isCurrent(token) else { return }
                 self.prepareError = "Не удалось прочитать файл."
                 return
             }
             guard let videoTrack = try? await asset.loadTracks(withMediaType: .video).first else {
+                guard self.prepareOperation.isCurrent(token) else { return }
                 self.prepareError = "В файле нет видеодорожки."
                 return
             }
+            guard self.prepareOperation.isCurrent(token) else { return }
             if let naturalSize = try? await videoTrack.load(.naturalSize),
-               let transform = try? await videoTrack.load(.preferredTransform) {
+                let transform = try? await videoTrack.load(.preferredTransform)
+            {
+                guard self.prepareOperation.isCurrent(token) else { return }
                 let rect = CGRect(origin: .zero, size: naturalSize).applying(transform)
                 self.displaySize = CGSize(width: abs(rect.width), height: abs(rect.height))
             }
+            guard self.prepareOperation.isCurrent(token) else { return }
             self.sourceDuration = duration
             if duration < ShortsLimits.minSourceDuration {
                 self.prepareError = ShortsError.tooShort.localizedDescription
@@ -126,7 +177,7 @@ final class ShortsController {
     }
 
     private var sourceURL: URL {
-        source.resolvedURL ?? URL(fileURLWithPath: source.lastKnownPath)
+        sourceAccess?.url ?? source.resolvedURL ?? URL(fileURLWithPath: source.lastKnownPath)
     }
 
     // MARK: - Ключ OpenRouter
@@ -142,27 +193,30 @@ final class ShortsController {
         await keyManager.validateSaved()
     }
 
-    func deleteOpenRouterKey() {
-        if keyManager.delete() { cancelAnalysis() }
+    func deleteOpenRouterKey() async {
+        if await keyManager.delete() { cancelAnalysis() }
     }
 
     /// Подтягивает уровни размышлений выбранной модели из каталога OpenRouter.
     /// Без ключа или при сбое сети молча остаёмся на «Авто».
     func refreshReasoningOptions() {
         let requestedModel = model
-        guard let apiKey = try? keyManager.load() else { return }
-        Task { [weak self] in
+        reasoningOperation.start { [weak self] token in
             guard let self else { return }
             let options: [ReasoningChoice]
             do {
+                guard let apiKey = try await self.keyManager.load() else { return }
                 let capabilities = try await self.openRouter.reasoningCapabilities(
                     for: requestedModel, apiKey: apiKey)
-                options = ReasoningChoice.options(availableEfforts: capabilities.efforts,
-                                                  mandatory: capabilities.mandatory)
+                options = ReasoningChoice.options(
+                    availableEfforts: capabilities.efforts,
+                    mandatory: capabilities.mandatory)
             } catch {
                 return
             }
-            guard self.model == requestedModel else { return }
+            guard self.reasoningOperation.isCurrent(token),
+                self.model == requestedModel
+            else { return }
             self.reasoningOptions = options
             if !options.contains(self.reasoningChoice) {
                 self.reasoningChoice = .auto
@@ -174,20 +228,6 @@ final class ShortsController {
 
     func analyze() {
         guard prepareError == nil, sourceDuration >= ShortsLimits.minSourceDuration else { return }
-        let apiKey: String
-        do {
-            guard let stored = try keyManager.load() else {
-                status = .failed("Сначала сохрани ключ OpenRouter.")
-                return
-            }
-            apiKey = stored
-        } catch {
-            status = .failed(error.localizedDescription)
-            return
-        }
-
-        analysisTask?.cancel()
-        let generation = analysisGeneration.advance()
         let file = source
         let duration = sourceDuration
         let requestedCount = count
@@ -195,38 +235,41 @@ final class ShortsController {
         let requestedEffort = reasoningChoice.apiEffort
         candidates = []
         status = .preparingModel(progress: nil)
-        analysisTask = Task { [weak self] in
+        analysisOperation.start { [weak self] token in
             guard let self else { return }
             do {
+                guard let apiKey = try await self.keyManager.load() else {
+                    guard self.analysisOperation.isCurrent(token) else { return }
+                    self.status = .failed("Сначала сохрани ключ OpenRouter.")
+                    return
+                }
                 let result = try await self.service.analyze(
                     source: file, sourceDuration: duration, count: requestedCount,
                     model: requestedModel, effort: requestedEffort, apiKey: apiKey,
                     thresholdDB: DetectionSettings().thresholdDB,
                     status: { status in
-                        await self.receiveStatus(status, generation: generation)
+                        await self.receiveStatus(status, token: token)
                     })
-                guard self.analysisGeneration.isCurrent(generation) else { return }
+                guard self.analysisOperation.isCurrent(token) else { return }
                 self.candidates = self.preselected(result)
                 self.status = .ready
             } catch is CancellationError {
-                if self.analysisGeneration.isCurrent(generation) { self.status = .idle }
+                if self.analysisOperation.isCurrent(token) { self.status = .idle }
             } catch {
-                guard self.analysisGeneration.isCurrent(generation) else { return }
+                guard self.analysisOperation.isCurrent(token) else { return }
                 self.status = .failed(error.localizedDescription)
             }
         }
     }
 
     func cancelAnalysis() {
-        _ = analysisGeneration.advance()
-        analysisTask?.cancel()
-        analysisTask = nil
+        analysisOperation.cancel()
         candidates = []
         status = .idle
     }
 
-    private func receiveStatus(_ status: ShortsStatus, generation: Int) {
-        guard analysisGeneration.isCurrent(generation) else { return }
+    private func receiveStatus(_ status: ShortsStatus, token: LatestOperation.Token) {
+        guard analysisOperation.isCurrent(token) else { return }
         self.status = status
     }
 
@@ -252,22 +295,32 @@ final class ShortsController {
     func preview(_ candidate: ShortCandidate) {
         previewingID = candidate.id
         cancelPreviewStop()
+        seekOperation.cancel()
         player.pause()
-        let asset = AVURLAsset(url: sourceURL)
-        let cropEnabled = cropVertical
-        let size = displaySize
+        isPlaying = false
+        let request = ShortsPreviewRequest(
+            candidateID: candidate.id,
+            sourceURL: sourceURL,
+            cropVertical: cropVertical,
+            displaySize: displaySize
+        )
         let start = max(0, candidate.start)
         let end = min(sourceDuration, candidate.end)
-        Task { [weak self] in
+        previewOperation.start { [weak self] token in
             guard let self else { return }
-            let item = AVPlayerItem(asset: asset)
-            if cropEnabled {
-                item.videoComposition = await ShortsExporter.verticalCropComposition(
-                    for: asset, displaySize: size)
+            let item: AVPlayerItem
+            do {
+                item = try await self.previewBuilder.makeItem(for: request)
+                try Task.checkCancellation()
+            } catch {
+                return
             }
+            guard self.previewOperation.isCurrent(token) else { return }
             self.player.replaceCurrentItem(with: item)
-            await self.player.seek(to: CMTime(seconds: start, preferredTimescale: 600),
-                                   toleranceBefore: .zero, toleranceAfter: .zero)
+            await self.player.seek(
+                to: CMTime(seconds: start, preferredTimescale: 600),
+                toleranceBefore: .zero, toleranceAfter: .zero)
+            guard self.previewOperation.isCurrent(token) else { return }
             self.currentTime = start
             self.player.play()
             self.isPlaying = true
@@ -288,7 +341,8 @@ final class ShortsController {
             player.pause()
         } else {
             if let end = player.currentItem?.duration.seconds,
-               end > 0, currentTime >= end - 0.02 {
+                end > 0, currentTime >= end - 0.02
+            {
                 seek(to: 0)
             }
             player.play()
@@ -299,16 +353,20 @@ final class ShortsController {
     func seek(to time: Double) {
         let clamped = max(0, time)
         currentTime = clamped
-        Task { [weak self] in
-            await self?.player.seek(to: CMTime(seconds: clamped, preferredTimescale: 600),
-                                    toleranceBefore: .zero, toleranceAfter: .zero)
+        seekOperation.start { [weak self] token in
+            guard let self else { return }
+            await self.player.seek(
+                to: CMTime(seconds: clamped, preferredTimescale: 600),
+                toleranceBefore: .zero, toleranceAfter: .zero)
+            guard self.seekOperation.isCurrent(token) else { return }
         }
     }
 
     /// Кроп поменялся — перезапускаем текущий превью, чтобы показать честно.
     private func refreshPreviewAfterCropChange() {
         guard let id = previewingID,
-              let candidate = candidates.first(where: { $0.id == id }) else { return }
+            let candidate = candidates.first(where: { $0.id == id })
+        else { return }
         preview(candidate)
     }
 
@@ -367,8 +425,9 @@ final class ShortsController {
             do {
                 for (index, candidate) in selected.enumerated() {
                     try Task.checkCancellation()
-                    let fileURL = ShortsExporter.fileURL(in: folder, sourceName: sourceName,
-                                                         index: index, title: candidate.title)
+                    let fileURL = ShortsExporter.fileURL(
+                        in: folder, sourceName: sourceName,
+                        index: index, title: candidate.title)
                     try await ShortsExporter.export(
                         candidate: candidate, sourceURL: url, displaySize: size,
                         quality: exportQuality, cropVertical: crop, to: fileURL,
@@ -376,8 +435,9 @@ final class ShortsController {
                             Task { @MainActor [weak self] in
                                 guard let self else { return }
                                 if case .exporting(let done, _, _) = self.exportState, done == index {
-                                    self.exportState = .exporting(done: index, total: total,
-                                                                  progress: fraction)
+                                    self.exportState = .exporting(
+                                        done: index, total: total,
+                                        progress: fraction)
                                 }
                             }
                         })

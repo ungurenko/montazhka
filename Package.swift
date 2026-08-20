@@ -4,6 +4,10 @@ import PackageDescription
 let package = Package(
     name: "Montazhka",
     platforms: [.macOS(.v14)],
+    products: [
+        .library(name: "MontazhkaKit", targets: ["MontazhkaKit"]),
+        .executable(name: "Montazhka", targets: ["MontazhkaExecutable"]),
+    ],
     dependencies: [
         .package(
             url: "https://github.com/FluidInference/FluidAudio.git",
@@ -16,21 +20,28 @@ let package = Package(
             path: "Sources/MontazhkaCore",
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
-        .executableTarget(
-            name: "Montazhka",
+        .target(
+            name: "MontazhkaKit",
             dependencies: [
                 "MontazhkaCore",
-                .product(name: "FluidAudio", package: "FluidAudio")
+                .product(name: "FluidAudio", package: "FluidAudio"),
             ],
             path: "Sources/Montazhka",
             swiftSettings: [
                 .swiftLanguageMode(.v6)
             ]
         ),
+        .executableTarget(
+            name: "MontazhkaExecutable",
+            dependencies: ["MontazhkaKit"],
+            path: "Sources/MontazhkaExecutable",
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
         .testTarget(
             name: "MontazhkaTests",
-            dependencies: ["Montazhka", "MontazhkaCore"],
-            path: "Tests/MontazhkaTests"
-        )
+            dependencies: ["MontazhkaKit", "MontazhkaCore"],
+            path: "Tests/MontazhkaTests",
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
     ]
 )

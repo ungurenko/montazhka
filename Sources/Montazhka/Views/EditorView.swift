@@ -1,6 +1,6 @@
-import SwiftUI
 import AVFoundation
 import AppKit
+import SwiftUI
 import UniformTypeIdentifiers
 
 /// Монтажный стол: плеер сверху, лента снизу, справа — панель поиска пауз.
@@ -9,7 +9,6 @@ struct EditorView: View {
     var controller: EditorController
     @State private var projectName: String = ""
     @State private var showExport = false
-    @State private var keyMonitor: LocalEventMonitor?
     @State private var dropTask: Task<Void, Never>?
 
     var body: some View {
@@ -70,13 +69,12 @@ struct EditorView: View {
         }
         .onAppear {
             projectName = controller.project.name
-            installKeyMonitor()
         }
         .onDisappear {
-            removeKeyMonitor()
             dropTask?.cancel()
             dropTask = nil
         }
+        .focusedSceneValue(\.editorController, controller)
     }
 
     private func chooseReplacement(for source: MediaReference) {
@@ -124,6 +122,7 @@ struct EditorView: View {
             .buttonStyle(.plain)
             .foregroundStyle(Theme.accent)
             .disabled(app.isProjectOperationInProgress)
+            .accessibilityIdentifier("editor.back")
 
             TextField("Название", text: $projectName)
                 .textFieldStyle(.plain)
@@ -143,6 +142,7 @@ struct EditorView: View {
                 Label("Добавить видео", systemImage: "plus")
             }
             .buttonStyle(.bordered)
+            .accessibilityIdentifier("editor.addVideo")
 
             Menu {
                 Button {
@@ -211,8 +211,9 @@ struct EditorView: View {
             .buttonStyle(.borderedProminent)
             .tint(Theme.accent)
             .disabled(controller.project.clips.isEmpty)
+            .accessibilityIdentifier("editor.export")
         }
-        .padding(.leading, 84) // место под «светофор» окна
+        .padding(.leading, 84)  // место под «светофор» окна
         .padding(.trailing, 16)
         .padding(.vertical, 12)
     }
@@ -246,9 +247,15 @@ struct EditorView: View {
             if controller.project.clips.isEmpty {
                 dropHint
             } else if controller.previewState == .ready {
-                PlayerLayerView(player: controller.player)
-                    .clipShape(RoundedRectangle(cornerRadius: Theme.radius, style: .continuous))
-                    .onTapGesture { controller.togglePlay() }
+                Button {
+                    controller.togglePlay()
+                } label: {
+                    PlayerLayerView(player: controller.player)
+                        .clipShape(RoundedRectangle(cornerRadius: Theme.radius, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(controller.isPlaying ? "Поставить видео на паузу" : "Воспроизвести видео")
+                .accessibilityIdentifier("editor.player")
             }
             playerStatusOverlay
         }
@@ -346,48 +353,6 @@ struct EditorView: View {
         return true
     }
 
-    // MARK: - Клавиатура
-
-    private func installKeyMonitor() {
-        removeKeyMonitor()
-        let controller = self.controller
-        let monitor = LocalEventMonitor()
-        monitor.install(matching: .keyDown) { event in
-            // Не перехватываем клавиши, когда печатают текст (например, имя проекта).
-            if NSApp.keyWindow?.firstResponder is NSTextView { return event }
-            if event.modifierFlags.contains(.command) { return event }
-
-            switch event.keyCode {
-            case 49: // пробел
-                controller.togglePlay()
-            case 1: // S / Ы — разрезать
-                controller.splitAtPlayhead()
-            case 34: // I / Ш — начало выделения
-                controller.markSelectionStart()
-            case 31: // O / Щ — конец выделения
-                controller.markSelectionEnd()
-            case 7: // X / Ч — вырезать выделение
-                controller.cutSelection()
-            case 51, 117: // Backspace / Delete — удалить выбранный клип
-                controller.deleteSelectedClip()
-            case 123: // ←
-                controller.stepFrames(event.modifierFlags.contains(.shift) ? -30 : -1)
-            case 124: // →
-                controller.stepFrames(event.modifierFlags.contains(.shift) ? 30 : 1)
-            default:
-                return event
-            }
-            return nil
-        }
-        keyMonitor = monitor
-    }
-
-    private func removeKeyMonitor() {
-        if let keyMonitor {
-            keyMonitor.remove()
-            self.keyMonitor = nil
-        }
-    }
 }
 
 // MARK: - Нижняя панель управления
@@ -464,8 +429,10 @@ private struct PlayPauseControl: View {
     var controller: EditorController
 
     var body: some View {
-        ControlButton(icon: controller.isPlaying ? "pause.fill" : "play.fill",
-                      help: "Плей/пауза (пробел)", size: 22, prominent: true) {
+        ControlButton(
+            icon: controller.isPlaying ? "pause.fill" : "play.fill",
+            help: "Плей/пауза (пробел)", size: 22, prominent: true
+        ) {
             controller.togglePlay()
         }
     }
@@ -489,6 +456,7 @@ private struct ControlButton: View {
         }
         .buttonStyle(.plain)
         .help(help)
+        .accessibilityLabel(help)
     }
 }
 

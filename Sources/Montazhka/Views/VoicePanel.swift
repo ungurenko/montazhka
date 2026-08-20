@@ -47,9 +47,11 @@ struct VoicePanel: View {
                 .tint(Theme.accent)
                 .font(.system(size: 14, weight: .semibold, design: .rounded))
                 .foregroundStyle(Theme.textPrimary)
-            Text("Выравнивает громкость, приглушает фоновый шум и делает голос звонче. Слышно сразу в предпросмотре, в готовом видео будет так же.")
-                .font(.system(size: 11))
-                .foregroundStyle(Theme.textSecondary)
+            Text(
+                "Выравнивает громкость, приглушает фоновый шум и делает голос звонче. Слышно сразу в предпросмотре, в готовом видео будет так же."
+            )
+            .font(.system(size: 11))
+            .foregroundStyle(Theme.textSecondary)
         }
     }
 

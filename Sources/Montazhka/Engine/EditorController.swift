@@ -1,19 +1,15 @@
-import Foundation
 import AVFoundation
 import AppKit
-import SwiftUI
-import Observation
+import Foundation
 import OSLog
+import Observation
+import SwiftUI
 
 func uniqueMediaSources(in clips: [Clip]) -> [MediaReference] {
     var seen = Set<UUID>()
     return clips.compactMap { clip in
         seen.insert(clip.source.id).inserted ? clip.source : nil
     }
-}
-
-func resolvedMediaPaths(_ sources: [MediaReference]) -> [String] {
-    sources.compactMap { $0.resolvedURL?.path }
 }
 
 /// Состояние обработки улучшенного звука.
@@ -60,7 +56,7 @@ enum OpenRouterKeyStatus: Equatable, Sendable {
 /// Сердце монтажки: держит проект, собирает предпросмотр, режет, отменяет, сохраняет.
 @MainActor
 @Observable
-final class EditorController {
+final class EditorController: ExportPreparing {
     private(set) var project: Project
     var currentTime: Double = 0
     var isPlaying = false
@@ -111,6 +107,7 @@ final class EditorController {
     let waveforms: WaveformStore
     private let waveformAnalysis: WaveformAnalysisCoordinator
     private let mediaAvailability = MediaAvailabilityMonitor()
+    private let mediaAccess = MediaAccessCoordinator()
     let voiceStore: VoiceEnhanceStore
     let musicEQStore: MusicEQStore
     private let repository: any ProjectRepository
@@ -133,6 +130,7 @@ final class EditorController {
     @ObservationIgnored private var rebuildGeneration = Generation()
     @ObservationIgnored private var enhancedAudioURLs: [String: URL] = [:]
     @ObservationIgnored private var enhanceDebounce: Task<Void, Never>?
+    @ObservationIgnored private var enhanceRenderTask: Task<Void, Never>?
     @ObservationIgnored private var enhanceGeneration = Generation()
     @ObservationIgnored private var musicDebounce: Task<Void, Never>?
     @ObservationIgnored private var seekTask: Task<Void, Never>?
@@ -140,6 +138,8 @@ final class EditorController {
     @ObservationIgnored private var displaySizeCache: [String: CGSize] = [:]
     @ObservationIgnored private var smartEditTask: Task<Void, Never>?
     @ObservationIgnored private var smartEditGeneration = Generation()
+    @ObservationIgnored private var smartEditReasoningTask: Task<Void, Never>?
+    @ObservationIgnored private var smartEditReasoningGeneration = Generation()
     @ObservationIgnored private var smartEditSnapshotID: String?
     @ObservationIgnored private var previewTask: Task<Void, Never>?
     @ObservationIgnored private var clipImportTask: Task<Void, Never>?
@@ -153,20 +153,24 @@ final class EditorController {
     /// Размер кадра первого клипа с учётом поворота — для оценки размера файла в экспорте.
     func sourceDisplaySize() async -> CGSize? {
         guard let clip = project.clips.first else { return nil }
-        if let cached = displaySizeCache[clip.sourcePath] { return cached }
-        let asset = AVURLAsset(url: clip.url)
+        guard let sourceURL = mediaAccess.url(for: clip.source) else { return nil }
+        if let cached = displaySizeCache[sourceURL.path] { return cached }
+        let asset = AVURLAsset(url: sourceURL)
         guard let track = try? await asset.loadTracks(withMediaType: .video).first,
-              let naturalSize = try? await track.load(.naturalSize),
-              let transform = try? await track.load(.preferredTransform) else { return nil }
+            let naturalSize = try? await track.load(.naturalSize),
+            let transform = try? await track.load(.preferredTransform)
+        else { return nil }
         let rect = CGRect(origin: .zero, size: naturalSize).applying(transform)
         let display = CGSize(width: abs(rect.width), height: abs(rect.height))
-        displaySizeCache[clip.sourcePath] = display
+        displaySizeCache[sourceURL.path] = display
         return display
     }
 
-    init(project: Project,
-         store: any ProjectRepository,
-         openRouterKeyStore: any OpenRouterKeyStoring = OpenRouterKeyStore()) {
+    init(
+        project: Project,
+        store: any ProjectRepository,
+        openRouterKeyStore: any OpenRouterKeyStoring = OpenRouterKeyStore()
+    ) {
         self.project = project
         self.projectEditor = ProjectEditor(project: project)
         self.repository = store
@@ -180,8 +184,9 @@ final class EditorController {
         self.voiceStore = voiceStore
         self.musicEQStore = musicEQStore
         self.mediaPipeline = MediaPipeline(voiceStore: voiceStore, musicEQStore: musicEQStore)
-        let transcriptStore = TranscriptStore(cacheDir: store.directories.transcripts,
-                                               modelsDir: store.directories.models)
+        let transcriptStore = TranscriptStore(
+            cacheDir: store.directories.transcripts,
+            modelsDir: store.directories.models)
         self.transcriptStore = transcriptStore
         let openRouterClient = OpenRouterClient()
         self.openRouterClient = openRouterClient
@@ -191,6 +196,7 @@ final class EditorController {
             waveforms: self.waveforms
         )
         player.actionAtItemEnd = .pause
+        mediaAccess.synchronize(uniqueMediaSources(in: project.clips))
 
         checkMissingFiles()
         attachObservers()
@@ -217,10 +223,17 @@ final class EditorController {
         previewTask?.cancel()
         clipImportTask?.cancel()
         seekTask?.cancel()
+        enhanceDebounce?.cancel()
+        enhanceRenderTask?.cancel()
         _ = rebuildGeneration.advance()
+        _ = enhanceGeneration.advance()
+        smartEditReasoningTask?.cancel()
+        _ = smartEditReasoningGeneration.advance()
+        await voiceStore.cancelAll()
         cancelSmartEdit()
         openRouterKeyManager.cancel()
         mediaAvailability.cancel()
+        mediaAccess.stopAll()
         waveformAnalysis.cancel()
         if let endObserver { NotificationCenter.default.removeObserver(endObserver) }
         if let terminateObserver { NotificationCenter.default.removeObserver(terminateObserver) }
@@ -264,8 +277,9 @@ final class EditorController {
         guard !affected.isEmpty else { return "Этот исходник уже не используется в проекте." }
         let asset = AVURLAsset(url: url)
         guard let duration = try? await asset.load(.duration).seconds,
-              duration.isFinite,
-              duration >= (affected.map(\.end).max() ?? 0) else {
+            duration.isFinite,
+            duration >= (affected.map(\.end).max() ?? 0)
+        else {
             return "Выбранный файл короче сохранённого монтажа или не читается как видео."
         }
         beginEdit()
@@ -278,7 +292,7 @@ final class EditorController {
 
     private func warmUpWaveforms() {
         let sources = uniqueMediaSources(in: project.clips)
-        waveformAnalysis.warmUp(paths: resolvedMediaPaths(sources))
+        waveformAnalysis.warmUp(paths: sources.compactMap { mediaAccess.url(for: $0)?.path })
     }
 
     // MARK: - Сборка предпросмотра
@@ -289,22 +303,35 @@ final class EditorController {
 
     /// Композиция для экспорта. Если улучшение включено — дожидается обработки всех
     /// исходников; при неудаче отдаёт оригинальный звук и текст предупреждения.
-    func compositionForExport() async -> (composition: AVComposition,
-                                          audioMix: AVAudioMix?,
-                                          audioWarning: String?) {
+    func compositionForExport() async -> (
+        composition: AVComposition,
+        audioMix: AVAudioMix?,
+        audioWarning: String?
+    ) {
         let result = await renderComposition(mode: .export)
-        let warning = result.warnings.isEmpty
+        let warning =
+            result.warnings.isEmpty
             ? nil
             : result.warnings.map(\.message).joined(separator: "\n")
         return (result.composition, result.audioMix, warning)
     }
 
+    func prepareExport() async throws -> PreparedExport {
+        let result = await compositionForExport()
+        return PreparedExport(
+            composition: result.composition,
+            audioMix: result.audioMix,
+            warning: result.audioWarning
+        )
+    }
+
     private func renderComposition(mode: MediaRenderMode) async -> MediaRenderResult {
         let processesMusic = project.music.enabled && project.music.eqEnabled
         if processesMusic { musicProcessing = true }
-        let request = MediaRenderRequest(project: project,
-                                         mode: mode,
-                                         readyEnhancedAudio: enhancedAudioURLs)
+        let request = MediaRenderRequest(
+            project: project,
+            mode: mode,
+            readyEnhancedAudio: enhancedAudioURLs)
         let result = await mediaPipeline.render(request)
         if processesMusic { musicProcessing = false }
         return result
@@ -344,8 +371,9 @@ final class EditorController {
             self.player.replaceCurrentItem(with: item)
             if let time {
                 let clamped = min(max(0, time), max(0, self.duration - 0.001))
-                await self.player.seek(to: CMTime(seconds: clamped, preferredTimescale: 600),
-                                       toleranceBefore: .zero, toleranceAfter: .zero)
+                await self.player.seek(
+                    to: CMTime(seconds: clamped, preferredTimescale: 600),
+                    toleranceBefore: .zero, toleranceAfter: .zero)
                 self.currentTime = clamped
             }
             guard !Task.isCancelled, self.rebuildGeneration.isCurrent(generation) else { return }
@@ -370,7 +398,7 @@ final class EditorController {
     func seek(to time: Double) {
         cancelPreviewStop()
         let clamped = min(max(0, time), max(0, duration - 0.001))
-        currentTime = clamped          // курсор следует за мышью мгновенно
+        currentTime = clamped  // курсор следует за мышью мгновенно
         // Коалесинг: держим одну перемотку в полёте, цель — всегда самая свежая.
         // Промежуточные цели при быстрой протяжке отбрасываются, картинка не копит отставание.
         latestSeekTarget = clamped
@@ -447,6 +475,7 @@ final class EditorController {
         project = projectEditor.project
         let currentSources = Set(uniqueMediaSources(in: project.clips))
         if currentSources != previousSources {
+            mediaAccess.synchronize(Array(currentSources))
             checkMissingFiles()
             warmUpWaveforms()
         }
@@ -475,6 +504,7 @@ final class EditorController {
 
     private func restoreProject(_ snapshot: Project) {
         project = snapshot
+        mediaAccess.synchronize(uniqueMediaSources(in: project.clips))
         checkMissingFiles()
         warmUpWaveforms()
         candidates = []
@@ -508,18 +538,21 @@ final class EditorController {
                             let asset = AVURLAsset(url: url)
                             let duration = try await asset.load(.duration).seconds
                             guard duration.isFinite, duration > 0.1 else {
-                                return ClipLoadResult(index: i, url: url, duration: nil,
-                                                      error: "не удалось определить длительность")
+                                return ClipLoadResult(
+                                    index: i, url: url, duration: nil,
+                                    error: "не удалось определить длительность")
                             }
                             let tracks = try await asset.loadTracks(withMediaType: .video)
                             guard !tracks.isEmpty else {
-                                return ClipLoadResult(index: i, url: url, duration: nil,
-                                                      error: "в файле нет видеодорожки")
+                                return ClipLoadResult(
+                                    index: i, url: url, duration: nil,
+                                    error: "в файле нет видеодорожки")
                             }
                             return ClipLoadResult(index: i, url: url, duration: duration, error: nil)
                         } catch {
-                            return ClipLoadResult(index: i, url: url, duration: nil,
-                                                  error: error.localizedDescription)
+                            return ClipLoadResult(
+                                index: i, url: url, duration: nil,
+                                error: error.localizedDescription)
                         }
                     }
                 }
@@ -540,7 +573,8 @@ final class EditorController {
             let failures = loaded.compactMap { result -> String? in
                 result.error.map { "«\(result.url.lastPathComponent)»: \($0)" }
             }
-            self.clipImportState = failures.isEmpty
+            self.clipImportState =
+                failures.isEmpty
                 ? .idle
                 : .failed("Не удалось добавить видео:\n" + failures.joined(separator: "\n"))
             self.clipImportTask = nil
@@ -550,7 +584,7 @@ final class EditorController {
     func splitAtPlayhead() {
         let splitTime = currentTime
         guard let (index, offset) = clipPosition(at: currentTime),
-              let newClips = TimelineOps.splitting(clips: project.clips, at: index, offset: offset)
+            let newClips = TimelineOps.splitting(clips: project.clips, at: index, offset: offset)
         else { return }
         beginEdit()
         applyProjectEdit(.replaceClips(newClips))
@@ -565,7 +599,8 @@ final class EditorController {
         )
         guard newClips != project.clips else { return }
         let trimmedClip = newClips[index]
-        let boundaryTime = timelineStart(of: index)
+        let boundaryTime =
+            timelineStart(of: index)
             + (edge == .end ? trimmedClip.duration : 0)
 
         beginEdit()
@@ -604,8 +639,9 @@ final class EditorController {
     /// Перестановка во время перетаскивания: только порядок, без пересборки плеера.
     func liveReorder(draggedID: UUID, over targetID: UUID) {
         guard draggedID != targetID,
-              let from = project.clips.firstIndex(where: { $0.id == draggedID }),
-              let to = project.clips.firstIndex(where: { $0.id == targetID }) else { return }
+            let from = project.clips.firstIndex(where: { $0.id == draggedID }),
+            let to = project.clips.firstIndex(where: { $0.id == targetID })
+        else { return }
         if !smartEditCandidates.isEmpty || smartEditTask != nil { cancelSmartEdit() }
         var clips = project.clips
         clips.move(fromOffsets: IndexSet(integer: from), toOffset: to > from ? to + 1 : to)
@@ -626,9 +662,10 @@ final class EditorController {
 
     /// Вырезает кусок ленты; лента смыкается сама.
     private func removeTimelineRange(start: Double, end: Double) {
-        applyProjectEdit(.replaceClips(
-            TimelineOps.removingRange(clips: project.clips, start: start, end: end)
-        ))
+        applyProjectEdit(
+            .replaceClips(
+                TimelineOps.removingRange(clips: project.clips, start: start, end: end)
+            ))
     }
 
     // MARK: - Выделение диапазона
@@ -723,54 +760,58 @@ final class EditorController {
     /// До готовности играет прежний звук.
     private func refreshEnhancedAudio() {
         let generation = enhanceGeneration.advance()
-        voiceStore.cancelAll()
+        enhanceRenderTask?.cancel()
+        let settings = project.voiceEnhance
+        let sources = Array(
+            Set(uniqueMediaSources(in: project.clips).compactMap { mediaAccess.url(for: $0)?.path })
+        )
 
-        guard project.voiceEnhance.enabled else {
+        guard settings.enabled else {
             enhancedAudioURLs = [:]
             voiceStatus = .idle
             rebuildAndSeek(to: currentTime)
+            enhanceRenderTask = Task { [voiceStore] in await voiceStore.cancelAll() }
             return
         }
 
-        let settings = project.voiceEnhance
-        let mediaSources = uniqueMediaSources(in: project.clips)
-        guard !mediaSources.isEmpty else {
+        guard !sources.isEmpty else {
             voiceStatus = .idle
+            enhanceRenderTask = Task { [voiceStore] in await voiceStore.cancelAll() }
             return
         }
-        voiceStatus = .rendering(done: 0, total: mediaSources.count)
+        voiceStatus = .rendering(done: 0, total: sources.count)
 
-        Task { [weak self] in
+        enhanceRenderTask = Task { [weak self] in
             guard let self else { return }
-            let sources = await Task.detached(priority: .utility) {
-                Array(Set(resolvedMediaPaths(mediaSources)))
-            }.value
-            guard self.enhanceGeneration.isCurrent(generation) else { return }
-            guard !sources.isEmpty else {
-                self.voiceStatus = .idle
-                return
-            }
-            self.voiceStatus = .rendering(done: 0, total: sources.count)
-            guard let ready = await self.renderEnhancedAudio(sources: sources,
-                                                             settings: settings,
-                                                             generation: generation) else { return }
+            await self.voiceStore.cancelAll()
+            guard !Task.isCancelled, self.enhanceGeneration.isCurrent(generation) else { return }
+            guard
+                let ready = await self.renderEnhancedAudio(
+                    sources: sources,
+                    settings: settings,
+                    generation: generation)
+            else { return }
+            guard !Task.isCancelled, self.enhanceGeneration.isCurrent(generation) else { return }
             self.enhancedAudioURLs = ready
             self.voiceStatus = .idle
             self.rebuildAndSeek(to: self.currentTime)
+            self.enhanceRenderTask = nil
         }
     }
 
     /// Прогоняет все исходники через обработку голоса, обновляя счётчик прогресса.
     /// Возвращает nil, если пересчёт устарел, отменён или завершился ошибкой.
-    private func renderEnhancedAudio(sources: [String],
-                                     settings: VoiceEnhanceSettings,
-                                     generation: Int) async -> [String: URL]? {
+    private func renderEnhancedAudio(
+        sources: [String],
+        settings: VoiceEnhanceSettings,
+        generation: Int
+    ) async -> [String: URL]? {
         var ready: [String: URL] = [:]
         for (index, path) in sources.enumerated() {
             do {
                 ready[path] = try await voiceStore.ensure(source: path, settings: settings)
             } catch is CancellationError {
-                return nil // уже идёт новый пересчёт
+                return nil  // уже идёт новый пересчёт
             } catch VoiceEnhanceError.noAudioTrack {
                 // без звуковой дорожки — оставляем оригинал
             } catch {
@@ -829,48 +870,43 @@ final class EditorController {
         await openRouterKeyManager.validateSaved()
     }
 
-    func deleteOpenRouterKey() {
-        if openRouterKeyManager.delete() { cancelSmartEdit() }
+    func deleteOpenRouterKey() async {
+        if await openRouterKeyManager.delete() { cancelSmartEdit() }
     }
 
     /// Подтягивает уровни размышлений выбранной модели из каталога OpenRouter.
     /// Без ключа или при сбое сети молча остаёмся на «Авто».
     func refreshSmartEditReasoningOptions() {
+        smartEditReasoningTask?.cancel()
+        let generation = smartEditReasoningGeneration.advance()
         let requestedModel = smartEditModel
-        guard let apiKey = try? openRouterKeyManager.load() else { return }
-        Task { [weak self] in
+        smartEditReasoningTask = Task { [weak self] in
             guard let self else { return }
             let options: [ReasoningChoice]
             do {
+                guard let apiKey = try await self.openRouterKeyManager.load() else { return }
                 let capabilities = try await self.openRouterClient.reasoningCapabilities(
                     for: requestedModel, apiKey: apiKey)
-                options = ReasoningChoice.options(availableEfforts: capabilities.efforts,
-                                                  mandatory: capabilities.mandatory)
+                options = ReasoningChoice.options(
+                    availableEfforts: capabilities.efforts,
+                    mandatory: capabilities.mandatory)
             } catch {
                 return
             }
-            guard self.smartEditModel == requestedModel else { return }
+            guard !Task.isCancelled,
+                self.smartEditReasoningGeneration.isCurrent(generation),
+                self.smartEditModel == requestedModel
+            else { return }
             self.smartEditReasoningOptions = options
             if !options.contains(self.smartEditReasoning) {
                 self.smartEditReasoning = .auto
             }
+            self.smartEditReasoningTask = nil
         }
     }
 
     func analyzeSmartEdits() {
         guard !project.clips.isEmpty else { return }
-        let apiKey: String
-        do {
-            guard let stored = try openRouterKeyManager.load() else {
-                smartEditStatus = .failed("Сначала сохрани ключ OpenRouter.")
-                return
-            }
-            apiKey = stored
-        } catch {
-            smartEditStatus = .failed(error.localizedDescription)
-            return
-        }
-
         smartEditTask?.cancel()
         let generation = smartEditGeneration.advance()
         let clips = project.clips
@@ -883,6 +919,11 @@ final class EditorController {
         smartEditTask = Task { [weak self] in
             guard let self else { return }
             do {
+                guard let apiKey = try await self.openRouterKeyManager.load() else {
+                    guard self.smartEditGeneration.isCurrent(generation) else { return }
+                    self.smartEditStatus = .failed("Сначала сохрани ключ OpenRouter.")
+                    return
+                }
                 let result = try await self.smartEditService.analyze(
                     clips: clips, projectThresholdDB: threshold,
                     model: model, effort: effort, apiKey: apiKey,
@@ -928,8 +969,9 @@ final class EditorController {
     }
 
     func previewSmartEditOriginal(_ candidate: SmartEditCandidate) {
-        previewRange(start: max(0, candidate.timelineStart - 0.7),
-                     end: min(duration, candidate.timelineEnd + 0.7))
+        previewRange(
+            start: max(0, candidate.timelineStart - 0.7),
+            end: min(duration, candidate.timelineEnd + 0.7))
     }
 
     func previewSmartEditJoin(_ candidate: SmartEditCandidate) {
@@ -951,15 +993,17 @@ final class EditorController {
         let readyEnhancedAudio = enhancedAudioURLs
         Task { [weak self] in
             guard let self else { return }
-            let result = await self.mediaPipeline.render(MediaRenderRequest(
-                project: previewProject, mode: .preview,
-                readyEnhancedAudio: readyEnhancedAudio))
+            let result = await self.mediaPipeline.render(
+                MediaRenderRequest(
+                    project: previewProject, mode: .preview,
+                    readyEnhancedAudio: readyEnhancedAudio))
             guard self.rebuildGeneration.isCurrent(generation) else { return }
             let item = AVPlayerItem(asset: result.composition)
             item.audioMix = result.audioMix
             self.player.replaceCurrentItem(with: item)
-            await self.player.seek(to: CMTime(seconds: start, preferredTimescale: 600),
-                                   toleranceBefore: .zero, toleranceAfter: .zero)
+            await self.player.seek(
+                to: CMTime(seconds: start, preferredTimescale: 600),
+                toleranceBefore: .zero, toleranceAfter: .zero)
             self.player.play()
             let stop = NSValue(time: CMTime(seconds: end, preferredTimescale: 600))
             self.previewBoundary = self.player.addBoundaryTimeObserver(forTimes: [stop], queue: .main) { [weak self] in
@@ -979,9 +1023,10 @@ final class EditorController {
             smartEditStatus = .failed(SmartEditError.staleAnalysis.localizedDescription)
             return
         }
-        let ranges = SmartEditRanges.merged(smartEditCandidates.filter(\.enabled).map {
-            (start: $0.timelineStart, end: $0.timelineEnd)
-        })
+        let ranges = SmartEditRanges.merged(
+            smartEditCandidates.filter(\.enabled).map {
+                (start: $0.timelineStart, end: $0.timelineEnd)
+            })
         guard !ranges.isEmpty else { return }
         let seekTarget = ranges.first?.start ?? currentTime
         beginEdit()

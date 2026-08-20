@@ -6,7 +6,6 @@ struct ExportSheet: View {
     var controller: EditorController
     @State private var export = ExportModel()
     @State private var quality: ExportQuality = .high
-    @State private var audioWarning: String?
     @State private var sourceSize: CGSize?
 
     var body: some View {
@@ -14,6 +13,8 @@ struct ExportSheet: View {
             switch export.state {
             case .idle:
                 chooser
+            case .preparing:
+                preparingView
             case .exporting:
                 progressView
             case .done(let url):
@@ -26,6 +27,7 @@ struct ExportSheet: View {
         .frame(width: 440)
         .background(Theme.background)
         .task { sourceSize = await controller.sourceDisplaySize() }
+        .onDisappear { export.cancel() }
     }
 
     // MARK: - Выбор качества
@@ -43,11 +45,13 @@ struct ExportSheet: View {
 
             VStack(spacing: 8) {
                 ForEach(ExportQuality.allCases) { q in
-                    QualityRow(quality: q,
-                               estimate: q.estimateText(
-                                   duration: controller.duration,
-                                   displaySize: sourceSize ?? CGSize(width: 1920, height: 1080)),
-                               selected: quality == q) { quality = q }
+                    QualityRow(
+                        quality: q,
+                        estimate: q.estimateText(
+                            duration: controller.duration,
+                            displaySize: sourceSize ?? CGSize(width: 1920, height: 1080)),
+                        selected: quality == q
+                    ) { quality = q }
                 }
             }
 
@@ -63,22 +67,19 @@ struct ExportSheet: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(Theme.accent)
+                .accessibilityIdentifier("export.start")
             }
         }
     }
 
     private func startExport() {
         guard let url = export.chooseDestination(projectName: controller.project.name) else { return }
-        Task {
-            let (composition, audioMix, warning) = await controller.compositionForExport()
-            audioWarning = warning
-            export.export(composition: composition, audioMix: audioMix, quality: quality, to: url)
-        }
+        export.start(preparer: controller, quality: quality, to: url)
     }
 
     private var audioWarningLine: some View {
         Group {
-            if let audioWarning {
+            if let audioWarning = export.audioWarning {
                 Label(audioWarning, systemImage: "exclamationmark.triangle.fill")
                     .font(.system(size: 12))
                     .foregroundStyle(.orange)
@@ -88,6 +89,23 @@ struct ExportSheet: View {
     }
 
     // MARK: - Состояния
+
+    private var preparingView: some View {
+        VStack(spacing: 16) {
+            Text("Подготавливаю видео…")
+                .font(.system(size: 17, weight: .semibold, design: .rounded))
+                .foregroundStyle(Theme.textPrimary)
+            ProgressView()
+                .controlSize(.large)
+                .tint(Theme.accent)
+            Text("Собираю дорожки и обрабатываю звук")
+                .font(.system(size: 13))
+                .foregroundStyle(Theme.textSecondary)
+            Button("Отменить") { export.cancel() }
+                .buttonStyle(.bordered)
+                .accessibilityIdentifier("export.cancelPreparation")
+        }
+    }
 
     private var progressView: some View {
         VStack(spacing: 16) {
@@ -103,6 +121,7 @@ struct ExportSheet: View {
             audioWarningLine
             Button("Отменить") { export.cancel() }
                 .buttonStyle(.bordered)
+                .accessibilityIdentifier("export.cancel")
         }
     }
 
@@ -144,7 +163,7 @@ struct ExportSheet: View {
             HStack(spacing: 12) {
                 Button("Закрыть") { dismiss() }
                     .buttonStyle(.bordered)
-                Button("Попробовать ещё раз") { export.state = .idle }
+                Button("Попробовать ещё раз") { export.retry() }
                     .buttonStyle(.borderedProminent)
                     .tint(Theme.accent)
             }

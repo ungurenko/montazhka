@@ -1,13 +1,25 @@
-import SwiftUI
 import AppKit
 import OSLog
+import SwiftUI
+
+private struct FocusedEditorControllerKey: FocusedValueKey {
+    typealias Value = EditorController
+}
+
+extension FocusedValues {
+    var editorController: EditorController? {
+        get { self[FocusedEditorControllerKey.self] }
+        set { self[FocusedEditorControllerKey.self] = newValue }
+    }
+}
 
 struct MontazhkaApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @State private var app = AppModel()
+    @FocusedValue(\.editorController) private var editor
 
     var body: some Scene {
-        WindowGroup {
+        Window("Монтажка", id: "main") {
             RootView()
                 .environment(app)
                 .frame(minWidth: 1080, minHeight: 660)
@@ -17,13 +29,46 @@ struct MontazhkaApp: App {
         .windowStyle(.hiddenTitleBar)
         .commands {
             CommandGroup(replacing: .newItem) {}
-            // Меню не умеет следить за состоянием редактора (canUndo живёт в другом объекте),
-            // поэтому пункты всегда активны, а пустая отмена — просто ничего не делает.
             CommandGroup(replacing: .undoRedo) {
-                Button("Отменить") { app.editor?.undo() }
+                Button("Отменить") { editor?.undo() }
                     .keyboardShortcut("z", modifiers: .command)
-                Button("Повторить") { app.editor?.redo() }
+                    .disabled(editor?.canUndo != true)
+                Button("Повторить") { editor?.redo() }
                     .keyboardShortcut("z", modifiers: [.command, .shift])
+                    .disabled(editor?.canRedo != true)
+            }
+            CommandMenu("Монтаж") {
+                Button("Плей/пауза") { editor?.togglePlay() }
+                    .keyboardShortcut(.space, modifiers: [])
+                    .disabled(editor?.project.clips.isEmpty != false)
+                Button("Кадр назад") { editor?.stepFrames(-1) }
+                    .keyboardShortcut(.leftArrow, modifiers: [])
+                    .disabled(editor?.project.clips.isEmpty != false)
+                Button("Кадр вперёд") { editor?.stepFrames(1) }
+                    .keyboardShortcut(.rightArrow, modifiers: [])
+                    .disabled(editor?.project.clips.isEmpty != false)
+                Button("Секунда назад") { editor?.stepFrames(-30) }
+                    .keyboardShortcut(.leftArrow, modifiers: .shift)
+                    .disabled(editor?.project.clips.isEmpty != false)
+                Button("Секунда вперёд") { editor?.stepFrames(30) }
+                    .keyboardShortcut(.rightArrow, modifiers: .shift)
+                    .disabled(editor?.project.clips.isEmpty != false)
+                Divider()
+                Button("Разрезать") { editor?.splitAtPlayhead() }
+                    .keyboardShortcut("s", modifiers: [])
+                    .disabled(editor?.project.clips.isEmpty != false)
+                Button("Начало выделения") { editor?.markSelectionStart() }
+                    .keyboardShortcut("i", modifiers: [])
+                    .disabled(editor?.project.clips.isEmpty != false)
+                Button("Конец выделения") { editor?.markSelectionEnd() }
+                    .keyboardShortcut("o", modifiers: [])
+                    .disabled(editor?.project.clips.isEmpty != false)
+                Button("Вырезать выделение") { editor?.cutSelection() }
+                    .keyboardShortcut("x", modifiers: [])
+                    .disabled(editor?.timelineSelection == nil)
+                Button("Удалить выбранный клип") { editor?.deleteSelectedClip() }
+                    .keyboardShortcut(.delete, modifiers: [])
+                    .disabled(editor?.selectedClipID == nil)
             }
         }
     }
@@ -75,7 +120,8 @@ final class AppModel {
                 } else {
                     let count = listing.issues.count
                     let names = listing.issues.prefix(3).map(\.fileName).joined(separator: ", ")
-                    storeErrorMessage = "Не удалось открыть \(count) \(count == 1 ? "проект" : "проекта"): \(names). Остальные проекты доступны."
+                    storeErrorMessage =
+                        "Не удалось открыть \(count) \(count == 1 ? "проект" : "проекта"): \(names). Остальные проекты доступны."
                 }
                 if openLatestAfterLoad, editor == nil, let latest = recents.first {
                     openProject(id: latest.id)

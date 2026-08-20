@@ -1,6 +1,6 @@
-import Foundation
 import AVFoundation
 import CryptoKit
+import Foundation
 
 /// Громкость звука (RMS) окнами по 10 мс — основа и для отрисовки волны, и для поиска пауз.
 /// Извлекается один раз на исходный файл и кэшируется на диск.
@@ -16,11 +16,13 @@ final class WaveformStore: @unchecked Sendable {
     private let memory = NSCache<NSString, WaveformPeaksBox>()
     private let work: WaveformWorkCoordinator
 
-    init(cacheDir: URL,
-         memoryCostLimit: Int = 64 * 1024 * 1024,
-         memoryCountLimit: Int = 0,
-         maxConcurrentDecodes: Int = 2,
-         loader: Loader? = nil) {
+    init(
+        cacheDir: URL,
+        memoryCostLimit: Int = 64 * 1024 * 1024,
+        memoryCountLimit: Int = 0,
+        maxConcurrentDecodes: Int = 2,
+        loader: Loader? = nil
+    ) {
         self.cacheDir = cacheDir
         memory.totalCostLimit = memoryCostLimit
         memory.countLimit = memoryCountLimit
@@ -86,7 +88,7 @@ final class WaveformStore: @unchecked Sendable {
             AVLinearPCMBitDepthKey: 32,
             AVLinearPCMIsFloatKey: true,
             AVLinearPCMIsNonInterleaved: false,
-            AVLinearPCMIsBigEndianKey: false
+            AVLinearPCMIsBigEndianKey: false,
         ]
         let output = AVAssetReaderTrackOutput(track: track, outputSettings: settings)
         output.alwaysCopiesSampleData = false
@@ -94,7 +96,7 @@ final class WaveformStore: @unchecked Sendable {
         reader.add(output)
         guard reader.startReading() else { return nil }
 
-        let windowSize = 160 // 10 мс при 16 кГц
+        let windowSize = 160  // 10 мс при 16 кГц
         var peaks: [Float] = []
         var sumSquares: Double = 0
         var count = 0

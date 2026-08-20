@@ -1,5 +1,23 @@
 import Foundation
 
+/// Удерживает доступ к security-scoped URL ровно на время работы с медиа.
+public final class MediaAccessLease {
+    public let url: URL
+    private let usesSecurityScope: Bool
+
+    public init?(reference: MediaReference) {
+        guard let resolved = reference.resolvedBookmarkURL ?? reference.existingPathURL else {
+            return nil
+        }
+        url = resolved
+        usesSecurityScope = reference.bookmarkData != nil && resolved.startAccessingSecurityScopedResource()
+    }
+
+    deinit {
+        if usesSecurityScope { url.stopAccessingSecurityScopedResource() }
+    }
+}
+
 public struct MediaReference: Codable, Equatable, Hashable, Identifiable, Sendable {
     public var id: UUID
     public var lastKnownPath: String
@@ -17,22 +35,36 @@ public struct MediaReference: Codable, Equatable, Hashable, Identifiable, Sendab
         self.id = id
         lastKnownPath = url.path
         displayName = url.lastPathComponent
-        bookmarkData = try? url.bookmarkData(options: [.withSecurityScope],
-                                             includingResourceValuesForKeys: nil,
-                                             relativeTo: nil)
+        bookmarkData = try? url.bookmarkData(
+            options: [.withSecurityScope],
+            includingResourceValuesForKeys: nil,
+            relativeTo: nil)
     }
 
     public var resolvedURL: URL? {
-        if FileManager.default.fileExists(atPath: lastKnownPath) {
-            return URL(fileURLWithPath: lastKnownPath)
-        }
+        resolvedBookmarkURL ?? existingPathURL
+    }
+
+    public func makeAccessLease() -> MediaAccessLease? {
+        MediaAccessLease(reference: self)
+    }
+
+    fileprivate var existingPathURL: URL? {
+        guard FileManager.default.fileExists(atPath: lastKnownPath) else { return nil }
+        return URL(fileURLWithPath: lastKnownPath)
+    }
+
+    fileprivate var resolvedBookmarkURL: URL? {
         guard let bookmarkData else { return nil }
         var stale = false
-        guard let url = try? URL(resolvingBookmarkData: bookmarkData,
-                                 options: [.withSecurityScope, .withoutUI],
-                                 relativeTo: nil,
-                                 bookmarkDataIsStale: &stale),
-              FileManager.default.fileExists(atPath: url.path) else { return nil }
+        guard
+            let url = try? URL(
+                resolvingBookmarkData: bookmarkData,
+                options: [.withSecurityScope, .withoutUI],
+                relativeTo: nil,
+                bookmarkDataIsStale: &stale),
+            FileManager.default.fileExists(atPath: url.path)
+        else { return nil }
         return url
     }
 
@@ -75,7 +107,8 @@ public struct Clip: Identifiable, Codable, Equatable, Sendable {
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
-        source = try c.decodeIfPresent(MediaReference.self, forKey: .source)
+        source =
+            try c.decodeIfPresent(MediaReference.self, forKey: .source)
             ?? MediaReference(path: c.decode(String.self, forKey: .sourcePath))
         start = try c.decode(Double.self, forKey: .start)
         end = try c.decode(Double.self, forKey: .end)
@@ -110,8 +143,10 @@ public struct VoiceEnhanceSettings: Codable, Equatable, Sendable {
     public var presence: Double
     public var cacheKey: String { "v1|\(Int(leveling))|\(Int(noiseReduction))|\(Int(presence))" }
 
-    public init(enabled: Bool = false, leveling: Double = 50,
-                noiseReduction: Double = 50, presence: Double = 50) {
+    public init(
+        enabled: Bool = false, leveling: Double = 50,
+        noiseReduction: Double = 50, presence: Double = 50
+    ) {
         self.enabled = enabled
         self.leveling = leveling
         self.noiseReduction = noiseReduction
@@ -130,9 +165,11 @@ public struct MusicSettings: Codable, Equatable, Sendable {
     public var volume: Double
     public var eqEnabled: Bool
 
-    public init(enabled: Bool = false, trackID: String? = nil,
-                customMedia: MediaReference? = nil, volume: Double = 18,
-                eqEnabled: Bool = true) {
+    public init(
+        enabled: Bool = false, trackID: String? = nil,
+        customMedia: MediaReference? = nil, volume: Double = 18,
+        eqEnabled: Bool = true
+    ) {
         self.enabled = enabled
         self.trackID = trackID
         self.customMedia = customMedia
@@ -189,11 +226,13 @@ public struct Project: Identifiable, Codable, Equatable, Sendable {
     public var music: MusicSettings
     public var totalDuration: Double { clips.reduce(0) { $0 + $1.duration } }
 
-    public init(id: UUID = UUID(), schemaVersion: Int = Project.currentSchemaVersion,
-                name: String, clips: [Clip] = [], createdAt: Date = Date(),
-                updatedAt: Date = Date(), detection: DetectionSettings = DetectionSettings(),
-                voiceEnhance: VoiceEnhanceSettings = VoiceEnhanceSettings(),
-                music: MusicSettings = MusicSettings()) {
+    public init(
+        id: UUID = UUID(), schemaVersion: Int = Project.currentSchemaVersion,
+        name: String, clips: [Clip] = [], createdAt: Date = Date(),
+        updatedAt: Date = Date(), detection: DetectionSettings = DetectionSettings(),
+        voiceEnhance: VoiceEnhanceSettings = VoiceEnhanceSettings(),
+        music: MusicSettings = MusicSettings()
+    ) {
         self.id = id
         self.schemaVersion = schemaVersion
         self.name = name
@@ -216,7 +255,8 @@ public struct Project: Identifiable, Codable, Equatable, Sendable {
             throw DecodingError.dataCorruptedError(
                 forKey: .schemaVersion,
                 in: c,
-                debugDescription: "Project schema \(decodedVersion) is newer than supported schema \(Project.currentSchemaVersion)."
+                debugDescription:
+                    "Project schema \(decodedVersion) is newer than supported schema \(Project.currentSchemaVersion)."
             )
         }
         id = try c.decode(UUID.self, forKey: .id)

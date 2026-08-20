@@ -178,8 +178,10 @@ extension ShortsProposalDTO {
         pacingScore = Self.clamped(container, key: .pacingScore)
     }
 
-    private static func clamped(_ container: KeyedDecodingContainer<CodingKeys>,
-                                key: CodingKeys) -> Int {
+    private static func clamped(
+        _ container: KeyedDecodingContainer<CodingKeys>,
+        key: CodingKeys
+    ) -> Int {
         let raw = (try? container.decodeIfPresent(Int.self, forKey: key)) ?? 5
         return min(10, max(0, raw))
     }

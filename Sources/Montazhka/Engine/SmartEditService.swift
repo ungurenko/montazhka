@@ -5,16 +5,20 @@ actor SmartEditService {
     private let openRouter: OpenRouterClient
     private let waveforms: WaveformStore
 
-    init(transcriptStore: TranscriptStore, openRouter: OpenRouterClient,
-         waveforms: WaveformStore) {
+    init(
+        transcriptStore: TranscriptStore, openRouter: OpenRouterClient,
+        waveforms: WaveformStore
+    ) {
         self.transcriptStore = transcriptStore
         self.openRouter = openRouter
         self.waveforms = waveforms
     }
 
-    func analyze(clips: [Clip], projectThresholdDB: Double,
-                 model: SmartEditModel, effort: String?, apiKey: String,
-                 status: @escaping @Sendable (SmartEditStatus) async -> Void) async throws -> SmartEditAnalysisResult {
+    func analyze(
+        clips: [Clip], projectThresholdDB: Double,
+        model: SmartEditModel, effort: String?, apiKey: String,
+        status: @escaping @Sendable (SmartEditStatus) async -> Void
+    ) async throws -> SmartEditAnalysisResult {
         let snapshot = SmartEditSnapshot(clips: clips)
         try await openRouter.ensureModelAvailable(model, apiKey: apiKey)
         let cached = await transcriptStore.modelIsCached()
@@ -62,31 +66,36 @@ actor SmartEditService {
         var candidates: [SmartEditCandidate] = []
         for review in reviews.decisions where review.decision == .accept {
             guard let proposal = proposalByID[review.editID],
-                  let words = timelineMap.range(firstWordID: review.firstWordID,
-                                                lastWordID: review.lastWordID),
-                  let first = words.first,
-                  let clip = clips.first(where: { $0.id == first.clipID }),
-                  let clipTimelineStart = clipStarts[clip.id] else { continue }
+                let words = timelineMap.range(
+                    firstWordID: review.firstWordID,
+                    lastWordID: review.lastWordID),
+                let first = words.first,
+                let clip = clips.first(where: { $0.id == first.clipID }),
+                let clipTimelineStart = clipStarts[clip.id]
+            else { continue }
             let confidence = min(proposal.confidence, review.confidence)
             guard confidence >= 0.75 else { continue }
             guard let peaks = await waveforms.ensure(path: clip.sourcePath),
-                  let boundary = SmartCutBoundaryResolver.resolve(
+                let boundary = SmartCutBoundaryResolver.resolve(
                     words: words, clip: clip, clipTimelineStart: clipTimelineStart,
-                    peaks: peaks, projectThresholdDB: projectThresholdDB) else { continue }
+                    peaks: peaks, projectThresholdDB: projectThresholdDB)
+            else { continue }
             let text = words.map(\.text).joined(separator: " ")
-            candidates.append(SmartEditCandidate(
-                id: UUID(), kind: proposal.kind, reason: review.reason,
-                originalText: text,
-                timelineStart: boundary.timelineStart, timelineEnd: boundary.timelineEnd,
-                confidence: confidence,
-                enabled: SmartEditSelection.shouldEnable(
-                    kind: proposal.kind, confidence: confidence, hasSafeBoundary: true)
-            ))
+            candidates.append(
+                SmartEditCandidate(
+                    id: UUID(), kind: proposal.kind, reason: review.reason,
+                    originalText: text,
+                    timelineStart: boundary.timelineStart, timelineEnd: boundary.timelineEnd,
+                    confidence: confidence,
+                    enabled: SmartEditSelection.shouldEnable(
+                        kind: proposal.kind, confidence: confidence, hasSafeBoundary: true)
+                ))
         }
 
         await status(.ready)
-        return SmartEditAnalysisResult(snapshot: snapshot,
-                                       candidates: candidates.sorted { $0.timelineStart < $1.timelineStart })
+        return SmartEditAnalysisResult(
+            snapshot: snapshot,
+            candidates: candidates.sorted { $0.timelineStart < $1.timelineStart })
     }
 
     private func timelineStarts(clips: [Clip]) -> [UUID: Double] {

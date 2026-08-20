@@ -35,6 +35,7 @@ struct StartView: View {
             .buttonStyle(.plain)
             .disabled(app.isProjectOperationInProgress)
             .padding(.top, 28)
+            .accessibilityIdentifier("start.newProject")
 
             Button {
                 if let url = AppModel.pickVideo() { app.startShorts(url: url) }
@@ -50,6 +51,7 @@ struct StartView: View {
             .buttonStyle(.plain)
             .disabled(app.isProjectOperationInProgress)
             .padding(.top, 12)
+            .accessibilityIdentifier("start.shorts")
 
             if app.isProjectOperationInProgress {
                 ProgressView().controlSize(.small).padding(.top, 12)
@@ -120,6 +122,10 @@ private struct RecentCard: View {
         .buttonStyle(.plain)
         .disabled(app.isProjectOperationInProgress)
         .onHover { hovering = $0 }
+        .accessibilityLabel("Проект \(meta.name)")
+        .accessibilityValue("\(TimeFormat.spoken(meta.duration)), \(clipsLabel(meta.clipCount))")
+        .accessibilityHint("Открыть проект")
+        .accessibilityIdentifier("start.recent.\(meta.id.uuidString)")
         .contextMenu {
             Button("Удалить проект", role: .destructive) {
                 app.deleteProject(id: meta.id)
@@ -130,9 +136,13 @@ private struct RecentCard: View {
     private func clipsLabel(_ count: Int) -> String {
         let mod10 = count % 10, mod100 = count % 100
         let word: String
-        if mod10 == 1 && mod100 != 11 { word = "клип" }
-        else if (2...4).contains(mod10) && !(12...14).contains(mod100) { word = "клипа" }
-        else { word = "клипов" }
+        if mod10 == 1 && mod100 != 11 {
+            word = "клип"
+        } else if (2...4).contains(mod10) && !(12...14).contains(mod100) {
+            word = "клипа"
+        } else {
+            word = "клипов"
+        }
         return "\(count) \(word)"
     }
 }
