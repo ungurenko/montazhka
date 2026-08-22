@@ -74,6 +74,7 @@ enum SelfTest {
         testEditHistory()
         failures += SmartEditSelfTest.run()
         testExportEstimator()
+        failures += await ShortsSubtitleSelfTest.run()
         await testAudioPipeline()
         await testVoiceEnhance()
         await testBackgroundMusic()

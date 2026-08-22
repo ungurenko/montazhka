@@ -120,6 +120,14 @@ enum ShortsExportState: Equatable {
     case failed(String)
 }
 
+/// Результат анализа: найденные фрагменты и та же расшифровка,
+/// по которой строились их границы. Повторно распознавать исходник
+/// для субтитров не нужно.
+struct ShortsAnalysisResult: Sendable {
+    let candidates: [ShortCandidate]
+    let transcript: [TranscriptWord]
+}
+
 // MARK: - Контракты обмена с LLM
 
 struct ShortsProposalEnvelope: Codable, Equatable, Sendable {

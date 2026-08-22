@@ -22,11 +22,12 @@ struct DefaultShortsPreviewBuilder: ShortsPreviewBuilding {
     func makeItem(for request: ShortsPreviewRequest) async throws -> AVPlayerItem {
         let asset = AVURLAsset(url: request.sourceURL)
         let item = AVPlayerItem(asset: asset)
-        if request.cropVertical {
-            item.videoComposition = await ShortsExporter.verticalCropComposition(
-                for: asset,
-                displaySize: request.displaySize
-            )
+        if let videoComposition = await ShortsExporter.previewComposition(
+            for: asset,
+            displaySize: request.displaySize,
+            cropVertical: request.cropVertical
+        ) {
+            item.videoComposition = videoComposition
         }
         try Task.checkCancellation()
         return item
@@ -61,13 +62,30 @@ final class ShortsController {
     var cropVertical: Bool = UserDefaults.standard.bool(forKey: "shorts.cropVertical") {
         didSet {
             UserDefaults.standard.set(cropVertical, forKey: "shorts.cropVertical")
-            refreshPreviewAfterCropChange()
+            refreshPreviewAfterDisplayChange()
         }
+    }
+    private var subtitleSettings: ShortsSubtitleSettings = .saved
+
+    var subtitlesEnabled: Bool {
+        get { subtitleSettings.enabled }
+        set { updateSubtitleSettings { $0.enabled = newValue } }
+    }
+
+    var subtitleStyle: ShortsSubtitleStyle {
+        get { subtitleSettings.style }
+        set { updateSubtitleSettings { $0.style = newValue } }
+    }
+
+    var subtitleSize: ShortsSubtitleSize {
+        get { subtitleSettings.size }
+        set { updateSubtitleSettings { $0.size = newValue } }
     }
     var quality: ExportQuality = .high
 
     private(set) var status: ShortsStatus = .idle
     var candidates: [ShortCandidate] = []
+    private(set) var transcriptWords: [TranscriptWord] = []
     private(set) var exportState: ShortsExportState = .idle
     var openRouterKeyStatus: OpenRouterKeyStatus { keyManager.status }
 
@@ -97,6 +115,30 @@ final class ShortsController {
     @ObservationIgnored private var endObserver: NSObjectProtocol?
 
     var fileName: String { source.displayName }
+
+    var subtitleMode: ShortsSubtitleMode {
+        subtitleSettings.mode(with: transcriptWords)
+    }
+
+    var currentPreviewSubtitle: ShortsSubtitleOverlay? {
+        guard let previewingID,
+            let candidate = candidates.first(where: { $0.id == previewingID })
+        else { return nil }
+        return ShortsSubtitleOverlayBuilder.make(
+            at: currentTime,
+            sourceStart: candidate.start,
+            sourceEnd: candidate.end,
+            mode: subtitleMode)
+    }
+
+    private func updateSubtitleSettings(_ update: (inout ShortsSubtitleSettings) -> Void) {
+        var next = subtitleSettings
+        update(&next)
+        guard next != subtitleSettings else { return }
+        subtitleSettings = next
+        next.save()
+        refreshPreviewAfterDisplayChange()
+    }
 
     init(
         sourceURL: URL,
@@ -234,6 +276,7 @@ final class ShortsController {
         let requestedModel = model
         let requestedEffort = reasoningChoice.apiEffort
         candidates = []
+        transcriptWords = []
         status = .preparingModel(progress: nil)
         analysisOperation.start { [weak self] token in
             guard let self else { return }
@@ -251,7 +294,8 @@ final class ShortsController {
                         await self.receiveStatus(status, token: token)
                     })
                 guard self.analysisOperation.isCurrent(token) else { return }
-                self.candidates = self.preselected(result)
+                self.transcriptWords = result.transcript
+                self.candidates = self.preselected(result.candidates)
                 self.status = .ready
             } catch is CancellationError {
                 if self.analysisOperation.isCurrent(token) { self.status = .idle }
@@ -265,6 +309,7 @@ final class ShortsController {
     func cancelAnalysis() {
         analysisOperation.cancel()
         candidates = []
+        transcriptWords = []
         status = .idle
     }
 
@@ -298,14 +343,14 @@ final class ShortsController {
         seekOperation.cancel()
         player.pause()
         isPlaying = false
+        let start = max(0, candidate.start)
+        let end = min(sourceDuration, candidate.end)
         let request = ShortsPreviewRequest(
             candidateID: candidate.id,
             sourceURL: sourceURL,
             cropVertical: cropVertical,
             displaySize: displaySize
         )
-        let start = max(0, candidate.start)
-        let end = min(sourceDuration, candidate.end)
         previewOperation.start { [weak self] token in
             guard let self else { return }
             let item: AVPlayerItem
@@ -362,8 +407,9 @@ final class ShortsController {
         }
     }
 
-    /// Кроп поменялся — перезапускаем текущий превью, чтобы показать честно.
-    private func refreshPreviewAfterCropChange() {
+    /// Настройки отображения поменялись — перезапускаем текущий превью,
+    /// чтобы настройки были видны до экспорта.
+    private func refreshPreviewAfterDisplayChange() {
         guard let id = previewingID,
             let candidate = candidates.first(where: { $0.id == id })
         else { return }
@@ -418,6 +464,7 @@ final class ShortsController {
         let size = displaySize
         let exportQuality = quality
         let crop = cropVertical
+        let subtitleMode = self.subtitleMode
         let total = selected.count
         exportState = .exporting(done: 0, total: total, progress: 0)
         exportTask = Task { [weak self] in
@@ -430,7 +477,9 @@ final class ShortsController {
                         index: index, title: candidate.title)
                     try await ShortsExporter.export(
                         candidate: candidate, sourceURL: url, displaySize: size,
-                        quality: exportQuality, cropVertical: crop, to: fileURL,
+                        quality: exportQuality, cropVertical: crop,
+                        subtitleMode: subtitleMode,
+                        to: fileURL,
                         progress: { fraction in
                             Task { @MainActor [weak self] in
                                 guard let self else { return }

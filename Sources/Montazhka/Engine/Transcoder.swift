@@ -44,6 +44,14 @@ private struct AudioPumpIO: @unchecked Sendable {
     let audioInput: AVAssetWriterInput?
 }
 
+private final class ExportSessionBox: @unchecked Sendable {
+    let session: AVAssetExportSession
+
+    init(_ session: AVAssetExportSession) {
+        self.session = session
+    }
+}
+
 /// Перекодирование склейки в MP4 (H.264 + AAC) с заданным битрейтом.
 /// В отличие от готовых пресетов AVAssetExportSession даёт точный контроль сжатия,
 /// поэтому размер файла предсказуем: (битрейт видео + звука) × длительность.
@@ -211,6 +219,90 @@ enum Transcoder {
             throw TranscodeError.writerFailed(writer.error)
         }
         progress(1)
+    }
+
+    /// Core Animation tool поддерживается AVFoundation в offline-экспорте через
+    /// AVAssetExportSession. После запекания субтитров вторым проходом возвращаем
+    /// привычные битрейт и размеры, которыми пользуется основной Transcoder.
+    static func exportWithOfflineComposition(
+        input: ExportInput,
+        settings: Settings,
+        to url: URL,
+        progress: @escaping @Sendable (Double) -> Void
+    ) async throws {
+        guard input.videoComposition?.animationTool != nil else {
+            try await export(input: input, settings: settings, to: url, progress: progress)
+            return
+        }
+
+        let intermediate = FileManager.default.temporaryDirectory
+            .appendingPathComponent("montazhka-subtitles-\(UUID().uuidString).mp4")
+        defer { try? FileManager.default.removeItem(at: intermediate) }
+
+        try await exportWithSession(
+            input: input,
+            to: intermediate,
+            progress: { progress($0 * 0.5) })
+
+        try await export(
+            input: ExportInput(composition: AVURLAsset(url: intermediate), audioMix: nil),
+            settings: settings,
+            to: url,
+            progress: { progress(0.5 + $0 * 0.5) })
+    }
+
+    private static func exportWithSession(
+        input: ExportInput,
+        to url: URL,
+        progress: @escaping @Sendable (Double) -> Void
+    ) async throws {
+        guard let videoComposition = input.videoComposition,
+            let session = AVAssetExportSession(
+                asset: input.composition,
+                presetName: AVAssetExportPresetHighestQuality)
+        else {
+            throw TranscodeError.writerFailed(nil)
+        }
+
+        let box = ExportSessionBox(session)
+        session.videoComposition = videoComposition
+        session.audioMix = input.audioMix
+        session.outputURL = url
+        session.outputFileType = .mp4
+        session.shouldOptimizeForNetworkUse = true
+        try? FileManager.default.removeItem(at: url)
+
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                let monitor = Task.detached { [box] in
+                    while !Task.isCancelled {
+                        progress(Double(box.session.progress))
+                        switch box.session.status {
+                        case .completed, .failed, .cancelled:
+                            return
+                        default:
+                            try? await Task.sleep(nanoseconds: 200_000_000)
+                        }
+                    }
+                }
+
+                box.session.exportAsynchronously {
+                    monitor.cancel()
+                    progress(1)
+                    switch box.session.status {
+                    case .completed:
+                        continuation.resume()
+                    case .cancelled:
+                        continuation.resume(throwing: CancellationError())
+                    default:
+                        continuation.resume(
+                            throwing: TranscodeError.writerFailed(box.session.error))
+                    }
+                }
+            }
+        } onCancel: {
+            box.session.cancelExport()
+        }
     }
 
     /// Потоки ридер → писатель. Колбэк requestMediaDataWhenReady зовётся строго

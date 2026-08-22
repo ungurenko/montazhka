@@ -10,60 +10,55 @@ enum ShortsExporter {
         displaySize: CGSize,
         quality: ExportQuality,
         cropVertical: Bool,
+        subtitleMode: ShortsSubtitleMode = .off,
         to url: URL,
         progress: @escaping @Sendable (Double) -> Void
     ) async throws {
         let clip = Clip(sourceURL: sourceURL, start: candidate.start, end: candidate.end)
         let built = await CompositionBuilder.build(clips: [clip])
 
-        let crop =
-            cropVertical
-            ? await verticalCropComposition(for: built.composition, displaySize: displaySize)
-            : nil
-        let dimensions = crop?.renderSize ?? quality.targetDimensions(forDisplaySize: displaySize)
+        let plan = await ShortsVideoCompositionBuilder.make(
+            asset: built.composition,
+            displaySize: displaySize,
+            cropVertical: cropVertical,
+            subtitleMode: subtitleMode,
+            subtitleTimeline: ShortsSubtitleTimeline(
+                sourceStart: candidate.start,
+                sourceEnd: candidate.end,
+                relativeTo: candidate.start,
+                duration: candidate.duration))
+        let dimensions =
+            plan.croppedRenderSize
+            ?? quality.targetDimensions(forDisplaySize: displaySize)
         let settings = Transcoder.Settings(
             dimensions: dimensions,
             videoBitrate: quality.videoBitrate(forDimensions: dimensions),
             audioBitrate: quality.audioBitrate)
-        try await Transcoder.export(
+        try await Transcoder.exportWithOfflineComposition(
             input: ExportInput(
                 composition: built.composition,
                 audioMix: built.audioMix,
-                videoComposition: crop),
+                videoComposition: plan.videoComposition),
             settings: settings,
             to: url,
             progress: progress)
     }
 
-    /// Видеокомпозиция с вырезом 9:16 по центру кадра. Возвращает nil, если
-    /// кадр уже вертикальный или что-то не удалось прочитать.
-    static func verticalCropComposition(
-        for composition: AVAsset,
-        displaySize: CGSize
+    /// Собирает композицию для плеера. Для превью сохраняется шкала исходника,
+    /// поэтому boundary observer продолжает останавливать ролик на его конце,
+    /// а субтитры показываются только внутри выбранного диапазона.
+    static func previewComposition(
+        for asset: AVAsset,
+        displaySize: CGSize,
+        cropVertical: Bool
     ) async -> AVMutableVideoComposition? {
-        guard displaySize.width > displaySize.height else { return nil }
-        guard let track = try? await composition.loadTracks(withMediaType: .video).first,
-            let transform = try? await track.load(.preferredTransform)
-        else { return nil }
-        let frameRate = (try? await track.load(.nominalFrameRate)) ?? 30
-        let duration = (try? await composition.load(.duration)) ?? .zero
-        guard duration.seconds > 0 else { return nil }
-
-        let cropWidth = even(floor(abs(displaySize.height) * 9 / 16))
-        let cropX = (abs(displaySize.width) - cropWidth) / 2
-        let compositionVideoComposition = AVMutableVideoComposition()
-        compositionVideoComposition.renderSize = CGSize(width: cropWidth, height: even(abs(displaySize.height)))
-        compositionVideoComposition.frameDuration = CMTime(value: 1, timescale: max(24, Int32(frameRate.rounded())))
-
-        let instruction = AVMutableVideoCompositionInstruction()
-        instruction.timeRange = CMTimeRange(start: .zero, duration: duration)
-        let layer = AVMutableVideoCompositionLayerInstruction(assetTrack: track)
-        layer.setTransform(
-            transform.concatenating(CGAffineTransform(translationX: -cropX, y: 0)),
-            at: .zero)
-        instruction.layerInstructions = [layer]
-        compositionVideoComposition.instructions = [instruction]
-        return compositionVideoComposition
+        let plan = await ShortsVideoCompositionBuilder.make(
+            asset: asset,
+            displaySize: displaySize,
+            cropVertical: cropVertical,
+            subtitleMode: .off,
+            subtitleTimeline: .empty)
+        return plan.videoComposition
     }
 
     /// Имя файла: «имя-исходника 01 заголовок.mp4», безопасно для ФС и уникально.
@@ -87,7 +82,4 @@ enum ShortsExporter {
         return String(trimmed.prefix(50)).trimmingCharacters(in: .whitespaces)
     }
 
-    private static func even(_ value: CGFloat) -> CGFloat {
-        max(2, (value / 2).rounded() * 2)
-    }
 }

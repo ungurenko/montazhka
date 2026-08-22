@@ -24,7 +24,7 @@ actor ShortsCutService {
         model: SmartEditModel, effort: String?, apiKey: String,
         thresholdDB: Double,
         status: @escaping @Sendable (ShortsStatus) async -> Void
-    ) async throws -> [ShortCandidate] {
+    ) async throws -> ShortsAnalysisResult {
         guard sourceDuration >= ShortsLimits.minSourceDuration else { throw ShortsError.tooShort }
 
         try await openRouter.ensureModelAvailable(model, apiKey: apiKey)
@@ -132,7 +132,7 @@ actor ShortsCutService {
         }
         guard !ordered.isEmpty else {
             if failedWindows > 0, let lastWindowError { throw lastWindowError }
-            return []
+            return ShortsAnalysisResult(candidates: [], transcript: words)
         }
         try Task.checkCancellation()
 
@@ -230,7 +230,7 @@ actor ShortsCutService {
         candidates = Self.diversified(candidates)
         candidates = Array(candidates.prefix(ShortsLimits.maxCandidates))
         await status(.ready)
-        return candidates
+        return ShortsAnalysisResult(candidates: candidates, transcript: words)
     }
 
     /// Принятые решения в порядке силы: валидный ранг важнее порядка ответа,

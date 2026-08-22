@@ -85,6 +85,9 @@ struct ShortsView: View {
             .buttonStyle(.plain)
             .accessibilityLabel(controller.isPlaying ? "Поставить просмотр на паузу" : "Воспроизвести просмотр")
             .accessibilityIdentifier("shorts.player")
+            if let subtitle = controller.currentPreviewSubtitle {
+                ShortsSubtitleOverlayView(subtitle: subtitle)
+            }
             if let error = controller.prepareError {
                 VStack(spacing: 10) {
                     Image(systemName: "exclamationmark.triangle.fill")
@@ -518,6 +521,49 @@ struct ShortsView: View {
 
     private var exportControls: some View {
         VStack(alignment: .leading, spacing: 10) {
+            Toggle(isOn: $controller.subtitlesEnabled) {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Автоматические субтитры")
+                        .font(.system(size: 12, weight: .medium))
+                    Text("Появятся в просмотре и в сохранённых роликах")
+                        .font(.system(size: 10))
+                        .foregroundStyle(Theme.textSecondary)
+                }
+            }
+            .toggleStyle(.switch)
+            .accessibilityIdentifier("shorts.subtitles")
+
+            if controller.subtitlesEnabled {
+                HStack(spacing: 8) {
+                    Text("Стиль")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(Theme.textSecondary)
+                    Picker("Стиль субтитров", selection: $controller.subtitleStyle) {
+                        ForEach(ShortsSubtitleStyle.allCases) { style in
+                            Text(style.title).tag(style)
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(maxWidth: .infinity)
+                    .accessibilityIdentifier("shorts.subtitleStyle")
+                }
+
+                HStack(spacing: 8) {
+                    Text("Размер")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(Theme.textSecondary)
+                    Picker("Размер субтитров", selection: $controller.subtitleSize) {
+                        ForEach(ShortsSubtitleSize.allCases) { size in
+                            Text(size.title).tag(size)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .frame(maxWidth: .infinity)
+                    .accessibilityIdentifier("shorts.subtitleSize")
+                }
+            }
+
             Toggle(isOn: $controller.cropVertical) {
                 VStack(alignment: .leading, spacing: 1) {
                     Text("Вертикальный кадр 9:16")
