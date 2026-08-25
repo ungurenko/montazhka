@@ -1,4 +1,4 @@
-import AVFoundation
+@preconcurrency import AVFoundation
 import Foundation
 
 /// Ошибки перекодирования — с человеческим описанием для окна экспорта.
