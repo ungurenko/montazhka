@@ -38,7 +38,7 @@ jobs:
           xcodebuild
           -project Montazhka.xcodeproj
           -scheme Montazhka
-          -destination 'platform=macOS'
+          -destination 'platform=macOS,arch=arm64'
           -skipPackagePluginValidation
           test
 
