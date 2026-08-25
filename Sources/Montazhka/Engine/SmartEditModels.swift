@@ -14,14 +14,16 @@ enum SmartEditModel: String, CaseIterable, Codable, Sendable {
         }
     }
 
-    static var saved: SmartEditModel {
-        get {
-            guard let raw = UserDefaults.standard.string(forKey: "smartEdit.openRouterModel") else {
-                return .qwen
-            }
-            return SmartEditModel(rawValue: raw) ?? .qwen
-        }
-        set { UserDefaults.standard.set(newValue.rawValue, forKey: "smartEdit.openRouterModel") }
+    static let key = "smartEdit.openRouterModel"
+
+    /// Восстановленное значение из хранилища настроек; по умолчанию — `.qwen`.
+    static func saved(in store: any PreferenceStoring = UserDefaultsPreferenceStore.standard) -> SmartEditModel {
+        guard let raw = store.string(forKey: key) else { return .qwen }
+        return SmartEditModel(rawValue: raw) ?? .qwen
+    }
+
+    func save(in store: any PreferenceStoring = UserDefaultsPreferenceStore.standard) {
+        store.set(rawValue, forKey: Self.key)
     }
 
     var usesStrictSchema: Bool { self != .qwen }
@@ -73,15 +75,17 @@ enum ReasoningChoice: Hashable, Identifiable, Sendable {
         }
     }
 
-    static func saved(key: String) -> ReasoningChoice {
-        guard let raw = UserDefaults.standard.string(forKey: key), raw != "auto",
+    static func saved(key: String, in store: any PreferenceStoring = UserDefaultsPreferenceStore.standard)
+        -> ReasoningChoice
+    {
+        guard let raw = store.string(forKey: key), raw != "auto",
             let effort = ReasoningEffort(rawValue: raw)
         else { return .auto }
         return .effort(effort)
     }
 
-    func save(key: String) {
-        UserDefaults.standard.set(id, forKey: key)
+    func save(key: String, in store: any PreferenceStoring = UserDefaultsPreferenceStore.standard) {
+        store.set(id, forKey: key)
     }
 
     /// Варианты пикера по возможностям модели: «Авто» всегда, дальше уровни,

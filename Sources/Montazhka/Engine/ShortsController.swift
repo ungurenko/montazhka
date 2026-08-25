@@ -44,24 +44,24 @@ final class ShortsController {
     private(set) var displaySize = CGSize(width: 1920, height: 1080)
     private(set) var prepareError: String?
 
-    var count: ShortsCount = .saved {
-        didSet { ShortsCount.saved = count }
+    var count: ShortsCount = ShortsCount.saved() {
+        didSet { count.save(in: preferences) }
     }
-    var model: SmartEditModel = .saved {
+    var model: SmartEditModel = SmartEditModel.saved() {
         didSet {
-            SmartEditModel.saved = model
+            model.save(in: preferences)
             refreshReasoningOptions()
         }
     }
     var reasoningChoice: ReasoningChoice = ReasoningChoice.saved(key: ShortsController.reasoningKey) {
-        didSet { reasoningChoice.save(key: ShortsController.reasoningKey) }
+        didSet { reasoningChoice.save(key: ShortsController.reasoningKey, in: preferences) }
     }
     /// Варианты пикера по возможностям текущей модели; до загрузки каталога —
     /// только «Авто».
     private(set) var reasoningOptions: [ReasoningChoice] = [.auto]
-    var cropVertical: Bool = UserDefaults.standard.bool(forKey: "shorts.cropVertical") {
+    var cropVertical: Bool {
         didSet {
-            UserDefaults.standard.set(cropVertical, forKey: "shorts.cropVertical")
+            preferences.set(cropVertical, forKey: "shorts.cropVertical")
             refreshPreviewAfterDisplayChange()
         }
     }
@@ -99,11 +99,12 @@ final class ShortsController {
     private let openRouter: OpenRouterClient
     private let keyManager: OpenRouterKeyManager
     private let previewBuilder: any ShortsPreviewBuilding
+    private let preferences: any PreferenceStoring
 
     static let reasoningKey = "shorts.reasoningEffort"
 
     @ObservationIgnored private let analysisOperation = LatestOperation()
-    @ObservationIgnored private var exportTask: Task<Void, Never>?
+    @ObservationIgnored private let exportOperation = LatestOperation()
     @ObservationIgnored private let prepareOperation = LatestOperation()
     @ObservationIgnored private let reasoningOperation = LatestOperation()
     @ObservationIgnored private let previewOperation = LatestOperation()
@@ -144,11 +145,12 @@ final class ShortsController {
         sourceURL: URL,
         store: any ProjectRepository,
         openRouterKeyStore: any OpenRouterKeyStoring = OpenRouterKeyStore(),
-        previewBuilder: any ShortsPreviewBuilding = DefaultShortsPreviewBuilder()
+        previewBuilder: any ShortsPreviewBuilding = DefaultShortsPreviewBuilder(),
+        preferences: any PreferenceStoring = UserDefaultsPreferenceStore.standard
     ) {
         let source = MediaReference(url: sourceURL)
         self.source = source
-        sourceAccess = source.makeAccessLease()
+        self.preferences = preferences
         let waveformStore = WaveformStore(cacheDir: store.directories.waveforms)
         self.waveforms = waveformStore
         let transcriptStore = TranscriptStore(
@@ -163,8 +165,15 @@ final class ShortsController {
             waveforms: waveformStore)
         self.keyManager = OpenRouterKeyManager(store: openRouterKeyStore)
         self.previewBuilder = previewBuilder
+        cropVertical = preferences.bool(forKey: "shorts.cropVertical")
         attachObservers()
         keyManager.refresh()
+        // Security-scoped доступ резолвим вне главного потока: внутри лизинга
+        // — resolvingBookmarkData и проверки существования (дисковый I/O).
+        Task.detached(priority: .userInitiated) { [weak self] in
+            let lease = source.makeAccessLease()
+            await self?.applySourceAccess(lease)
+        }
     }
 
     func shutdown() async {
@@ -172,7 +181,7 @@ final class ShortsController {
         player.replaceCurrentItem(with: nil)
         isPlaying = false
         analysisOperation.cancel()
-        exportTask?.cancel()
+        exportOperation.cancel()
         prepareOperation.cancel()
         reasoningOperation.cancel()
         previewOperation.cancel()
@@ -182,6 +191,12 @@ final class ShortsController {
         cancelPreviewStop()
         if let timeObserver { player.removeTimeObserver(timeObserver) }
         if let endObserver { NotificationCenter.default.removeObserver(endObserver) }
+    }
+
+    /// Принимает лизинг из фонового резолва: параметр `sending` доказывает
+    /// компилятору уникальность объекта (он создан прямо в detached-таске).
+    private func applySourceAccess(_ lease: sending MediaAccessLease?) {
+        sourceAccess = lease
     }
 
     // MARK: - Подготовка файла
@@ -219,7 +234,8 @@ final class ShortsController {
     }
 
     private var sourceURL: URL {
-        sourceAccess?.url ?? source.resolvedURL ?? URL(fileURLWithPath: source.lastKnownPath)
+        // Пока лизинг резолвится — путь без проверок существования на главном потоке.
+        sourceAccess?.url ?? URL(fileURLWithPath: source.lastKnownPath)
     }
 
     // MARK: - Ключ OpenRouter
@@ -458,55 +474,52 @@ final class ShortsController {
     func startExport(to folder: URL) {
         let selected = candidates.filter(\.enabled)
         guard !selected.isEmpty else { return }
-        exportTask?.cancel()
         let url = sourceURL
         let sourceName = url.deletingPathExtension().lastPathComponent
         let size = displaySize
-        let exportQuality = quality
+        let quality = self.quality
         let crop = cropVertical
         let subtitleMode = self.subtitleMode
         let total = selected.count
         exportState = .exporting(done: 0, total: total, progress: 0)
-        exportTask = Task { [weak self] in
+        exportOperation.start { [weak self] token in
             guard let self else { return }
             do {
                 for (index, candidate) in selected.enumerated() {
-                    try Task.checkCancellation()
-                    let fileURL = ShortsExporter.fileURL(
-                        in: folder, sourceName: sourceName,
-                        index: index, title: candidate.title)
+                    guard exportOperation.isCurrent(token) else { return }
                     try await ShortsExporter.export(
                         candidate: candidate, sourceURL: url, displaySize: size,
-                        quality: exportQuality, cropVertical: crop,
+                        quality: quality, cropVertical: crop,
                         subtitleMode: subtitleMode,
-                        to: fileURL,
+                        to: ShortsExporter.fileURL(
+                            in: folder, sourceName: sourceName,
+                            index: index, title: candidate.title),
                         progress: { fraction in
                             Task { @MainActor [weak self] in
-                                guard let self else { return }
-                                if case .exporting(let done, _, _) = self.exportState, done == index {
-                                    self.exportState = .exporting(
-                                        done: index, total: total,
-                                        progress: fraction)
-                                }
+                                guard let self, exportOperation.isCurrent(token),
+                                    case .exporting(let done, _, _) = self.exportState,
+                                    done == index
+                                else { return }
+                                self.exportState = .exporting(
+                                    done: index, total: total,
+                                    progress: fraction)
                             }
                         })
-                    guard !Task.isCancelled else { break }
+                    guard exportOperation.isCurrent(token) else { return }
                     self.exportState = .exporting(done: index + 1, total: total, progress: 0)
                 }
-                guard !Task.isCancelled else { throw CancellationError() }
                 self.exportState = .done(folder)
-            } catch is CancellationError {
-                self.exportState = .idle
             } catch {
+                // Отмена доходит только из cancelExport/перезапуска/shutdown — каждый
+                // уже выставил состояние сам; устаревшему запуску писать нельзя.
+                guard exportOperation.isCurrent(token), !(error is CancellationError) else { return }
                 self.exportState = .failed("Не получилось сохранить ролики: \(error.localizedDescription)")
             }
-            self.exportTask = nil
         }
     }
 
     func cancelExport() {
-        exportTask?.cancel()
-        exportTask = nil
+        exportOperation.cancel()
         exportState = .idle
     }
 
@@ -514,3 +527,5 @@ final class ShortsController {
         NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: url.path)
     }
 }
+
+extension ShortsController: OpenRouterKeyControlling {}

@@ -12,7 +12,7 @@ final class WaveformAnalysisCoordinator {
     @ObservationIgnored private var warmupTask: Task<Void, Never>?
     @ObservationIgnored private var detectionTask: Task<Void, Never>?
     @ObservationIgnored private var detectionGeneration = Generation()
-
+    @ObservationIgnored private var analysisDetached: Task<[PauseCandidate], Never>?
     init(store: WaveformStore) {
         self.store = store
     }
@@ -38,6 +38,7 @@ final class WaveformAnalysisCoordinator {
 
     func detect(clips: [Clip], settings: DetectionSettings) {
         detectionTask?.cancel()
+        analysisDetached?.cancel()
         let current = detectionGeneration.advance()
         isDetecting = true
         detectionTask = Task { [weak self, store] in
@@ -47,13 +48,17 @@ final class WaveformAnalysisCoordinator {
                 }
             }
             guard let self, !Task.isCancelled, detectionGeneration.isCurrent(current) else { return }
-            let found = await Task.detached(priority: .userInitiated) {
+            // Отдельный unstructured-таск: отмена в него сама не протекает,
+            // поэтому хэндл храним и отменяем явно.
+            let detached = Task.detached(priority: .userInitiated) {
                 SilenceDetector.findPauses(
                     clips: clips,
                     peaksFor: { store.peaks(for: $0) },
                     settings: settings
                 )
-            }.value
+            }
+            analysisDetached = detached
+            let found = await detached.value
             guard !Task.isCancelled, detectionGeneration.isCurrent(current) else { return }
             version += 1
             candidates = found
@@ -66,6 +71,8 @@ final class WaveformAnalysisCoordinator {
         detectionTask?.cancel()
         warmupTask = nil
         detectionTask = nil
+        analysisDetached?.cancel()
+        analysisDetached = nil
         _ = detectionGeneration.advance()
         isDetecting = false
     }

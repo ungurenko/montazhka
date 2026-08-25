@@ -30,6 +30,18 @@ struct ProjectListing: Sendable {
     let issues: [ProjectListIssue]
 }
 
+/// Лёгкие метаданные карточки проекта — пишутся рядом с основным JSON,
+/// чтобы список проектов не декодировал полные файлы.
+private struct ProjectSidecarMeta: Codable {
+    static let currentSchemaVersion = 1
+
+    var schemaVersion: Int
+    var name: String
+    var updatedAt: Date
+    var duration: Double
+    var clipCount: Int
+}
+
 /// Хранит проекты как JSON-файлы в Application Support — исходные видео не трогаются.
 final class ProjectStore: ProjectRepository, Sendable {
     let directories: ProjectDirectories
@@ -67,6 +79,9 @@ final class ProjectStore: ProjectRepository, Sendable {
         projectsDir.appendingPathComponent("\(id.uuidString).json")
     }
 
+    private func metaURL(for id: UUID) -> URL {
+        projectsDir.appendingPathComponent("\(id.uuidString).meta.json")
+    }
     private func prepareDirectories() throws {
         do {
             try FileManager.default.createDirectory(at: projectsDir, withIntermediateDirectories: true)
@@ -93,6 +108,27 @@ final class ProjectStore: ProjectRepository, Sendable {
         do { try data.write(to: fileURL(for: p.id), options: .atomic) } catch {
             throw ProjectStoreError.write(error.localizedDescription)
         }
+        writeSidecarMeta(for: p)
+    }
+
+    /// Инвариант «meta на диске = соответствует текущему проекту»:
+    /// не смогли записать свежую — убираем устаревшую, listProjects уйдёт
+    /// в полный decode и карточка не соврёт.
+    private func writeSidecarMeta(for project: Project) {
+        let meta = ProjectSidecarMeta(
+            schemaVersion: ProjectSidecarMeta.currentSchemaVersion,
+            name: project.name,
+            updatedAt: project.updatedAt,
+            duration: project.totalDuration,
+            clipCount: project.clips.count)
+        do {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            encoder.dateEncodingStrategy = .iso8601
+            try encoder.encode(meta).write(to: metaURL(for: project.id), options: .atomic)
+        } catch {
+            try? FileManager.default.removeItem(at: metaURL(for: project.id))
+        }
     }
 
     private func loadOnQueue(id: UUID) throws -> Project {
@@ -111,6 +147,8 @@ final class ProjectStore: ProjectRepository, Sendable {
         do { try FileManager.default.trashItem(at: fileURL(for: id), resultingItemURL: nil) } catch {
             throw ProjectStoreError.delete(error.localizedDescription)
         }
+        // Метаданные карточки — best-effort: при отсутствии файла не мешаем удалению.
+        try? FileManager.default.trashItem(at: metaURL(for: id), resultingItemURL: nil)
     }
 
     // MARK: - Последовательный интерфейс
@@ -159,22 +197,35 @@ final class ProjectStore: ProjectRepository, Sendable {
         { throw ProjectStoreError.read(error.localizedDescription) }
         var projects: [ProjectMeta] = []
         var issues: [ProjectListIssue] = []
-        for url in files where url.pathExtension == "json" {
+        for url in files where url.pathExtension == "json" && !isSidecarMeta(url) {
             try Task.checkCancellation()
-            do {
-                let data = try Data(contentsOf: url)
-                let project = try decoder.decode(Project.self, from: data)
+            if let projectID = UUID(uuidString: url.deletingPathExtension().lastPathComponent),
+                let meta = try? decodeSidecarMeta(for: projectID, in: directory),
+                meta.schemaVersion == ProjectSidecarMeta.currentSchemaVersion,
+                meta.duration >= 0, meta.clipCount >= 0
+            {
                 projects.append(
                     ProjectMeta(
-                        id: project.id, name: project.name,
-                        updatedAt: project.updatedAt,
-                        duration: project.totalDuration,
-                        clipCount: project.clips.count))
-            } catch {
-                issues.append(
-                    ProjectListIssue(
-                        fileName: url.lastPathComponent,
-                        message: error.localizedDescription))
+                        id: projectID, name: meta.name,
+                        updatedAt: meta.updatedAt,
+                        duration: meta.duration,
+                        clipCount: meta.clipCount))
+            } else {
+                do {
+                    let data = try Data(contentsOf: url)
+                    let project = try decoder.decode(Project.self, from: data)
+                    projects.append(
+                        ProjectMeta(
+                            id: project.id, name: project.name,
+                            updatedAt: project.updatedAt,
+                            duration: project.totalDuration,
+                            clipCount: project.clips.count))
+                } catch {
+                    issues.append(
+                        ProjectListIssue(
+                            fileName: url.lastPathComponent,
+                            message: error.localizedDescription))
+                }
             }
         }
         return ProjectListing(
@@ -182,14 +233,19 @@ final class ProjectStore: ProjectRepository, Sendable {
             issues: issues)
     }
 
-    private static let defaultNameFormatter: DateFormatter = {
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "ru_RU")
-        f.dateFormat = "d MMMM"
-        return f
-    }()
+    private static func isSidecarMeta(_ url: URL) -> Bool {
+        url.lastPathComponent.hasSuffix(".meta.json")
+    }
+
+    private static func decodeSidecarMeta(for id: UUID, in directory: URL) throws -> ProjectSidecarMeta {
+        let url = directory.appendingPathComponent("\(id.uuidString).meta.json")
+        let data = try Data(contentsOf: url)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try decoder.decode(ProjectSidecarMeta.self, from: data)
+    }
 
     static func defaultProjectName() -> String {
-        "Монтаж \(defaultNameFormatter.string(from: Date()))"
+        "Монтаж \(Date.now.formatted(.dateTime.day().month(.wide).locale(Locale(identifier: "ru_RU"))))"
     }
 }
