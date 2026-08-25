@@ -1,4 +1,6 @@
-import AVFoundation
+// Новые SDK строже аннотируют Sendable у AVFoundation-типов (например,
+// результат loadTracks) — смягчаем до уровня предупреждений.
+@preconcurrency import AVFoundation
 import FluidAudio
 import Foundation
 
