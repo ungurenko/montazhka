@@ -16,7 +16,16 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Select Xcode
-        run: sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer
+        run: |
+          # Xcode 16.4 ломает UI-тесты xcodegen-проекта («module name ""»,
+          # «bundle identifier couldn't be read») — держим проверенную 16.2,
+          # а при отсутствии печатаем список доступных для диагностики.
+          if [ -d /Applications/Xcode_16.2.app ]; then
+            sudo xcode-select --switch /Applications/Xcode_16.2.app/Contents/Developer
+          else
+            ls -d /Applications/Xcode*.app
+            sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer
+          fi
 
       - name: Install pinned tools
         run: ./scripts/bootstrap-tools.sh
