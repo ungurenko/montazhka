@@ -1,4 +1,4 @@
-import AVFoundation
+@preconcurrency import AVFoundation
 import Foundation
 
 /// Фоновая музыка для склейки: файл и громкость 0…1.

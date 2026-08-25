@@ -1,4 +1,4 @@
-import AVFoundation
+@preconcurrency import AVFoundation
 import Foundation
 
 /// Единый результат подготовки видео для предпросмотра и экспорта.

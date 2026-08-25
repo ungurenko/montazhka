@@ -1,4 +1,4 @@
-import AVFoundation
+@preconcurrency import AVFoundation
 import Foundation
 
 /// Экспорт одного ролика: композиция диапазона исходника, опциональный
