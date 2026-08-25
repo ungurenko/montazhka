@@ -53,6 +53,7 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: ru.ungurenko.montazhka.uitests
+        PRODUCT_MODULE_NAME: MontazhkaUITests
         GENERATE_INFOPLIST_FILE: YES
 
 schemes:
