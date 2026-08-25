@@ -90,14 +90,14 @@ final class EditorController: ExportPreparing {
     var smartEditCandidates: [SmartEditCandidate] = []
     private(set) var smartEditStatus: SmartEditStatus = .idle
     var openRouterKeyStatus: OpenRouterKeyStatus { openRouterKeyManager.status }
-    var smartEditModel: SmartEditModel = .saved {
+    var smartEditModel: SmartEditModel = SmartEditModel.saved() {
         didSet {
-            SmartEditModel.saved = smartEditModel
+            smartEditModel.save(in: preferences)
             refreshSmartEditReasoningOptions()
         }
     }
     var smartEditReasoning: ReasoningChoice = ReasoningChoice.saved(key: EditorController.smartEditReasoningKey) {
-        didSet { smartEditReasoning.save(key: EditorController.smartEditReasoningKey) }
+        didSet { smartEditReasoning.save(key: EditorController.smartEditReasoningKey, in: preferences) }
     }
     /// Варианты пикера размышлений по возможностям модели; до загрузки
     /// каталога — только «Авто».
@@ -117,6 +117,7 @@ final class EditorController: ExportPreparing {
     private let smartEditService: SmartEditService
     private let openRouterClient: OpenRouterClient
     private let openRouterKeyManager: OpenRouterKeyManager
+    private let preferences: any PreferenceStoring
 
     static let smartEditReasoningKey = "smartEdit.reasoningEffort"
 
@@ -169,11 +170,13 @@ final class EditorController: ExportPreparing {
     init(
         project: Project,
         store: any ProjectRepository,
-        openRouterKeyStore: any OpenRouterKeyStoring = OpenRouterKeyStore()
+        openRouterKeyStore: any OpenRouterKeyStoring = OpenRouterKeyStore(),
+        preferences: any PreferenceStoring = UserDefaultsPreferenceStore.standard
     ) {
         self.project = project
         self.projectEditor = ProjectEditor(project: project)
         self.repository = store
+        self.preferences = preferences
         self.saveCoordinator = ProjectSaveCoordinator(repository: store)
         self.openRouterKeyManager = OpenRouterKeyManager(store: openRouterKeyStore)
         let voiceStore = VoiceEnhanceStore(cacheDir: store.directories.enhancedAudio)
@@ -1077,3 +1080,5 @@ final class EditorController: ExportPreparing {
         saveCoordinator.dismissError()
     }
 }
+
+extension EditorController: OpenRouterKeyControlling {}

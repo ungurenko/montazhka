@@ -30,6 +30,7 @@ enum SilenceDetector {
         var timelineOffset = 0.0
 
         for clip in clips {
+            if Task.isCancelled { return [] }
             defer { timelineOffset += clip.duration }
             guard let peaks = peaksFor(clip.sourcePath), !peaks.isEmpty else { continue }
 

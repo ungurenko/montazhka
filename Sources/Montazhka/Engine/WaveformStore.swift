@@ -64,6 +64,9 @@ final class WaveformStore: @unchecked Sendable {
         return cacheDir.appendingPathComponent("\(hash).f32")
     }
 
+    /// @concurrent: декод всегда уходит с executor'а актора WaveformWorkCoordinator
+    /// на конкурентный пул, при любых будущих изменениях семантики изоляции.
+    @concurrent
     private static func loadOrExtract(path: String, cacheURL: URL) async -> [Float]? {
         if let data = try? Data(contentsOf: cacheURL), !data.isEmpty {
             return data.withUnsafeBytes { Array($0.bindMemory(to: Float.self)) }

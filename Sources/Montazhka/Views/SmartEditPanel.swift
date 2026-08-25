@@ -163,19 +163,11 @@ struct SmartEditPanel: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            keyControls
-
-            Label(
-                "В OpenRouter уходит текст расшифровки — он может содержать произнесённые личные данные. Звук, видео и пути файлов остаются на Mac.",
-                systemImage: "lock.shield.fill"
+            OpenRouterKeyControls(
+                controller: controller,
+                keyInput: $keyInput,
+                replacingKey: $replacingKey
             )
-            .font(.system(size: 10.5))
-            .foregroundStyle(Theme.textSecondary)
-            .fixedSize(horizontal: false, vertical: true)
-            .padding(10)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Theme.background)
-            .clipShape(RoundedRectangle(cornerRadius: Theme.radiusSmall, style: .continuous))
 
             if !SmartEditPlatform.isSupported {
                 Label("Умный монтаж доступен на Mac с Apple Silicon.", systemImage: "cpu")
@@ -185,78 +177,6 @@ struct SmartEditPanel: View {
 
             Link("Получить ключ OpenRouter", destination: URL(string: "https://openrouter.ai/settings/keys")!)
                 .font(.system(size: 10.5, weight: .medium))
-        }
-    }
-
-    @ViewBuilder
-    private var keyControls: some View {
-        switch controller.openRouterKeyStatus {
-        case .saved where !replacingKey:
-            HStack(spacing: 10) {
-                Label("Ключ сохранён", systemImage: "checkmark.circle.fill")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.green)
-                Spacer()
-                Menu {
-                    Button("Проверить ключ") { Task { await controller.validateSavedOpenRouterKey() } }
-                    Button("Заменить ключ") { replacingKey = true }
-                    Divider()
-                    Button("Удалить ключ", role: .destructive) {
-                        Task { await controller.deleteOpenRouterKey() }
-                    }
-                } label: {
-                    Label("Настроить", systemImage: "ellipsis.circle")
-                        .font(.system(size: 10.5, weight: .medium))
-                }
-                .menuStyle(.borderlessButton)
-                .fixedSize()
-            }
-            .padding(.horizontal, 10)
-            .frame(height: 36)
-            .background(Theme.background)
-            .clipShape(RoundedRectangle(cornerRadius: Theme.radiusSmall, style: .continuous))
-        default:
-            VStack(alignment: .leading, spacing: 7) {
-                SecureField("sk-or-v1-…", text: $keyInput)
-                    .textFieldStyle(.roundedBorder)
-                HStack {
-                    Button("Сохранить и проверить") {
-                        Task {
-                            await controller.saveAndValidateOpenRouterKey(keyInput)
-                            if controller.openRouterKeyStatus == .saved {
-                                keyInput = ""
-                                replacingKey = false
-                            }
-                        }
-                    }
-                    .disabled(keyInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isCheckingKey)
-                    if replacingKey {
-                        Button("Отмена") {
-                            keyInput = ""; replacingKey = false
-                        }
-                    }
-                }
-                keyStatusText
-            }
-        }
-    }
-
-    private var isCheckingKey: Bool {
-        if case .checking = controller.openRouterKeyStatus { return true }
-        return false
-    }
-
-    @ViewBuilder
-    private var keyStatusText: some View {
-        switch controller.openRouterKeyStatus {
-        case .checking:
-            Label("Проверяю ключ…", systemImage: "arrow.triangle.2.circlepath")
-                .font(.system(size: 11)).foregroundStyle(Theme.textSecondary)
-        case .failed(let message):
-            Label(message, systemImage: "exclamationmark.triangle.fill")
-                .font(.system(size: 11)).foregroundStyle(Theme.danger)
-        default:
-            EmptyView()
         }
     }
 

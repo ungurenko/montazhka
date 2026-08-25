@@ -28,12 +28,16 @@ enum ShortsCount: String, CaseIterable, Identifiable, Sendable {
         }
     }
 
-    static var saved: ShortsCount {
-        get {
-            guard let raw = UserDefaults.standard.string(forKey: "shorts.count") else { return .five }
-            return ShortsCount(rawValue: raw) ?? .five
-        }
-        set { UserDefaults.standard.set(newValue.rawValue, forKey: "shorts.count") }
+    static let key = "shorts.count"
+
+    /// Восстановленное значение из хранилища настроек; по умолчанию — `.five`.
+    static func saved(in store: any PreferenceStoring = UserDefaultsPreferenceStore.standard) -> ShortsCount {
+        guard let raw = store.string(forKey: key) else { return .five }
+        return ShortsCount(rawValue: raw) ?? .five
+    }
+
+    func save(in store: any PreferenceStoring = UserDefaultsPreferenceStore.standard) {
+        store.set(rawValue, forKey: Self.key)
     }
 }
 

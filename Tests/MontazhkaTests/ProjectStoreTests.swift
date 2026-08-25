@@ -173,18 +173,62 @@ struct ProjectStoreTests {
     }
 
     @Test
-    func testSaveReportsDirectoryFailure() async throws {
+    func testListProjectsUsesSidecarMetaAfterSave() async throws {
         let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("montazhka-file-\(UUID().uuidString)")
-        try Data("occupied".utf8).write(to: root)
+            .appendingPathComponent("montazhka-meta-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let store = ProjectStore(baseDirectory: root)
+        let project = Project(
+            name: "С метаданными",
+            clips: [
+                Clip(sourcePath: "/tmp/video.mov", start: 2, end: 7),
+                Clip(sourcePath: "/tmp/audio.mov", start: 0, end: 3),
+            ])
 
-        do {
-            try await store.save(Project(name: "Не запишется"))
-            Issue.record("Ожидалась ошибка записи")
-        } catch {
-            #expect(error is ProjectStoreError)
-        }
+        try await store.save(project)
+        let listing = try await store.listProjects()
+
+        let entry = try #require(listing.projects.first { $0.id == project.id })
+        #expect(entry.name == "С метаданными")
+        #expect(entry.duration == 8.0)
+        #expect(entry.clipCount == 2)
+    }
+
+    @Test
+    func testListProjectsFallsBackWhenMetaMissingOrDamaged() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("montazhka-metafb-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = ProjectStore(baseDirectory: root)
+        let project = Project(name: "Фолбэк")
+        try await store.save(project)
+
+        // Сначала удаляем sidecar — проект должен найтись через полный decode.
+        let metaURL = store.projectsDir.appendingPathComponent("\(project.id.uuidString).meta.json")
+        try FileManager.default.removeItem(at: metaURL)
+        var listing = try await store.listProjects()
+        #expect(listing.projects.contains { $0.id == project.id })
+
+        // Затем кладём битый sidecar — тоже фолбэк, без issues от meta-файла.
+        try Data("{broken".utf8).write(to: metaURL)
+        listing = try await store.listProjects()
+        #expect(listing.projects.contains { $0.id == project.id })
+    }
+
+    @Test
+    func testDeleteRemovesProjectAndMeta() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("montazhka-mdel-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = ProjectStore(baseDirectory: root)
+        let project = Project(name: "Удаляемый")
+        try await store.save(project)
+
+        let metaURL = store.projectsDir.appendingPathComponent("\(project.id.uuidString).meta.json")
+        try await store.delete(id: project.id)
+        let listing = try await store.listProjects()
+
+        #expect(!listing.projects.contains { $0.id == project.id })
+        #expect(!FileManager.default.fileExists(atPath: metaURL.path))
     }
 }
