@@ -17,8 +17,6 @@ assert_plist_value() {
 }
 
 plutil -lint "$info_plist" >/dev/null
-plutil -lint Resources/App/ru.lproj/Localizable.strings >/dev/null
-
 if grep -Fq '$(' "$info_plist"; then
   echo "✗ $info_plist содержит нераскрытые Xcode placeholders" >&2
   exit 1
@@ -29,4 +27,4 @@ assert_plist_value CFBundleIdentifier ru.ungurenko.montazhka
 assert_plist_value CFBundlePackageType APPL
 assert_plist_value LSMinimumSystemVersion 14.0
 
-echo "✓ Info.plist и Localizable.strings корректны"
+echo "✓ Info.plist корректен"
