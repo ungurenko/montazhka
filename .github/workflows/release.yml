@@ -17,7 +17,7 @@ permissions:
 
 jobs:
   release:
-    runs-on: macos-15-intel
+    runs-on: macos-15
     timeout-minutes: 60
     env:
       MONTAZHKA_SIGNING_IDENTITY: ${{ secrets.DEVELOPER_ID_APPLICATION }}

@@ -30,5 +30,10 @@ rm -f -- "$archive" "$archive.sha256"
 ditto -c -k --keepParent "build.noindex/Монтажка.app" "$archive"
 shasum -a 256 "$archive" > "$archive.sha256"
 
+dsym_archive="$release_dir/Монтажка-$version-dSYM.zip"
+rm -f -- "$dsym_archive" "$dsym_archive.sha256"
+ditto -c -k --keepParent "build.noindex/Montazhka.dSYM" "$dsym_archive"
+shasum -a 256 "$dsym_archive" > "$dsym_archive.sha256"
+
 echo "✓ Релизные артефакты готовы в $release_dir"
 echo "ℹ Скрипт ничего не публикует: загрузка в GitHub Releases выполняется отдельным явным действием."

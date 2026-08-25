@@ -35,20 +35,23 @@ if [ "$universal" = true ]; then
   universal_root=".build/universal"
   mkdir -p "$universal_root"
   echo "▸ Компилирую arm64…"
-  swift build -c release --arch arm64 --scratch-path "$universal_root/arm64"
+  swift build -c release --arch arm64 -Xswiftc -g --scratch-path "$universal_root/arm64"
   arm64_bin_dir="$(swift build -c release --arch arm64 --scratch-path "$universal_root/arm64" --show-bin-path)"
 
   echo "▸ Компилирую x86_64…"
-  swift build -c release --arch x86_64 --scratch-path "$universal_root/x86_64"
+  swift build -c release --arch x86_64 -Xswiftc -g --scratch-path "$universal_root/x86_64"
   x86_bin_dir="$(swift build -c release --arch x86_64 --scratch-path "$universal_root/x86_64" --show-bin-path)"
 
   lipo -create "$arm64_bin_dir/Montazhka" "$x86_bin_dir/Montazhka" -output "$binary"
 else
   echo "▸ Компилирую для текущего Mac…"
-  swift build -c release
+  swift build -c release -Xswiftc -g
   bin_dir="$(swift build -c release --show-bin-path)"
   cp "$bin_dir/Montazhka" "$binary"
 fi
+
+echo "▸ Генерирую dSYM…"
+dsymutil "$binary" -o "$staging_root/Montazhka.dSYM"
 
 app_staging="$staging_root/Монтажка.app"
 mkdir -p "$app_staging/Contents/MacOS" "$app_staging/Contents/Resources"
@@ -76,6 +79,9 @@ app_output="build.noindex/Монтажка.app"
 mkdir -p build.noindex
 rm -rf -- "$app_output"
 ditto "$app_staging" "$app_output"
+dsym_output="build.noindex/Montazhka.dSYM"
+rm -rf -- "$dsym_output"
+ditto "$staging_root/Montazhka.dSYM" "$dsym_output"
 
 if [ "$universal" = true ]; then
   architectures="$(lipo -archs "$app_output/Contents/MacOS/Montazhka")"
