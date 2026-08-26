@@ -25,15 +25,21 @@ enum ShortsSubtitleSelfTest {
             .appendingPathComponent("montazhka-selftest-subtitles-\(runID).mp4")
         let croppedOutput = FileManager.default.temporaryDirectory
             .appendingPathComponent("montazhka-selftest-subtitles-cropped-\(runID).mp4")
+        let blackFitOutput = FileManager.default.temporaryDirectory
+            .appendingPathComponent("montazhka-selftest-fit-black-\(runID).mp4")
+        let whiteFitOutput = FileManager.default.temporaryDirectory
+            .appendingPathComponent("montazhka-selftest-fit-white-\(runID).mp4")
         defer {
             try? FileManager.default.removeItem(at: source)
             try? FileManager.default.removeItem(at: output)
             try? FileManager.default.removeItem(at: croppedOutput)
+            try? FileManager.default.removeItem(at: blackFitOutput)
+            try? FileManager.default.removeItem(at: whiteFitOutput)
         }
 
         do {
             try await TestVideoFactory.make(
-                segments: [(duration: 4.0, loud: true)], to: source)
+                segments: [(duration: 4.0, loud: true)], videoLuma: 96, to: source)
             let words = [
                 TranscriptWord(
                     sourceID: UUID(), text: "Проверяем автоматические субтитры",
@@ -51,20 +57,18 @@ enum ShortsSubtitleSelfTest {
                 "субтитры собираются с относительными таймкодами")
 
             let sourceAsset = AVURLAsset(url: source)
-            let disabledPlan = await ShortsVideoCompositionBuilder.make(
+            let disabledPlan = try await ShortsVideoCompositionBuilder.make(
                 asset: sourceAsset,
-                displaySize: CGSize(width: 320, height: 180),
-                cropVertical: false,
+                frameRequest: .original,
                 subtitleMode: .off,
                 subtitleTimeline: .empty)
             check(
                 disabledPlan.videoComposition == nil,
                 "выключенные субтитры не добавляют видеокомпозицию")
 
-            let previewPlan = await ShortsExporter.previewComposition(
+            let previewPlan = try await ShortsExporter.previewComposition(
                 for: sourceAsset,
-                displaySize: CGSize(width: 320, height: 180),
-                cropVertical: false)
+                frameSettings: ShortsFrameSettings())
             check(
                 previewPlan == nil,
                 "горизонтальный preview оставляет текстовый слой интерфейсу")
@@ -75,10 +79,9 @@ enum ShortsSubtitleSelfTest {
                     && previewOverlay?.style == .boxed
                     && previewOverlay?.size == .large,
                 "preview получает активную фразу и выбранный стиль")
-            let croppedPreview = await ShortsExporter.previewComposition(
+            let croppedPreview = try await ShortsExporter.previewComposition(
                 for: sourceAsset,
-                displaySize: CGSize(width: 320, height: 180),
-                cropVertical: true)
+                frameSettings: ShortsFrameSettings(mode: .verticalCrop))
             check(
                 croppedPreview?.renderSize.height == 180
                     && croppedPreview?.animationTool == nil,
@@ -87,10 +90,9 @@ enum ShortsSubtitleSelfTest {
             var everyVariantHasLayer = true
             for style in ShortsSubtitleStyle.allCases {
                 for size in ShortsSubtitleSize.allCases {
-                    let variant = await ShortsVideoCompositionBuilder.make(
+                    let variant = try await ShortsVideoCompositionBuilder.make(
                         asset: sourceAsset,
-                        displaySize: CGSize(width: 320, height: 180),
-                        cropVertical: false,
+                        frameRequest: .original,
                         subtitleMode: .on(words: words, style: style, size: size),
                         subtitleTimeline: ShortsSubtitleTimeline(
                             sourceStart: 1,
@@ -114,7 +116,7 @@ enum ShortsSubtitleSelfTest {
                 sourceURL: source,
                 displaySize: CGSize(width: 320, height: 180),
                 quality: .compact,
-                cropVertical: false,
+                frameSettings: ShortsFrameSettings(),
                 subtitleMode: mode,
                 to: output
             ) { _ in }
@@ -130,7 +132,7 @@ enum ShortsSubtitleSelfTest {
                 sourceURL: source,
                 displaySize: CGSize(width: 320, height: 180),
                 quality: .compact,
-                cropVertical: true,
+                frameSettings: ShortsFrameSettings(mode: .verticalCrop),
                 subtitleMode: mode,
                 to: croppedOutput
             ) { _ in }
@@ -140,11 +142,69 @@ enum ShortsSubtitleSelfTest {
                 expectedDuration: 2,
                 label: "вертикальный MP4 сохраняет субтитры после кропа",
                 check: check)
+
+            for (color, destination) in [
+                (ShortsCanvasColor.black, blackFitOutput),
+                (ShortsCanvasColor.white, whiteFitOutput),
+            ] {
+                try await ShortsExporter.export(
+                    candidate: candidate,
+                    sourceURL: source,
+                    displaySize: CGSize(width: 320, height: 180),
+                    quality: .compact,
+                    frameSettings: ShortsFrameSettings(
+                        mode: .verticalFit, canvasColor: color),
+                    subtitleMode: mode,
+                    to: destination
+                ) { _ in }
+                try await checkVerticalFitExport(
+                    destination,
+                    expectedBackground: color,
+                    expectedDuration: 2,
+                    check: check)
+            }
         } catch {
             check(false, "экспорт MP4 с автоматическими субтитрами (\(error.localizedDescription))")
         }
 
         return failures
+    }
+
+    private static func checkVerticalFitExport(
+        _ url: URL,
+        expectedBackground: ShortsCanvasColor,
+        expectedDuration: Double,
+        check: (Bool, String) -> Void
+    ) async throws {
+        let exported = AVURLAsset(url: url)
+        let duration = (try await exported.load(.duration)).seconds
+        let baseline = try image(at: 0.05, in: exported)
+        let image = try image(at: 0.4, in: exported)
+        let bitmap = NSBitmapImageRep(cgImage: image)
+        // NSBitmapImageRep считает y от верха; фон берём выше видео и субтитров.
+        let top = bitmap.colorAt(x: image.width / 2, y: image.height / 8)?
+            .usingColorSpace(.deviceRGB)
+        let center = bitmap.colorAt(x: image.width / 2, y: image.height / 2)?
+            .usingColorSpace(.deviceRGB)
+        let leftCenter = bitmap.colorAt(x: max(1, image.width / 40), y: image.height / 2)?
+            .usingColorSpace(.deviceRGB)
+        let backgroundMatches: Bool
+        if expectedBackground == .black {
+            backgroundMatches = (top?.redComponent ?? 1) < 0.08
+        } else {
+            backgroundMatches = (top?.redComponent ?? 0) > 0.92
+        }
+        let sourceIsVisible =
+            (0.20...0.60).contains(center?.redComponent ?? 0)
+            && (0.20...0.60).contains(leftCenter?.redComponent ?? 0)
+        check(
+            image.height * 9 == image.width * 16
+                && abs(duration - expectedDuration) <= 0.3
+                && backgroundMatches
+                && sourceIsVisible
+                && hasMeaningfulDifference(between: baseline, and: image),
+            "видео целиком на \(expectedBackground == .black ? "чёрном" : "белом") фоне и с субтитрами (\(image.width)×\(image.height), фон \(String(format: "%.2f", top?.redComponent ?? -1)), центр \(String(format: "%.2f", center?.redComponent ?? -1)))"
+        )
     }
 
     private static func checkExportedVideo(
@@ -157,11 +217,12 @@ enum ShortsSubtitleSelfTest {
         let exported = AVURLAsset(url: url)
         let duration = (try await exported.load(.duration)).seconds
         let tracks = try await exported.loadTracks(withMediaType: .video)
+        let baseline = try image(at: 0.05, in: exported)
         let image = try image(at: seconds, in: exported)
         check(
             !tracks.isEmpty
                 && abs(duration - expectedDuration) <= 0.3
-                && hasBrightPixels(image),
+                && hasMeaningfulDifference(between: baseline, and: image),
             "\(label) (\(String(format: "%.2f", duration)) сек)")
     }
 
@@ -179,19 +240,30 @@ enum ShortsSubtitleSelfTest {
             at: CMTime(seconds: seconds, preferredTimescale: 600), actualTime: nil)
     }
 
-    private static func hasBrightPixels(_ image: CGImage) -> Bool {
-        let bitmap = NSBitmapImageRep(cgImage: image)
-        let stepX = max(1, image.width / 160)
-        let stepY = max(1, image.height / 90)
-        var brightPixels = 0
-        for y in stride(from: 0, to: image.height, by: stepY) {
-            for x in stride(from: 0, to: image.width, by: stepX) {
-                guard let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else {
+    private static func hasMeaningfulDifference(
+        between baseline: CGImage,
+        and active: CGImage
+    ) -> Bool {
+        guard baseline.width == active.width, baseline.height == active.height else { return false }
+        let before = NSBitmapImageRep(cgImage: baseline)
+        let after = NSBitmapImageRep(cgImage: active)
+        let stepX = max(1, active.width / 180)
+        let stepY = max(1, active.height / 110)
+        var changedPixels = 0
+        for y in stride(from: 0, to: active.height, by: stepY) {
+            for x in stride(from: 0, to: active.width, by: stepX) {
+                guard let old = before.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB),
+                    let new = after.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB)
+                else {
                     continue
                 }
-                if color.redComponent + color.greenComponent + color.blueComponent > 1.35 {
-                    brightPixels += 1
-                    if brightPixels >= 8 { return true }
+                let difference =
+                    abs(old.redComponent - new.redComponent)
+                    + abs(old.greenComponent - new.greenComponent)
+                    + abs(old.blueComponent - new.blueComponent)
+                if difference > 0.35 {
+                    changedPixels += 1
+                    if changedPixels >= 10 { return true }
                 }
             }
         }

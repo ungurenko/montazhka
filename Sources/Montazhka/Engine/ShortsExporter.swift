@@ -2,14 +2,14 @@
 import Foundation
 
 /// Экспорт одного ролика: композиция диапазона исходника, опциональный
-/// кроп 9:16 по центру и перекодирование с выбранным качеством.
+/// вертикальный кадр 9:16 и перекодирование с выбранным качеством.
 enum ShortsExporter {
     static func export(
         candidate: ShortCandidate,
         sourceURL: URL,
         displaySize: CGSize,
         quality: ExportQuality,
-        cropVertical: Bool,
+        frameSettings: ShortsFrameSettings,
         subtitleMode: ShortsSubtitleMode = .off,
         to url: URL,
         progress: @escaping @Sendable (Double) -> Void
@@ -17,10 +17,9 @@ enum ShortsExporter {
         let clip = Clip(sourceURL: sourceURL, start: candidate.start, end: candidate.end)
         let built = await CompositionBuilder.build(clips: [clip])
 
-        let plan = await ShortsVideoCompositionBuilder.make(
+        let plan = try await ShortsVideoCompositionBuilder.make(
             asset: built.composition,
-            displaySize: displaySize,
-            cropVertical: cropVertical,
+            frameRequest: frameSettings.exportRequest(quality: quality),
             subtitleMode: subtitleMode,
             subtitleTimeline: ShortsSubtitleTimeline(
                 sourceStart: candidate.start,
@@ -28,7 +27,7 @@ enum ShortsExporter {
                 relativeTo: candidate.start,
                 duration: candidate.duration))
         let dimensions =
-            plan.croppedRenderSize
+            plan.outputRenderSize
             ?? quality.targetDimensions(forDisplaySize: displaySize)
         let settings = Transcoder.Settings(
             dimensions: dimensions,
@@ -49,13 +48,11 @@ enum ShortsExporter {
     /// а субтитры показываются только внутри выбранного диапазона.
     static func previewComposition(
         for asset: AVAsset,
-        displaySize: CGSize,
-        cropVertical: Bool
-    ) async -> AVMutableVideoComposition? {
-        let plan = await ShortsVideoCompositionBuilder.make(
+        frameSettings: ShortsFrameSettings
+    ) async throws -> AVMutableVideoComposition? {
+        let plan = try await ShortsVideoCompositionBuilder.make(
             asset: asset,
-            displaySize: displaySize,
-            cropVertical: cropVertical,
+            frameRequest: frameSettings.previewRequest,
             subtitleMode: .off,
             subtitleTimeline: .empty)
         return plan.videoComposition

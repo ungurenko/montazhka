@@ -10,6 +10,7 @@ struct ShortsView: View {
     @State private var keyInput = ""
     @State private var replacingKey = false
     @State private var keyMonitor: LocalEventMonitor?
+    @State private var playerVideoSize = CGSize.zero
 
     var body: some View {
         VStack(spacing: 0) {
@@ -79,16 +80,24 @@ struct ShortsView: View {
             Button {
                 controller.togglePlay()
             } label: {
-                PlayerLayerView(player: controller.player)
-                    .clipShape(RoundedRectangle(cornerRadius: Theme.radius, style: .continuous))
+                PlayerLayerView(player: controller.player) { size in
+                    guard
+                        abs(size.width - playerVideoSize.width) > 0.5
+                            || abs(size.height - playerVideoSize.height) > 0.5
+                    else { return }
+                    playerVideoSize = size
+                }
+                .clipShape(RoundedRectangle(cornerRadius: Theme.radius, style: .continuous))
             }
             .buttonStyle(.plain)
             .accessibilityLabel(controller.isPlaying ? "Поставить просмотр на паузу" : "Воспроизвести просмотр")
             .accessibilityIdentifier("shorts.player")
             if let subtitle = controller.currentPreviewSubtitle {
-                ShortsSubtitleOverlayView(subtitle: subtitle)
+                ShortsSubtitleOverlayView(
+                    subtitle: subtitle,
+                    presentationSize: playerVideoSize)
             }
-            if let error = controller.prepareError {
+            if let error = controller.prepareError ?? controller.previewError {
                 VStack(spacing: 10) {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .font(.system(size: 28))
@@ -490,16 +499,40 @@ struct ShortsView: View {
                 }
             }
 
-            Toggle(isOn: $controller.cropVertical) {
-                VStack(alignment: .leading, spacing: 1) {
-                    Text("Вертикальный кадр 9:16")
-                        .font(.system(size: 12, weight: .medium))
-                    Text("Вырез по центру кадра — для Reels и Shorts")
-                        .font(.system(size: 10))
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Формат кадра")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(Theme.textSecondary)
+                Picker("Формат кадра", selection: $controller.frameMode) {
+                    ForEach(ShortsFrameMode.allCases) { mode in
+                        Text(mode.title).tag(mode)
+                    }
+                }
+                .labelsHidden()
+                .frame(maxWidth: .infinity)
+                .accessibilityIdentifier("shorts.frameMode")
+                Text(controller.frameMode.subtitle)
+                    .font(.system(size: 10))
+                    .foregroundStyle(Theme.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            if controller.frameMode == .verticalFit {
+                HStack(spacing: 8) {
+                    Text("Фон")
+                        .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(Theme.textSecondary)
+                    Picker("Цвет фона", selection: $controller.canvasColor) {
+                        ForEach(ShortsCanvasColor.allCases) { color in
+                            Text(color.title).tag(color)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .frame(maxWidth: .infinity)
+                    .accessibilityIdentifier("shorts.canvasColor")
                 }
             }
-            .toggleStyle(.switch)
 
             HStack(spacing: 10) {
                 Picker("Качество", selection: $controller.quality) {

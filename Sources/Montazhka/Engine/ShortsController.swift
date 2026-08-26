@@ -8,8 +8,7 @@ import SwiftUI
 struct ShortsPreviewRequest {
     let candidateID: UUID
     let sourceURL: URL
-    let cropVertical: Bool
-    let displaySize: CGSize
+    let frameSettings: ShortsFrameSettings
 }
 
 @MainActor
@@ -22,10 +21,9 @@ struct DefaultShortsPreviewBuilder: ShortsPreviewBuilding {
     func makeItem(for request: ShortsPreviewRequest) async throws -> AVPlayerItem {
         let asset = AVURLAsset(url: request.sourceURL)
         let item = AVPlayerItem(asset: asset)
-        if let videoComposition = await ShortsExporter.previewComposition(
+        if let videoComposition = try await ShortsExporter.previewComposition(
             for: asset,
-            displaySize: request.displaySize,
-            cropVertical: request.cropVertical
+            frameSettings: request.frameSettings
         ) {
             item.videoComposition = videoComposition
         }
@@ -43,6 +41,7 @@ final class ShortsController {
     private(set) var sourceDuration: Double = 0
     private(set) var displaySize = CGSize(width: 1920, height: 1080)
     private(set) var prepareError: String?
+    private(set) var previewError: String?
 
     var count: ShortsCount = ShortsCount.saved() {
         didSet { count.save(in: preferences) }
@@ -59,11 +58,14 @@ final class ShortsController {
     /// Варианты пикера по возможностям текущей модели; до загрузки каталога —
     /// только «Авто».
     private(set) var reasoningOptions: [ReasoningChoice] = [.auto]
-    var cropVertical: Bool {
-        didSet {
-            preferences.set(cropVertical, forKey: "shorts.cropVertical")
-            refreshPreviewAfterDisplayChange()
-        }
+    private var frameSettings: ShortsFrameSettings
+    var frameMode: ShortsFrameMode {
+        get { frameSettings.mode }
+        set { updateFrameSettings { $0.mode = newValue } }
+    }
+    var canvasColor: ShortsCanvasColor {
+        get { frameSettings.canvasColor }
+        set { updateFrameSettings { $0.canvasColor = newValue } }
     }
     private var subtitleSettings: ShortsSubtitleSettings = .saved
 
@@ -165,7 +167,7 @@ final class ShortsController {
             waveforms: waveformStore)
         self.keyManager = OpenRouterKeyManager(store: openRouterKeyStore)
         self.previewBuilder = previewBuilder
-        cropVertical = preferences.bool(forKey: "shorts.cropVertical")
+        frameSettings = ShortsFrameSettings.loadAndMigrate(in: preferences)
         attachObservers()
         keyManager.refresh()
         // Security-scoped доступ резолвим вне главного потока: внутри лизинга
@@ -354,6 +356,7 @@ final class ShortsController {
     // MARK: - Просмотр
 
     func preview(_ candidate: ShortCandidate) {
+        previewError = nil
         previewingID = candidate.id
         cancelPreviewStop()
         seekOperation.cancel()
@@ -364,8 +367,7 @@ final class ShortsController {
         let request = ShortsPreviewRequest(
             candidateID: candidate.id,
             sourceURL: sourceURL,
-            cropVertical: cropVertical,
-            displaySize: displaySize
+            frameSettings: frameSettings
         )
         previewOperation.start { [weak self] token in
             guard let self else { return }
@@ -373,7 +375,12 @@ final class ShortsController {
             do {
                 item = try await self.previewBuilder.makeItem(for: request)
                 try Task.checkCancellation()
+            } catch is CancellationError {
+                return
             } catch {
+                guard self.previewOperation.isCurrent(token) else { return }
+                self.previewError =
+                    "Не получилось подготовить просмотр: \(error.localizedDescription)"
                 return
             }
             guard self.previewOperation.isCurrent(token) else { return }
@@ -432,6 +439,15 @@ final class ShortsController {
         preview(candidate)
     }
 
+    private func updateFrameSettings(_ update: (inout ShortsFrameSettings) -> Void) {
+        var next = frameSettings
+        update(&next)
+        guard next != frameSettings else { return }
+        frameSettings = next
+        next.save(in: preferences)
+        refreshPreviewAfterDisplayChange()
+    }
+
     private func cancelPreviewStop() {
         if let previewBoundary {
             player.removeTimeObserver(previewBoundary)
@@ -478,7 +494,7 @@ final class ShortsController {
         let sourceName = url.deletingPathExtension().lastPathComponent
         let size = displaySize
         let quality = self.quality
-        let crop = cropVertical
+        let frameSettings = self.frameSettings
         let subtitleMode = self.subtitleMode
         let total = selected.count
         exportState = .exporting(done: 0, total: total, progress: 0)
@@ -489,7 +505,7 @@ final class ShortsController {
                     guard exportOperation.isCurrent(token) else { return }
                     try await ShortsExporter.export(
                         candidate: candidate, sourceURL: url, displaySize: size,
-                        quality: quality, cropVertical: crop,
+                        quality: quality, frameSettings: frameSettings,
                         subtitleMode: subtitleMode,
                         to: ShortsExporter.fileURL(
                             in: folder, sourceName: sourceName,

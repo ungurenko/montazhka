@@ -1,5 +1,51 @@
 import Foundation
 
+/// Как исходное видео размещается в готовом кадре shorts.
+enum ShortsFrameMode: String, CaseIterable, Identifiable, Sendable {
+    case original
+    case verticalCrop
+    case verticalFit
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .original: "Исходный"
+        case .verticalCrop: "Вырез 9:16"
+        case .verticalFit: "Целиком 9:16"
+        }
+    }
+
+    var subtitle: String {
+        switch self {
+        case .original: "Сохраняет формат исходного видео"
+        case .verticalCrop: "Заполняет весь экран, края кадра обрезаются"
+        case .verticalFit: "Видео остаётся целиком, свободное место заполняется фоном"
+        }
+    }
+
+    static let key = "shorts.frameMode"
+    static let legacyCropKey = "shorts.cropVertical"
+}
+
+/// Цвет свободного места в режиме «Целиком 9:16».
+enum ShortsCanvasColor: String, CaseIterable, Identifiable, Sendable {
+    case black
+    case white
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .black: "Чёрный"
+        case .white: "Белый"
+        }
+    }
+
+    static let key = "shorts.canvasColor"
+
+}
+
 /// Сколько роликов хочет получить пользователь.
 enum ShortsCount: String, CaseIterable, Identifiable, Sendable {
     case three = "3"

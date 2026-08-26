@@ -5,8 +5,15 @@ import Foundation
 /// Генерирует настоящий видеофайл (чёрные кадры + звук «речь/тишина») для тестов движка.
 enum TestVideoFactory {
     /// Участки звука: (длительность сек, громко ли).
-    static func make(segments: [(duration: Double, loud: Bool)], to url: URL) async throws {
-        try await make(segments: segments.map { ($0.duration, $0.loud ? 0.4 : 0.0) }, to: url)
+    static func make(
+        segments: [(duration: Double, loud: Bool)],
+        videoLuma: UInt8 = 0,
+        to url: URL
+    ) async throws {
+        try await make(
+            segments: segments.map { ($0.duration, $0.loud ? 0.4 : 0.0) },
+            videoLuma: videoLuma,
+            to: url)
     }
 
     /// Участки звука с точной громкостью: (длительность сек, амплитуда синуса 0…1).
@@ -14,6 +21,7 @@ enum TestVideoFactory {
     static func make(
         segments: [(duration: Double, amplitude: Double)],
         toneFrequency: Double = 220,
+        videoLuma: UInt8 = 0,
         to url: URL
     ) async throws {
         try? FileManager.default.removeItem(at: url)
@@ -68,12 +76,21 @@ enum TestVideoFactory {
 
         let totalDuration = segments.reduce(0) { $0 + $1.duration }
 
-        // Один чёрный кадр — используем для всех моментов времени
+        // Один однотонный кадр — используем для всех моментов времени
         var pixelBuffer: CVPixelBuffer?
         CVPixelBufferPoolCreatePixelBuffer(nil, adaptor.pixelBufferPool!, &pixelBuffer)
         guard let frame = pixelBuffer else { throw NSError(domain: "test", code: 2) }
         CVPixelBufferLockBaseAddress(frame, [])
-        memset(CVPixelBufferGetBaseAddress(frame), 0, CVPixelBufferGetDataSize(frame))
+        if let base = CVPixelBufferGetBaseAddress(frame) {
+            let bytes = base.assumingMemoryBound(to: UInt8.self)
+            let count = CVPixelBufferGetDataSize(frame)
+            for offset in stride(from: 0, to: count, by: 4) {
+                bytes[offset] = videoLuma
+                bytes[offset + 1] = videoLuma
+                bytes[offset + 2] = videoLuma
+                bytes[offset + 3] = 255
+            }
+        }
         CVPixelBufferUnlockBaseAddress(frame, [])
 
         // Звук одним куском: синус заданной частоты и амплитуды («речь» громче, «шум» тише)

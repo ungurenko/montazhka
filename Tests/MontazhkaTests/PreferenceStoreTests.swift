@@ -75,4 +75,26 @@ struct PreferenceStoreTests {
         ShortsCount.eight.save(in: store)
         #expect(ShortsCount.saved(in: store) == .eight)
     }
+
+    @Test
+    func testShortsFrameSettingsDefaultsAndRoundTrip() {
+        let store = InMemoryPreferenceStore()
+
+        #expect(ShortsFrameSettings.loadAndMigrate(in: store) == .init())
+
+        let selected = ShortsFrameSettings(mode: .verticalFit, canvasColor: .white)
+        selected.save(in: store)
+
+        #expect(ShortsFrameSettings.loadAndMigrate(in: store) == selected)
+    }
+
+    @Test
+    func testLegacyVerticalCropPreferenceMigratesWithoutDeletingOldKey() {
+        let store = InMemoryPreferenceStore()
+        store.set(true, forKey: "shorts.cropVertical")
+
+        #expect(ShortsFrameSettings.loadAndMigrate(in: store).mode == .verticalCrop)
+        #expect(store.string(forKey: "shorts.frameMode") == "verticalCrop")
+        #expect(store.bool(forKey: "shorts.cropVertical"))
+    }
 }

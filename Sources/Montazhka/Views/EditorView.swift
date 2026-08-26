@@ -465,21 +465,31 @@ private struct ControlButton: View {
 /// Нативный слой воспроизведения без встроенных элементов управления.
 struct PlayerLayerView: NSViewRepresentable {
     let player: AVPlayer
+    var onVideoSizeChange: ((CGSize) -> Void)?
+
+    init(player: AVPlayer, onVideoSizeChange: ((CGSize) -> Void)? = nil) {
+        self.player = player
+        self.onVideoSizeChange = onVideoSizeChange
+    }
 
     func makeNSView(context: Context) -> PlayerNSView {
         let view = PlayerNSView()
         view.playerLayer.player = player
         view.playerLayer.videoGravity = .resizeAspect
+        view.onVideoSizeChange = onVideoSizeChange
         return view
     }
 
     func updateNSView(_ nsView: PlayerNSView, context: Context) {
         nsView.playerLayer.player = player
+        nsView.onVideoSizeChange = onVideoSizeChange
+        nsView.reportVideoSize()
     }
 }
 
 final class PlayerNSView: NSView {
     let playerLayer = AVPlayerLayer()
+    var onVideoSizeChange: ((CGSize) -> Void)?
 
     init() {
         super.init(frame: .zero)
@@ -489,4 +499,15 @@ final class PlayerNSView: NSView {
     }
 
     required init?(coder: NSCoder) { fatalError() }
+
+    override func layout() {
+        super.layout()
+        reportVideoSize()
+    }
+
+    func reportVideoSize() {
+        let size = playerLayer.videoRect.size
+        guard size.width > 0, size.height > 0 else { return }
+        onVideoSizeChange?(size)
+    }
 }

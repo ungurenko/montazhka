@@ -4,7 +4,7 @@ import Foundation
 import OSLog
 import Observation
 
-enum ExportQuality: String, CaseIterable, Identifiable {
+enum ExportQuality: String, CaseIterable, Identifiable, Sendable {
     case maximum, high, medium, compact
 
     var id: String { rawValue }

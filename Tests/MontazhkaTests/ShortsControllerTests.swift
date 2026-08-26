@@ -8,6 +8,52 @@ import Testing
 @MainActor
 struct ShortsControllerTests {
     @Test
+    func previewRequestCarriesSelectedFrameModeAndCanvasColor() async throws {
+        let root = temporaryDirectory("preview-format")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let builder = ControlledShortsPreviewBuilder()
+        let controller = ShortsController(
+            sourceURL: root.appendingPathComponent("source.mov"),
+            store: ProjectStore(baseDirectory: root),
+            openRouterKeyStore: EmptyOpenRouterKeyStore(),
+            previewBuilder: builder
+        )
+        let item = candidate(title: "Формат")
+        controller.frameMode = .verticalFit
+        controller.canvasColor = .white
+
+        controller.preview(item)
+        try await waitUntil { builder.requests[item.id] != nil }
+
+        #expect(
+            builder.requests[item.id]?.frameSettings
+                == ShortsFrameSettings(mode: .verticalFit, canvasColor: .white))
+        await controller.shutdown()
+    }
+
+    @Test
+    func currentPreviewFailureIsVisibleToUser() async throws {
+        let root = temporaryDirectory("preview-error")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let builder = ControlledShortsPreviewBuilder()
+        let controller = ShortsController(
+            sourceURL: root.appendingPathComponent("source.mov"),
+            store: ProjectStore(baseDirectory: root),
+            openRouterKeyStore: EmptyOpenRouterKeyStore(),
+            previewBuilder: builder
+        )
+        let item = candidate(title: "Ошибка")
+
+        controller.preview(item)
+        try await waitUntil { builder.pendingIDs.contains(item.id) }
+        builder.fail(item.id, with: ShortsVideoCompositionError.invalidVideoTrack)
+        try await waitUntil { controller.previewError != nil }
+
+        #expect(controller.previewError?.contains("Не получилось подготовить просмотр") == true)
+        await controller.shutdown()
+    }
+
+    @Test
     func latestPreviewWinsWhenOlderCropFinishesLast() async throws {
         let root = temporaryDirectory("latest-preview")
         defer { try? FileManager.default.removeItem(at: root) }
@@ -91,16 +137,22 @@ struct ShortsControllerTests {
 @MainActor
 private final class ControlledShortsPreviewBuilder: ShortsPreviewBuilding {
     private var continuations: [UUID: CheckedContinuation<AVPlayerItem, Error>] = [:]
+    private(set) var requests: [UUID: ShortsPreviewRequest] = [:]
 
     var pendingIDs: Set<UUID> { Set(continuations.keys) }
 
     func makeItem(for request: ShortsPreviewRequest) async throws -> AVPlayerItem {
-        try await withCheckedThrowingContinuation { continuation in
+        requests[request.candidateID] = request
+        return try await withCheckedThrowingContinuation { continuation in
             continuations[request.candidateID] = continuation
         }
     }
 
     func complete(_ id: UUID, with url: URL) {
         continuations.removeValue(forKey: id)?.resume(returning: AVPlayerItem(url: url))
+    }
+
+    func fail(_ id: UUID, with error: any Error) {
+        continuations.removeValue(forKey: id)?.resume(throwing: error)
     }
 }
