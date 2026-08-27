@@ -5,16 +5,16 @@ import OSLog
 /// отбор и ранжирование → тихие границы. Работает с одним исходником.
 actor ShortsCutService {
     private let transcriptStore: any TranscriptProviding
-    private let openRouter: any ShortsOpenRouterServing
+    private let ai: any ShortsAIServing
     private let waveforms: any WaveformProviding
 
     init(
         transcriptStore: any TranscriptProviding,
-        openRouter: any ShortsOpenRouterServing,
+        ai: any ShortsAIServing,
         waveforms: any WaveformProviding
     ) {
         self.transcriptStore = transcriptStore
-        self.openRouter = openRouter
+        self.ai = ai
         self.waveforms = waveforms
     }
 
@@ -22,13 +22,13 @@ actor ShortsCutService {
         source: MediaReference,
         sourceDuration: Double,
         count: ShortsCount,
-        model: SmartEditModel, effort: String?, apiKey: String,
+        configuration: AIRequestConfiguration,
         thresholdDB: Double,
         status: @escaping @Sendable (ShortsStatus) async -> Void
     ) async throws -> ShortsAnalysisResult {
         guard sourceDuration >= ShortsLimits.minSourceDuration else { throw ShortsError.tooShort }
 
-        try await openRouter.ensureModelAvailable(model, apiKey: apiKey)
+        try await ai.ensureModelAvailable(configuration)
         let cached = await transcriptStore.modelIsCached()
         if !cached { await status(.preparingModel(progress: nil)) }
 
@@ -53,9 +53,7 @@ actor ShortsCutService {
         let mapResult = try await makeVideoMap(
             windows: windows,
             words: timelineMap.words,
-            model: model,
-            effort: effort,
-            apiKey: apiKey,
+            configuration: configuration,
             status: status)
         if let warning = mapResult.warning { warnings.append(warning) }
         let videoMap = mapResult.value
@@ -73,9 +71,10 @@ actor ShortsCutService {
             await status(.searching(done: index, total: windows.count))
             let windowWords = timelineMap.words[window]
             do {
-                let envelope = try await openRouter.proposeShorts(
-                    words: windowWords.map(\.publicPayload), model: model,
-                    effort: effort, apiKey: apiKey, videoMap: videoMap)
+                let envelope = try await ai.proposeShorts(
+                    words: windowWords.map(\.publicPayload),
+                    configuration: configuration,
+                    videoMap: videoMap)
                 for proposal in envelope.clips {
                     // Модель любит одинаковые ID в каждом окне (clip_1…),
                     // а кандидаты разных окон должны быть уникальны.
@@ -145,9 +144,9 @@ actor ShortsCutService {
         }
         let decisions: [ShortsRankDTO]
         do {
-            let ranking = try await openRouter.rankShorts(
+            let ranking = try await ai.rankShorts(
                 proposals: rankInputs, desiredCount: count.desired,
-                model: model, effort: effort, apiKey: apiKey, videoMap: videoMap)
+                configuration: configuration, videoMap: videoMap)
             decisions = ranking.decisions
         } catch is CancellationError {
             throw CancellationError()
@@ -180,9 +179,9 @@ actor ShortsCutService {
                     payoffScore: proposal.payoffScore, pacingScore: proposal.pacingScore)
             }
             do {
-                let envelope = try await openRouter.verifyShorts(
+                let envelope = try await ai.verifyShorts(
                     inputs: verifyInputs, videoMap: videoMap,
-                    model: model, effort: effort, apiKey: apiKey)
+                    configuration: configuration)
                 rejectedIDs = Set(envelope.verdicts.filter { !$0.keep }.map(\.clipID))
             } catch is CancellationError {
                 throw CancellationError()
@@ -277,9 +276,7 @@ actor ShortsCutService {
     private func makeVideoMap(
         windows: [Range<Int>],
         words: [MappedTranscriptWord],
-        model: SmartEditModel,
-        effort: String?,
-        apiKey: String,
+        configuration: AIRequestConfiguration,
         status: @escaping @Sendable (ShortsStatus) async -> Void
     ) async throws -> (value: String, warning: ShortsAnalysisWarning?) {
         var mapLines: [String] = []
@@ -289,9 +286,9 @@ actor ShortsCutService {
             await status(.mapping(done: index, total: windows.count))
             let windowWords = words[window]
             do {
-                let map = try await openRouter.mapShortsWindow(
+                let map = try await ai.mapShortsWindow(
                     words: windowWords.map(\.publicPayload),
-                    model: model, effort: effort, apiKey: apiKey)
+                    configuration: configuration)
                 if let line = Self.mapLine(for: map, windowWords: windowWords) {
                     mapLines.append(line)
                 }

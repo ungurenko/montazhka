@@ -229,8 +229,9 @@ struct OpenRouterClientTests {
         // Модель без выбора усилия: только «Авто».
         #expect((ReasoningChoice.options(availableEfforts: [], mandatory: false)) == ([.auto]))
         // Подмножество уровней из каталога.
-        let subset = ReasoningChoice.options(availableEfforts: [.high, .low], mandatory: false)
-        #expect((subset) == ([.auto, .effort(.low), .effort(.high)]))
+        let subset = ReasoningChoice.options(
+            availableEfforts: [.ultra, .high, .low], mandatory: false)
+        #expect((subset) == ([.auto, .effort(.low), .effort(.high), .effort(.ultra)]))
     }
 
     private func makeMockSession() -> URLSession {

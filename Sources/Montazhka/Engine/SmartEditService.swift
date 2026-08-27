@@ -2,26 +2,26 @@ import Foundation
 
 actor SmartEditService {
     private let transcriptStore: any TranscriptProviding
-    private let openRouter: any SmartEditOpenRouterServing
+    private let ai: any SmartEditAIServing
     private let waveforms: any WaveformProviding
 
     init(
         transcriptStore: any TranscriptProviding,
-        openRouter: any SmartEditOpenRouterServing,
+        ai: any SmartEditAIServing,
         waveforms: any WaveformProviding
     ) {
         self.transcriptStore = transcriptStore
-        self.openRouter = openRouter
+        self.ai = ai
         self.waveforms = waveforms
     }
 
     func analyze(
         clips: [Clip], projectThresholdDB: Double,
-        model: SmartEditModel, effort: String?, apiKey: String,
+        configuration: AIRequestConfiguration,
         status: @escaping @Sendable (SmartEditStatus) async -> Void
     ) async throws -> SmartEditAnalysisResult {
         let snapshot = SmartEditSnapshot(clips: clips)
-        try await openRouter.ensureModelAvailable(model, apiKey: apiKey)
+        try await ai.ensureModelAvailable(configuration)
         let cached = await transcriptStore.modelIsCached()
         if !cached { await status(.preparingModel(progress: nil)) }
 
@@ -49,14 +49,14 @@ actor SmartEditService {
         guard !timelineMap.words.isEmpty else { throw SmartEditError.emptyTranscript }
 
         await status(.proposing)
-        let proposals = try await openRouter.propose(
-            words: timelineMap.words.map(\.publicPayload), model: model,
-            effort: effort, apiKey: apiKey)
+        let proposals = try await ai.propose(
+            words: timelineMap.words.map(\.publicPayload),
+            configuration: configuration)
         try Task.checkCancellation()
         await status(.reviewing)
-        let reviews = try await openRouter.review(
+        let reviews = try await ai.review(
             words: timelineMap.words.map(\.publicPayload), proposals: proposals,
-            model: model, effort: effort, apiKey: apiKey)
+            configuration: configuration)
         try Task.checkCancellation()
         await status(.preparingCuts)
 

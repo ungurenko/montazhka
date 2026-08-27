@@ -34,12 +34,12 @@ struct ShortsControllerTests {
             preferences: preferences)
 
         #expect(shorts.count == .eight)
-        #expect(shorts.model == .luna)
-        #expect(shorts.reasoningChoice == .effort(.high))
+        #expect(shorts.aiConnection.modelID == SmartEditModel.luna.rawValue)
+        #expect(shorts.aiConnection.reasoningChoice == .effort(.high))
         #expect(shorts.subtitlesEnabled)
         #expect(shorts.subtitleStyle == .boxed)
         #expect(shorts.subtitleSize == .large)
-        #expect(editor.smartEditModel == .luna)
+        #expect(editor.aiConnection.modelID == SmartEditModel.luna.rawValue)
 
         shorts.count = .three
         shorts.subtitleStyle = .accent

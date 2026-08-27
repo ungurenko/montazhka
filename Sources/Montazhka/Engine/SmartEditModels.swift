@@ -29,10 +29,11 @@ enum SmartEditModel: String, CaseIterable, Codable, Sendable {
     var usesStrictSchema: Bool { self != .qwen }
 }
 
-/// Уровень «размышлений» reasoning-модели в OpenRouter
-/// (параметр reasoning.effort).
+/// Уровень «размышлений» модели у поддерживаемых ИИ-провайдеров.
 enum ReasoningEffort: String, CaseIterable, Codable, Sendable {
-    case none, minimal, low, medium, high, xhigh, max
+    case none, minimal, low, medium, high, xhigh, max, ultra
+
+    static let openRouterCases = allCases.filter { $0 != .ultra }
 
     var title: String {
         switch self {
@@ -43,6 +44,7 @@ enum ReasoningEffort: String, CaseIterable, Codable, Sendable {
         case .high: return "Высокий"
         case .xhigh: return "Очень высокий"
         case .max: return "Максимум"
+        case .ultra: return "Ультра"
         }
     }
 }
@@ -89,10 +91,10 @@ enum ReasoningChoice: Hashable, Identifiable, Sendable {
     }
 
     /// Варианты пикера по возможностям модели: «Авто» всегда, дальше уровни,
-    /// которые модель принимает (nil — модель принимает любые значения).
+    /// которые модель принимает (nil — все значения OpenRouter).
     /// «Выкл» прячется у моделей с обязательными размышлениями.
     static func options(availableEfforts: [ReasoningEffort]?, mandatory: Bool) -> [ReasoningChoice] {
-        let efforts = availableEfforts ?? ReasoningEffort.allCases
+        let efforts = availableEfforts ?? ReasoningEffort.openRouterCases
         var choices: [ReasoningChoice] = [.auto]
         for effort in ReasoningEffort.allCases {
             guard efforts.contains(effort), !(effort == .none && mandatory) else { continue }

@@ -22,7 +22,7 @@ struct SmartEditPanel: View {
 
         var idleSubtitle: String {
             switch self {
-            case .connection: return "Модель-монтажёр и ключ OpenRouter"
+            case .connection: return "Агент и модель для анализа текста"
             case .model: return "Подготовка распознавания речи"
             case .transcription: return "Текст с точными таймкодами"
             case .editing: return "Оговорки, дубли и безопасные стыки"
@@ -44,7 +44,10 @@ struct SmartEditPanel: View {
             if !controller.smartEditCandidates.isEmpty { applyBar }
         }
         .cardStyle()
-        .task { controller.refreshSmartEditReasoningOptions() }
+        .task {
+            controller.aiConnection.refreshAgents()
+            controller.aiConnection.refreshReasoningOptions()
+        }
     }
 
     private var header: some View {
@@ -141,33 +144,28 @@ struct SmartEditPanel: View {
 
     private var connectionContent: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Picker("Модель", selection: $controller.smartEditModel) {
-                ForEach(SmartEditModel.allCases, id: \.self) { model in
-                    Text(model.title).tag(model)
-                }
-            }
-            .labelsHidden()
-            .frame(maxWidth: .infinity)
+            AIProviderControls(
+                connection: controller.aiConnection)
 
-            Picker("Размышления", selection: $controller.smartEditReasoning) {
-                ForEach(controller.smartEditReasoningOptions) { choice in
-                    Text(choice.title).tag(choice)
-                }
-            }
-            .labelsHidden()
-            .frame(maxWidth: .infinity)
-            if controller.smartEditReasoningOptions.count > 1 {
+            AIReasoningPicker(connection: controller.aiConnection)
+                .labelsHidden()
+                .frame(maxWidth: .infinity)
+            if controller.aiConnection.reasoningOptions.count > 1 {
                 Text("Глубина «размышлений» модели. Выше уровень — вдумчивее склейки, но дольше анализ.")
                     .font(.system(size: 10))
                     .foregroundStyle(Theme.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            OpenRouterKeyControls(
-                controller: controller,
-                keyInput: $keyInput,
-                replacingKey: $replacingKey
-            )
+            if controller.aiConnection.provider == .openRouter {
+                OpenRouterKeyControls(
+                    controller: controller,
+                    keyInput: $keyInput,
+                    replacingKey: $replacingKey
+                )
+            } else {
+                CLIAgentPrivacyNotice(provider: controller.aiConnection.provider)
+            }
 
             if !SmartEditPlatform.isSupported {
                 Label("Умный монтаж доступен на Mac с Apple Silicon.", systemImage: "cpu")
@@ -175,8 +173,10 @@ struct SmartEditPanel: View {
                     .foregroundStyle(Theme.danger)
             }
 
-            Link("Получить ключ OpenRouter", destination: URL(string: "https://openrouter.ai/settings/keys")!)
-                .font(.system(size: 10.5, weight: .medium))
+            if controller.aiConnection.provider == .openRouter {
+                Link("Получить ключ OpenRouter", destination: URL(string: "https://openrouter.ai/settings/keys")!)
+                    .font(.system(size: 10.5, weight: .medium))
+            }
         }
     }
 
@@ -210,7 +210,7 @@ struct SmartEditPanel: View {
             .buttonStyle(.borderedProminent)
             .tint(Theme.accent)
             .disabled(
-                controller.openRouterKeyStatus != .saved || controller.project.clips.isEmpty
+                !controller.aiConnection.isReady || controller.project.clips.isEmpty
                     || !SmartEditPlatform.isSupported)
         }
     }
@@ -229,14 +229,14 @@ struct SmartEditPanel: View {
         case .preparingModel: return .model
         case .transcribing: return .transcription
         case .proposing, .reviewing, .preparingCuts, .ready: return .editing
-        case .idle, .failed: return controller.openRouterKeyStatus == .saved ? .editing : .connection
+        case .idle, .failed: return controller.aiConnection.isReady ? .editing : .connection
         }
     }
 
     private func isStageComplete(_ stage: ProcessStage) -> Bool {
         switch stage {
         case .connection:
-            return controller.openRouterKeyStatus == .saved && activeStage != .connection
+            return controller.aiConnection.isReady && activeStage != .connection
         case .model:
             switch controller.smartEditStatus {
             case .transcribing, .proposing, .reviewing, .preparingCuts, .ready: return true
@@ -261,8 +261,8 @@ struct SmartEditPanel: View {
     }
 
     private func stageSubtitle(_ stage: ProcessStage) -> String {
-        if stage == .connection && !shouldExpandConnection && controller.openRouterKeyStatus == .saved {
-            return "\(controller.smartEditModel.title) · ключ сохранён"
+        if stage == .connection && !shouldExpandConnection && controller.aiConnection.isReady {
+            return controller.aiConnection.selectionTitle
         }
         return stage.idleSubtitle
     }

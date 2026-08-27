@@ -14,7 +14,7 @@ stop_running_app() {
 }
 
 build_app() {
-  "$root_dir/scripts/build-app.sh" --adhoc
+  "$root_dir/scripts/build-app.sh"
 }
 
 open_app() {

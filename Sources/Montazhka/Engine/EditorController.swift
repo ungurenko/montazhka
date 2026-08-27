@@ -89,21 +89,10 @@ final class EditorController: ExportPreparing {
     private(set) var clipImportState: ClipImportState = .idle
     var smartEditCandidates: [SmartEditCandidate] = []
     private(set) var smartEditStatus: SmartEditStatus = .idle
-    var openRouterKeyStatus: OpenRouterKeyStatus { openRouterKeyManager.status }
-    var smartEditModel: SmartEditModel {
-        didSet {
-            smartEditModel.save(in: preferences)
-            refreshSmartEditReasoningOptions()
-        }
-    }
-    var smartEditReasoning: ReasoningChoice {
-        didSet { smartEditReasoning.save(key: EditorController.smartEditReasoningKey, in: preferences) }
-    }
-    /// Варианты пикера размышлений по возможностям модели; до загрузки
-    /// каталога — только «Авто».
-    private(set) var smartEditReasoningOptions: [ReasoningChoice] = [.auto]
+    var openRouterKeyStatus: OpenRouterKeyStatus { aiConnection.openRouterKeyStatus }
 
     let player = AVPlayer()
+    let aiConnection: AIConnectionController
     let waveforms: WaveformStore
     private let waveformAnalysis: WaveformAnalysisCoordinator
     private let mediaAvailability = MediaAvailabilityMonitor()
@@ -115,8 +104,6 @@ final class EditorController: ExportPreparing {
     private let mediaPipeline: MediaPipeline
     private let transcriptStore: TranscriptStore
     private let smartEditService: SmartEditService
-    private let openRouterClient: OpenRouterClient
-    private let openRouterKeyManager: OpenRouterKeyManager
     private let preferences: any PreferenceStoring
 
     static let smartEditReasoningKey = "smartEdit.reasoningEffort"
@@ -139,8 +126,6 @@ final class EditorController: ExportPreparing {
     @ObservationIgnored private var displaySizeCache: [String: CGSize] = [:]
     @ObservationIgnored private var smartEditTask: Task<Void, Never>?
     @ObservationIgnored private var smartEditGeneration = Generation()
-    @ObservationIgnored private var smartEditReasoningTask: Task<Void, Never>?
-    @ObservationIgnored private var smartEditReasoningGeneration = Generation()
     @ObservationIgnored private var smartEditSnapshotID: String?
     @ObservationIgnored private var previewTask: Task<Void, Never>?
     @ObservationIgnored private var clipImportTask: Task<Void, Never>?
@@ -177,12 +162,13 @@ final class EditorController: ExportPreparing {
         self.projectEditor = ProjectEditor(project: project)
         self.repository = store
         self.preferences = preferences
-        smartEditModel = SmartEditModel.saved(in: preferences)
-        smartEditReasoning = ReasoningChoice.saved(
-            key: EditorController.smartEditReasoningKey,
-            in: preferences)
         self.saveCoordinator = ProjectSaveCoordinator(repository: store)
-        self.openRouterKeyManager = OpenRouterKeyManager(store: openRouterKeyStore)
+        let openRouterClient = OpenRouterClient()
+        self.aiConnection = AIConnectionController(
+            preferences: preferences,
+            reasoningPreferenceKey: EditorController.smartEditReasoningKey,
+            openRouter: openRouterClient,
+            keyStore: openRouterKeyStore)
         let voiceStore = VoiceEnhanceStore(cacheDir: store.directories.enhancedAudio)
         let musicEQStore = MusicEQStore(cacheDir: store.directories.musicEQ)
         let waveformStore = WaveformStore(cacheDir: store.directories.waveforms)
@@ -195,11 +181,10 @@ final class EditorController: ExportPreparing {
             cacheDir: store.directories.transcripts,
             modelsDir: store.directories.models)
         self.transcriptStore = transcriptStore
-        let openRouterClient = OpenRouterClient()
-        self.openRouterClient = openRouterClient
+        let aiClient = UnifiedAIClient(openRouter: openRouterClient)
         self.smartEditService = SmartEditService(
             transcriptStore: transcriptStore,
-            openRouter: openRouterClient,
+            ai: aiClient,
             waveforms: self.waveforms
         )
         player.actionAtItemEnd = .pause
@@ -207,7 +192,6 @@ final class EditorController: ExportPreparing {
 
         checkMissingFiles()
         attachObservers()
-        refreshOpenRouterKeyState()
         rebuildAndSeek(to: 0)
         warmUpWaveforms()
         // Первый показ — с исходным звуком; улучшенный подменится, когда будет готов
@@ -234,11 +218,9 @@ final class EditorController: ExportPreparing {
         enhanceRenderTask?.cancel()
         _ = rebuildGeneration.advance()
         _ = enhanceGeneration.advance()
-        smartEditReasoningTask?.cancel()
-        _ = smartEditReasoningGeneration.advance()
+        aiConnection.shutdown()
         await voiceStore.cancelAll()
         cancelSmartEdit()
-        openRouterKeyManager.cancel()
         mediaAvailability.cancel()
         mediaAccess.stopAll()
         waveformAnalysis.cancel()
@@ -865,51 +847,19 @@ final class EditorController: ExportPreparing {
     // MARK: - Умный монтаж
 
     func refreshOpenRouterKeyState() {
-        openRouterKeyManager.refresh()
+        aiConnection.refreshOpenRouterKeyState()
     }
 
     func saveAndValidateOpenRouterKey(_ key: String) async {
-        await openRouterKeyManager.saveAndValidate(key)
-        refreshSmartEditReasoningOptions()
+        await aiConnection.saveAndValidateOpenRouterKey(key)
     }
 
     func validateSavedOpenRouterKey() async {
-        await openRouterKeyManager.validateSaved()
+        await aiConnection.validateSavedOpenRouterKey()
     }
 
     func deleteOpenRouterKey() async {
-        if await openRouterKeyManager.delete() { cancelSmartEdit() }
-    }
-
-    /// Подтягивает уровни размышлений выбранной модели из каталога OpenRouter.
-    /// Без ключа или при сбое сети молча остаёмся на «Авто».
-    func refreshSmartEditReasoningOptions() {
-        smartEditReasoningTask?.cancel()
-        let generation = smartEditReasoningGeneration.advance()
-        let requestedModel = smartEditModel
-        smartEditReasoningTask = Task { [weak self] in
-            guard let self else { return }
-            let options: [ReasoningChoice]
-            do {
-                guard let apiKey = try await self.openRouterKeyManager.load() else { return }
-                let capabilities = try await self.openRouterClient.reasoningCapabilities(
-                    for: requestedModel, apiKey: apiKey)
-                options = ReasoningChoice.options(
-                    availableEfforts: capabilities.efforts,
-                    mandatory: capabilities.mandatory)
-            } catch {
-                return
-            }
-            guard !Task.isCancelled,
-                self.smartEditReasoningGeneration.isCurrent(generation),
-                self.smartEditModel == requestedModel
-            else { return }
-            self.smartEditReasoningOptions = options
-            if !options.contains(self.smartEditReasoning) {
-                self.smartEditReasoning = .auto
-            }
-            self.smartEditReasoningTask = nil
-        }
+        if await aiConnection.deleteOpenRouterKey() { cancelSmartEdit() }
     }
 
     func analyzeSmartEdits() {
@@ -918,22 +868,16 @@ final class EditorController: ExportPreparing {
         let generation = smartEditGeneration.advance()
         let clips = project.clips
         let threshold = project.detection.thresholdDB
-        let model = smartEditModel
-        let effort = smartEditReasoning.apiEffort
         smartEditCandidates = []
         smartEditSnapshotID = nil
         smartEditStatus = .preparingModel(progress: nil)
         smartEditTask = Task { [weak self] in
             guard let self else { return }
             do {
-                guard let apiKey = try await self.openRouterKeyManager.load() else {
-                    guard self.smartEditGeneration.isCurrent(generation) else { return }
-                    self.smartEditStatus = .failed("Сначала сохрани ключ OpenRouter.")
-                    return
-                }
+                let configuration = try await self.aiConnection.requestConfiguration()
                 let result = try await self.smartEditService.analyze(
                     clips: clips, projectThresholdDB: threshold,
-                    model: model, effort: effort, apiKey: apiKey,
+                    configuration: configuration,
                     status: { status in
                         await self.receiveSmartEditStatus(status, generation: generation)
                     })

@@ -385,7 +385,7 @@ actor OpenRouterClient {
     ) throws -> ProposalEnvelope {
         let decoder = JSONDecoder()
         let wordIndices = try validatedWordIndices(words)
-        guard let data = content.data(using: .utf8),
+        guard let data = Self.extractedEnvelopeData(content),
             let envelope = try? decoder.decode(ProposalEnvelope.self, from: data),
             envelope.schemaVersion == 1,
             Set(envelope.edits.map(\.id)).count == envelope.edits.count,
@@ -410,7 +410,7 @@ actor OpenRouterClient {
             throw OpenRouterError.damagedResponse
         }
         let proposalsByID = Dictionary(uniqueKeysWithValues: proposals.edits.map { ($0.id, $0) })
-        guard let data = content.data(using: .utf8),
+        guard let data = Self.extractedEnvelopeData(content),
             let envelope = try? decoder.decode(ReviewEnvelope.self, from: data),
             envelope.schemaVersion == 1,
             Set(envelope.decisions.map(\.editID)).count == envelope.decisions.count,

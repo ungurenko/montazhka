@@ -51,18 +51,6 @@ final class ShortsController {
     var count: ShortsCount {
         didSet { count.save(in: preferences) }
     }
-    var model: SmartEditModel {
-        didSet {
-            model.save(in: preferences)
-            refreshReasoningOptions()
-        }
-    }
-    var reasoningChoice: ReasoningChoice {
-        didSet { reasoningChoice.save(key: ShortsController.reasoningKey, in: preferences) }
-    }
-    /// Варианты пикера по возможностям текущей модели; до загрузки каталога —
-    /// только «Авто».
-    private(set) var reasoningOptions: [ReasoningChoice] = [.auto]
     private var frameSettings: ShortsFrameSettings
     var frameMode: ShortsFrameMode {
         get { frameSettings.mode }
@@ -95,17 +83,16 @@ final class ShortsController {
     private(set) var transcriptWords: [TranscriptWord] = []
     private(set) var analysisWarnings: [ShortsAnalysisWarning] = []
     private(set) var exportState: ShortsExportState = .idle
-    var openRouterKeyStatus: OpenRouterKeyStatus { keyManager.status }
+    var openRouterKeyStatus: OpenRouterKeyStatus { aiConnection.openRouterKeyStatus }
 
     let player = AVPlayer()
+    let aiConnection: AIConnectionController
     var currentTime: Double = 0
     var isPlaying = false
 
     let waveforms: WaveformStore
     private let transcriptStore: TranscriptStore
     private let service: ShortsCutService
-    private let openRouter: OpenRouterClient
-    private let keyManager: OpenRouterKeyManager
     private let previewBuilder: any ShortsPreviewBuilding
     private let preferences: any PreferenceStoring
 
@@ -114,7 +101,6 @@ final class ShortsController {
     @ObservationIgnored private let analysisOperation = LatestOperation()
     @ObservationIgnored private let exportOperation = LatestOperation()
     @ObservationIgnored private let prepareOperation = LatestOperation()
-    @ObservationIgnored private let reasoningOperation = LatestOperation()
     @ObservationIgnored private let previewOperation = LatestOperation()
     @ObservationIgnored private let seekOperation = LatestOperation()
     @ObservationIgnored private var sourceAccess: MediaAccessLease?
@@ -162,10 +148,6 @@ final class ShortsController {
         self.source = source
         self.preferences = preferences
         count = ShortsCount.saved(in: preferences)
-        model = SmartEditModel.saved(in: preferences)
-        reasoningChoice = ReasoningChoice.saved(
-            key: ShortsController.reasoningKey,
-            in: preferences)
         subtitleSettings = ShortsSubtitleSettings.saved(in: preferences)
         let waveformStore = WaveformStore(cacheDir: store.directories.waveforms)
         self.waveforms = waveformStore
@@ -174,16 +156,19 @@ final class ShortsController {
             modelsDir: store.directories.models)
         self.transcriptStore = transcriptStore
         let openRouter = OpenRouterClient()
-        self.openRouter = openRouter
+        self.aiConnection = AIConnectionController(
+            preferences: preferences,
+            reasoningPreferenceKey: ShortsController.reasoningKey,
+            openRouter: openRouter,
+            keyStore: openRouterKeyStore)
+        let aiClient = UnifiedAIClient(openRouter: openRouter)
         self.service = ShortsCutService(
             transcriptStore: transcriptStore,
-            openRouter: openRouter,
+            ai: aiClient,
             waveforms: waveformStore)
-        self.keyManager = OpenRouterKeyManager(store: openRouterKeyStore)
         self.previewBuilder = previewBuilder
         frameSettings = ShortsFrameSettings.loadAndMigrate(in: preferences)
         attachObservers()
-        keyManager.refresh()
         // Security-scoped доступ резолвим вне главного потока: внутри лизинга
         // — resolvingBookmarkData и проверки существования (дисковый I/O).
         Task.detached(priority: .userInitiated) { [weak self] in
@@ -199,10 +184,9 @@ final class ShortsController {
         analysisOperation.cancel()
         exportOperation.cancel()
         prepareOperation.cancel()
-        reasoningOperation.cancel()
+        aiConnection.shutdown()
         previewOperation.cancel()
         seekOperation.cancel()
-        keyManager.cancel()
         sourceAccess = nil
         cancelPreviewStop()
         if let timeObserver { player.removeTimeObserver(timeObserver) }
@@ -254,48 +238,20 @@ final class ShortsController {
         sourceAccess?.url ?? URL(fileURLWithPath: source.lastKnownPath)
     }
 
-    // MARK: - Ключ OpenRouter
+    // MARK: - AI-провайдер и ключ OpenRouter
 
-    func refreshOpenRouterKeyState() { keyManager.refresh() }
+    func refreshOpenRouterKeyState() { aiConnection.refreshOpenRouterKeyState() }
 
     func saveAndValidateOpenRouterKey(_ key: String) async {
-        await keyManager.saveAndValidate(key)
-        refreshReasoningOptions()
+        await aiConnection.saveAndValidateOpenRouterKey(key)
     }
 
     func validateSavedOpenRouterKey() async {
-        await keyManager.validateSaved()
+        await aiConnection.validateSavedOpenRouterKey()
     }
 
     func deleteOpenRouterKey() async {
-        if await keyManager.delete() { cancelAnalysis() }
-    }
-
-    /// Подтягивает уровни размышлений выбранной модели из каталога OpenRouter.
-    /// Без ключа или при сбое сети молча остаёмся на «Авто».
-    func refreshReasoningOptions() {
-        let requestedModel = model
-        reasoningOperation.start { [weak self] token in
-            guard let self else { return }
-            let options: [ReasoningChoice]
-            do {
-                guard let apiKey = try await self.keyManager.load() else { return }
-                let capabilities = try await self.openRouter.reasoningCapabilities(
-                    for: requestedModel, apiKey: apiKey)
-                options = ReasoningChoice.options(
-                    availableEfforts: capabilities.efforts,
-                    mandatory: capabilities.mandatory)
-            } catch {
-                return
-            }
-            guard self.reasoningOperation.isCurrent(token),
-                self.model == requestedModel
-            else { return }
-            self.reasoningOptions = options
-            if !options.contains(self.reasoningChoice) {
-                self.reasoningChoice = .auto
-            }
-        }
+        if await aiConnection.deleteOpenRouterKey() { cancelAnalysis() }
     }
 
     // MARK: - Анализ
@@ -305,8 +261,6 @@ final class ShortsController {
         let file = source
         let duration = sourceDuration
         let requestedCount = count
-        let requestedModel = model
-        let requestedEffort = reasoningChoice.apiEffort
         candidates = []
         transcriptWords = []
         analysisWarnings = []
@@ -314,14 +268,10 @@ final class ShortsController {
         analysisOperation.start { [weak self] token in
             guard let self else { return }
             do {
-                guard let apiKey = try await self.keyManager.load() else {
-                    guard self.analysisOperation.isCurrent(token) else { return }
-                    self.status = .failed("Сначала сохрани ключ OpenRouter.")
-                    return
-                }
+                let configuration = try await self.aiConnection.requestConfiguration()
                 let result = try await self.service.analyze(
                     source: file, sourceDuration: duration, count: requestedCount,
-                    model: requestedModel, effort: requestedEffort, apiKey: apiKey,
+                    configuration: configuration,
                     thresholdDB: DetectionSettings().thresholdDB,
                     status: { status in
                         await self.receiveStatus(status, token: token)

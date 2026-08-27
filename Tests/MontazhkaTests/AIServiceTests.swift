@@ -11,16 +11,14 @@ struct AIServiceTests {
         let words = transcriptWords(sourceID: source.id, count: 20)
         let service = SmartEditService(
             transcriptStore: StubTranscriptProvider(words: words, modelCached: false),
-            openRouter: StubSmartEditRouter(),
+            ai: StubSmartEditRouter(),
             waveforms: StubWaveformProvider())
         let recorder = SmartEditStatusRecorder()
 
         _ = try await service.analyze(
             clips: [Clip(source: source, start: 0, end: 20)],
             projectThresholdDB: -40,
-            model: SmartEditModel.qwen,
-            effort: nil as String?,
-            apiKey: "test",
+            configuration: testAIConfiguration,
             status: { await recorder.append($0) })
 
         let stages = await recorder.values.map(smartEditStage)
@@ -35,15 +33,13 @@ struct AIServiceTests {
         let source = MediaReference(path: "/tmp/cancel-smart-edit.mov")
         let service = SmartEditService(
             transcriptStore: SuspendedTranscriptProvider(),
-            openRouter: StubSmartEditRouter(),
+            ai: StubSmartEditRouter(),
             waveforms: StubWaveformProvider())
         let task = Task {
             try await service.analyze(
                 clips: [Clip(source: source, start: 0, end: 20)],
                 projectThresholdDB: -40,
-                model: .qwen,
-                effort: nil,
-                apiKey: "test",
+                configuration: testAIConfiguration,
                 status: { _ in })
         }
 
@@ -61,7 +57,7 @@ struct AIServiceTests {
         let words = transcriptWords(sourceID: source.id, count: 921)
         let service = ShortsCutService(
             transcriptStore: StubTranscriptProvider(words: words, modelCached: false),
-            openRouter: PartiallyFailingShortsRouter(),
+            ai: PartiallyFailingShortsRouter(),
             waveforms: StubWaveformProvider())
         let recorder = ShortsStatusRecorder()
 
@@ -69,9 +65,7 @@ struct AIServiceTests {
             source: source,
             sourceDuration: 921,
             count: ShortsCount.three,
-            model: SmartEditModel.qwen,
-            effort: nil as String?,
-            apiKey: "test",
+            configuration: testAIConfiguration,
             thresholdDB: -40,
             status: { await recorder.append($0) })
 
@@ -166,33 +160,31 @@ private struct StubWaveformProvider: WaveformProviding {
     func ensure(path: String) async -> [Float]? { [] }
 }
 
-private actor StubSmartEditRouter: SmartEditOpenRouterServing {
-    func ensureModelAvailable(_ model: SmartEditModel, apiKey: String) {}
+private actor StubSmartEditRouter: SmartEditAIServing {
+    func ensureModelAvailable(_ configuration: AIRequestConfiguration) {}
 
     func propose(
-        words: [OpenRouterTranscriptWord], model: SmartEditModel,
-        effort: String?, apiKey: String
+        words: [OpenRouterTranscriptWord], configuration: AIRequestConfiguration
     ) -> ProposalEnvelope {
         ProposalEnvelope(schemaVersion: 1, edits: [])
     }
 
     func review(
         words: [OpenRouterTranscriptWord], proposals: ProposalEnvelope,
-        model: SmartEditModel, effort: String?, apiKey: String
+        configuration: AIRequestConfiguration
     ) -> ReviewEnvelope {
         ReviewEnvelope(schemaVersion: 1, decisions: [])
     }
 }
 
-private actor PartiallyFailingShortsRouter: ShortsOpenRouterServing {
+private actor PartiallyFailingShortsRouter: ShortsAIServing {
     private var mapCalls = 0
     private var proposalCalls = 0
 
-    func ensureModelAvailable(_ model: SmartEditModel, apiKey: String) {}
+    func ensureModelAvailable(_ configuration: AIRequestConfiguration) {}
 
     func mapShortsWindow(
-        words: [OpenRouterTranscriptWord], model: SmartEditModel,
-        effort: String?, apiKey: String
+        words: [OpenRouterTranscriptWord], configuration: AIRequestConfiguration
     ) throws -> ShortsMapEnvelope {
         mapCalls += 1
         if mapCalls == 1 { throw StubAIError.expectedFailure }
@@ -200,8 +192,8 @@ private actor PartiallyFailingShortsRouter: ShortsOpenRouterServing {
     }
 
     func proposeShorts(
-        words: [OpenRouterTranscriptWord], model: SmartEditModel,
-        effort: String?, apiKey: String, videoMap: String
+        words: [OpenRouterTranscriptWord], configuration: AIRequestConfiguration,
+        videoMap: String
     ) throws -> ShortsProposalEnvelope {
         proposalCalls += 1
         if proposalCalls == 2 { throw StubAIError.expectedFailure }
@@ -220,7 +212,7 @@ private actor PartiallyFailingShortsRouter: ShortsOpenRouterServing {
 
     func rankShorts(
         proposals: [ShortsRankInput], desiredCount: Int?,
-        model: SmartEditModel, effort: String?, apiKey: String,
+        configuration: AIRequestConfiguration,
         videoMap: String
     ) throws -> ShortsRankingEnvelope {
         throw StubAIError.expectedFailure
@@ -228,7 +220,7 @@ private actor PartiallyFailingShortsRouter: ShortsOpenRouterServing {
 
     func verifyShorts(
         inputs: [ShortsVerifyInput], videoMap: String,
-        model: SmartEditModel, effort: String?, apiKey: String
+        configuration: AIRequestConfiguration
     ) throws -> ShortsVerdictEnvelope {
         throw StubAIError.expectedFailure
     }
@@ -247,3 +239,8 @@ private actor ShortsStatusRecorder {
 private enum StubAIError: Error {
     case expectedFailure
 }
+
+private let testAIConfiguration = AIRequestConfiguration.openRouter(
+    model: .qwen,
+    effort: nil,
+    apiKey: "test")

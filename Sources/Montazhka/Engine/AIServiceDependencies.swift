@@ -15,39 +15,36 @@ protocol WaveformProviding: Sendable {
     func ensure(path: String) async -> [Float]?
 }
 
-protocol SmartEditOpenRouterServing: Sendable {
-    func ensureModelAvailable(_ model: SmartEditModel, apiKey: String) async throws
+protocol SmartEditAIServing: Sendable {
+    func ensureModelAvailable(_ configuration: AIRequestConfiguration) async throws
     func propose(
-        words: [OpenRouterTranscriptWord], model: SmartEditModel,
-        effort: String?, apiKey: String
+        words: [OpenRouterTranscriptWord], configuration: AIRequestConfiguration
     ) async throws -> ProposalEnvelope
     func review(
         words: [OpenRouterTranscriptWord], proposals: ProposalEnvelope,
-        model: SmartEditModel, effort: String?, apiKey: String
+        configuration: AIRequestConfiguration
     ) async throws -> ReviewEnvelope
 }
 
-protocol ShortsOpenRouterServing: Sendable {
-    func ensureModelAvailable(_ model: SmartEditModel, apiKey: String) async throws
+protocol ShortsAIServing: Sendable {
+    func ensureModelAvailable(_ configuration: AIRequestConfiguration) async throws
     func mapShortsWindow(
-        words: [OpenRouterTranscriptWord], model: SmartEditModel,
-        effort: String?, apiKey: String
+        words: [OpenRouterTranscriptWord], configuration: AIRequestConfiguration
     ) async throws -> ShortsMapEnvelope
     func proposeShorts(
-        words: [OpenRouterTranscriptWord], model: SmartEditModel,
-        effort: String?, apiKey: String, videoMap: String
+        words: [OpenRouterTranscriptWord], configuration: AIRequestConfiguration,
+        videoMap: String
     ) async throws -> ShortsProposalEnvelope
     func rankShorts(
         proposals: [ShortsRankInput], desiredCount: Int?,
-        model: SmartEditModel, effort: String?, apiKey: String,
+        configuration: AIRequestConfiguration,
         videoMap: String
     ) async throws -> ShortsRankingEnvelope
     func verifyShorts(
         inputs: [ShortsVerifyInput], videoMap: String,
-        model: SmartEditModel, effort: String?, apiKey: String
+        configuration: AIRequestConfiguration
     ) async throws -> ShortsVerdictEnvelope
 }
 
 extension TranscriptStore: TranscriptProviding {}
 extension WaveformStore: WaveformProviding {}
-extension OpenRouterClient: SmartEditOpenRouterServing, ShortsOpenRouterServing {}

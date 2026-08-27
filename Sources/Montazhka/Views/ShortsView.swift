@@ -29,7 +29,8 @@ struct ShortsView: View {
         .background(Theme.background)
         .task {
             controller.prepare()
-            controller.refreshReasoningOptions()
+            controller.aiConnection.refreshAgents()
+            controller.aiConnection.refreshReasoningOptions()
         }
         .onAppear(perform: installKeyMonitor)
         .onDisappear(perform: removeKeyMonitor)
@@ -184,29 +185,26 @@ struct ShortsView: View {
                 .labelsHidden()
             }
 
-            Picker("Модель", selection: $controller.model) {
-                ForEach(SmartEditModel.allCases, id: \.self) { model in
-                    Text(model.title).tag(model)
-                }
-            }
+            AIProviderControls(
+                connection: controller.aiConnection)
 
-            Picker("Размышления", selection: $controller.reasoningChoice) {
-                ForEach(controller.reasoningOptions) { choice in
-                    Text(choice.title).tag(choice)
-                }
-            }
-            if controller.reasoningOptions.count > 1 {
+            AIReasoningPicker(connection: controller.aiConnection)
+            if controller.aiConnection.reasoningOptions.count > 1 {
                 Text("Глубина «размышлений» модели. Выше уровень — вдумчивее отбор, но дольше и дороже анализ.")
                     .font(.system(size: 10))
                     .foregroundStyle(Theme.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            OpenRouterKeyControls(
-                controller: controller,
-                keyInput: $keyInput,
-                replacingKey: $replacingKey
-            )
+            if controller.aiConnection.provider == .openRouter {
+                OpenRouterKeyControls(
+                    controller: controller,
+                    keyInput: $keyInput,
+                    replacingKey: $replacingKey
+                )
+            } else {
+                CLIAgentPrivacyNotice(provider: controller.aiConnection.provider)
+            }
 
             if !SmartEditPlatform.isSupported {
                 Label("Нарезка доступна на Mac с Apple Silicon.", systemImage: "cpu")
@@ -243,8 +241,10 @@ struct ShortsView: View {
             .disabled(analyzeDisabled)
             .accessibilityIdentifier("shorts.analyze")
 
-            Link("Получить ключ OpenRouter", destination: URL(string: "https://openrouter.ai/settings/keys")!)
-                .font(.system(size: 10.5, weight: .medium))
+            if controller.aiConnection.provider == .openRouter {
+                Link("Получить ключ OpenRouter", destination: URL(string: "https://openrouter.ai/settings/keys")!)
+                    .font(.system(size: 10.5, weight: .medium))
+            }
         }
     }
 
@@ -255,7 +255,7 @@ struct ShortsView: View {
     }
 
     private var analyzeDisabled: Bool {
-        controller.openRouterKeyStatus != .saved || controller.prepareError != nil
+        !controller.aiConnection.isReady || controller.prepareError != nil
             || controller.sourceDuration < ShortsLimits.minSourceDuration || !SmartEditPlatform.isSupported
     }
 
