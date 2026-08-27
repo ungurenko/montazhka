@@ -6,7 +6,7 @@ mode="${1:-run}"
 app_name="Montazhka"
 bundle_id="ru.ungurenko.montazhka"
 root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-app_bundle="$root_dir/build.noindex/Монтажка.app"
+app_bundle="/Applications/Монтажка.app"
 app_binary="$app_bundle/Contents/MacOS/$app_name"
 
 stop_running_app() {
@@ -14,7 +14,7 @@ stop_running_app() {
 }
 
 build_app() {
-  "$root_dir/scripts/build-app.sh"
+  "$root_dir/scripts/build-app.sh" --install
 }
 
 open_app() {

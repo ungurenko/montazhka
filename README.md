@@ -26,7 +26,7 @@
 - Каждый вариант проходит два ИИ-прохода и локальную проверку тихих границ. Явные безопасные исправления отмечаются заранее, смысловые повторы всегда ждут ручной галочки.
 - Все выбранные правки применяются одним действием и целиком возвращаются одним `Cmd+Z`.
 
-Функция требует Mac с Apple Silicon. Для OpenRouter нужен [ключ](https://openrouter.ai/settings/keys), он хранится в защищённом Keychain macOS. Для Codex CLI или OpenCode CLI достаточно установленного и авторизованного агента. Базовый редактор и экспорт работают на Intel и Apple Silicon.
+Функция требует Mac с Apple Silicon. Для OpenRouter нужен [ключ](https://openrouter.ai/settings/keys), он хранится локально в папке данных Монтажки с доступом только текущему пользователю macOS. Для Codex CLI или OpenCode CLI достаточно установленного и авторизованного агента. Базовый редактор и экспорт работают на Intel и Apple Silicon.
 
 ## ✂️ Как работает нарезка на shorts
 
@@ -61,13 +61,13 @@
 ./scripts/test.sh                             # все модульные тесты на Swift Testing
 ./scripts/build-app.sh                        # локальная .app со стабильной подписью
 ./scripts/build-app.sh --universal            # локальная universal .app
-./scripts/build-app.sh --adhoc                # временная подпись без доступа к сохранённому ключу
-./script/build_and_run.sh                     # собрать и запустить точный локальный .app
+./scripts/build-app.sh --adhoc                # временная подпись для локальной диагностики
+./script/build_and_run.sh                     # собрать, обновить /Applications и запустить
 MONTAZHKA_SELFTEST_TIMEOUT=30 .build/release/Montazhka --selftest
 .tools/xcodegen generate                      # Montazhka.xcodeproj для Xcode и UI-тестов
 ```
 
-Готовое приложение находится в `build.noindex/Монтажка.app`. Установка в `/Applications` выполняется только с явным флагом `--install`.
+Готовое приложение находится в `build.noindex/Монтажка.app`. `script/build_and_run.sh` также заменяет копию в `/Applications`, чтобы при разработке всегда запускалась свежая версия.
 
 ### Публичный релиз
 

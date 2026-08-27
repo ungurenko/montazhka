@@ -92,7 +92,7 @@ struct OpenRouterKeyControls: View {
 
     private var privacyNote: some View {
         Label(
-            "В OpenRouter уходит текст расшифровки — он может содержать произнесённые личные данные. Звук, видео и пути файлов остаются на Mac.",
+            "Ключ хранится обычным локальным файлом с доступом только твоему пользователю macOS. В OpenRouter уходит текст расшифровки; звук, видео и пути файлов остаются на Mac.",
             systemImage: "lock.shield.fill"
         )
         .font(.system(size: 10.5))
