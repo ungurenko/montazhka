@@ -10,7 +10,8 @@ final class MontazhkaUITests: XCTestCase {
             .appendingPathComponent("montazhka-ui-tests-\(UUID().uuidString)", isDirectory: true)
     }
 
-    override func tearDownWithError() throws {
+    @MainActor
+    override func tearDown() async throws {
         app?.terminate()
         if let dataDirectory {
             try? FileManager.default.removeItem(at: dataDirectory)
