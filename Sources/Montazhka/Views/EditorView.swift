@@ -130,6 +130,7 @@ struct EditorView: View {
                 .foregroundStyle(Theme.textPrimary)
                 .frame(maxWidth: 260)
                 .onSubmit { controller.renameProject(projectName) }
+                .accessibilityIdentifier("editor.projectName")
 
             saveStatusView
 

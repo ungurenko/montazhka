@@ -167,7 +167,27 @@ enum ShortsExportState: Equatable {
     case idle
     case exporting(done: Int, total: Int, progress: Double)
     case done(URL)
-    case failed(String)
+    case failed(message: String, completed: Int, total: Int, folder: URL)
+}
+
+enum ShortsAnalysisWarning: Equatable, Sendable {
+    case mapWindowsFailed(failed: Int, total: Int)
+    case proposalWindowsFailed(failed: Int, total: Int)
+    case rankingFallback
+    case verificationSkipped
+
+    var message: String {
+        switch self {
+        case .mapWindowsFailed(let failed, let total):
+            return "Карта видео составлена не полностью: не обработано \(failed) из \(total) частей."
+        case .proposalWindowsFailed(let failed, let total):
+            return "Часть видео не вошла в поиск моментов: не обработано \(failed) из \(total) частей."
+        case .rankingFallback:
+            return "Финальный отбор был недоступен — кандидаты показаны в исходном порядке."
+        case .verificationSkipped:
+            return "Проверка холодным зрителем была недоступна — показаны результаты без неё."
+        }
+    }
 }
 
 /// Результат анализа: найденные фрагменты и та же расшифровка,
@@ -176,6 +196,7 @@ enum ShortsExportState: Equatable {
 struct ShortsAnalysisResult: Sendable {
     let candidates: [ShortCandidate]
     let transcript: [TranscriptWord]
+    let warnings: [ShortsAnalysisWarning]
 }
 
 // MARK: - Контракты обмена с LLM

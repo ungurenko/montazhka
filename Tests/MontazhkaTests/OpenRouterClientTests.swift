@@ -96,6 +96,17 @@ struct OpenRouterClientTests {
     }
 
     @Test
+    func testDefaultSessionDoesNotPersistCookiesOrResponses() {
+        let configuration = OpenRouterClient.makeDefaultSession().configuration
+
+        #expect(configuration.identifier == nil)
+        #expect(configuration.urlCache == nil)
+        #expect(configuration.httpCookieStorage == nil)
+        #expect(!configuration.httpShouldSetCookies)
+        #expect(configuration.requestCachePolicy == .reloadIgnoringLocalCacheData)
+    }
+
+    @Test
     func testQwenRepairsBrokenFormatOnceAndKeepsPrivacyProviderRules() async throws {
         MockOpenRouterURLProtocol.configure(responses: [
             .json(content: "это не json"),

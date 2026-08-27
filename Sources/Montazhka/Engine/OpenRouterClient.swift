@@ -20,7 +20,7 @@ enum OpenRouterError: LocalizedError, Equatable {
             return wait.map { "OpenRouter просит подождать \($0) секунд." }
                 ?? "OpenRouter временно ограничил число запросов. Попробуй чуть позже."
         case .providerUnavailable: return "Провайдер модели временно недоступен. Попробуй ещё раз."
-        case .timeout: return "OpenRouter не ответил за три минуты. Попробуй ещё раз."
+        case .timeout: return "OpenRouter не ответил за две минуты. Попробуй ещё раз."
         case .damagedResponse: return "ИИ вернул повреждённый ответ. Попробуй ещё раз."
         case .network(let message): return "Не удалось связаться с OpenRouter: \(message)"
         }
@@ -91,8 +91,17 @@ actor OpenRouterClient {
     /// качать его заново для проверки доступности и возможностей модели.
     private var catalogByID: [String: ModelItem]?
 
-    init(session: URLSession = .shared) {
-        self.session = session
+    init(session: URLSession? = nil) {
+        self.session = session ?? Self.makeDefaultSession()
+    }
+
+    nonisolated static func makeDefaultSession() -> URLSession {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+        configuration.urlCache = nil
+        configuration.httpCookieStorage = nil
+        configuration.httpShouldSetCookies = false
+        return URLSession(configuration: configuration)
     }
 
     func validateKey(_ apiKey: String) async throws {
@@ -343,7 +352,7 @@ actor OpenRouterClient {
             } catch let error as URLError where error.code == .timedOut {
                 throw OpenRouterError.timeout
             } catch {
-                Logger.network.error("OpenRouter: \(error.localizedDescription)")
+                Logger.network.error("OpenRouter: транспортный запрос завершился ошибкой.")
                 throw OpenRouterError.network(error.localizedDescription)
             }
         }

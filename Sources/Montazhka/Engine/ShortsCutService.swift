@@ -4,13 +4,14 @@ import OSLog
 /// Нарезка длинного видео на shorts: расшифровка → оконные предложения ИИ →
 /// отбор и ранжирование → тихие границы. Работает с одним исходником.
 actor ShortsCutService {
-    private let transcriptStore: TranscriptStore
-    private let openRouter: OpenRouterClient
-    private let waveforms: WaveformStore
+    private let transcriptStore: any TranscriptProviding
+    private let openRouter: any ShortsOpenRouterServing
+    private let waveforms: any WaveformProviding
 
     init(
-        transcriptStore: TranscriptStore, openRouter: OpenRouterClient,
-        waveforms: WaveformStore
+        transcriptStore: any TranscriptProviding,
+        openRouter: any ShortsOpenRouterServing,
+        waveforms: any WaveformProviding
     ) {
         self.transcriptStore = transcriptStore
         self.openRouter = openRouter
@@ -32,7 +33,7 @@ actor ShortsCutService {
         if !cached { await status(.preparingModel(progress: nil)) }
 
         let words = try await transcriptStore.ensure(source: source) { progress in
-            Task { await status(.transcribing(progress: progress)) }
+            await status(.transcribing(progress: progress))
         }
         guard !words.isEmpty else { throw ShortsError.emptyTranscript }
 
@@ -47,31 +48,17 @@ actor ShortsCutService {
 
         let windows = ShortsWindowPlanner.windows(for: timelineMap.words)
         guard !windows.isEmpty else { throw ShortsError.emptyTranscript }
+        var warnings: [ShortsAnalysisWarning] = []
 
-        // Проход 0: карта видео — о чём каждое окно и где его сильные места.
-        // Компактный вызов на окно; ошибка одного окна просто оставляет его
-        // без строчки в карте.
-        var mapLines: [String] = []
-        for (index, window) in windows.enumerated() {
-            try Task.checkCancellation()
-            await status(.mapping(done: index, total: windows.count))
-            let windowWords = timelineMap.words[window]
-            do {
-                let map = try await openRouter.mapShortsWindow(
-                    words: windowWords.map(\.publicPayload),
-                    model: model, effort: effort, apiKey: apiKey)
-                if let line = Self.mapLine(for: map, windowWords: windowWords) {
-                    mapLines.append(line)
-                }
-            } catch is CancellationError {
-                throw CancellationError()
-            } catch {
-                Logger.network.error(
-                    "Shorts: карта окна \(index + 1)/\(windows.count) не собралась: \(error.localizedDescription, privacy: .public)"
-                )
-            }
-        }
-        let videoMap = mapLines.joined(separator: "\n")
+        let mapResult = try await makeVideoMap(
+            windows: windows,
+            words: timelineMap.words,
+            model: model,
+            effort: effort,
+            apiKey: apiKey,
+            status: status)
+        if let warning = mapResult.warning { warnings.append(warning) }
+        let videoMap = mapResult.value
         try Task.checkCancellation()
 
         // Проход 1: предложения по каждому окну с картой всего видео в
@@ -132,7 +119,12 @@ actor ShortsCutService {
         }
         guard !ordered.isEmpty else {
             if failedWindows > 0, let lastWindowError { throw lastWindowError }
-            return ShortsAnalysisResult(candidates: [], transcript: words)
+            return ShortsAnalysisResult(
+                candidates: [], transcript: words, warnings: warnings)
+        }
+        if failedWindows > 0 {
+            warnings.append(
+                .proposalWindowsFailed(failed: failedWindows, total: windows.count))
         }
         try Task.checkCancellation()
 
@@ -163,6 +155,7 @@ actor ShortsCutService {
             Logger.network.error(
                 "Shorts: отбор недоступен, фолбэк по порядку предложений: \(error.localizedDescription, privacy: .public)"
             )
+            warnings.append(.rankingFallback)
             decisions = Self.fallbackDecisions(proposals: ordered, desiredCount: count.desired)
         }
         try Task.checkCancellation()
@@ -197,6 +190,7 @@ actor ShortsCutService {
                 Logger.network.error(
                     "Shorts: проверка недоступна, оставляю решения отбора: \(error.localizedDescription, privacy: .public)"
                 )
+                warnings.append(.verificationSkipped)
             }
         }
 
@@ -230,7 +224,8 @@ actor ShortsCutService {
         candidates = Self.diversified(candidates)
         candidates = Array(candidates.prefix(ShortsLimits.maxCandidates))
         await status(.ready)
-        return ShortsAnalysisResult(candidates: candidates, transcript: words)
+        return ShortsAnalysisResult(
+            candidates: candidates, transcript: words, warnings: warnings)
     }
 
     /// Принятые решения в порядке силы: валидный ранг важнее порядка ответа,
@@ -275,6 +270,47 @@ actor ShortsCutService {
 
     private static func proposalByID(_ id: String, in proposals: [ShortsProposalDTO]) -> ShortsProposalDTO? {
         proposals.first { $0.id == id }
+    }
+
+    /// Проход 0: компактная карта всего видео. Ошибка одного окна не
+    /// останавливает анализ, но возвращается пользователю предупреждением.
+    private func makeVideoMap(
+        windows: [Range<Int>],
+        words: [MappedTranscriptWord],
+        model: SmartEditModel,
+        effort: String?,
+        apiKey: String,
+        status: @escaping @Sendable (ShortsStatus) async -> Void
+    ) async throws -> (value: String, warning: ShortsAnalysisWarning?) {
+        var mapLines: [String] = []
+        var failedWindows = 0
+        for (index, window) in windows.enumerated() {
+            try Task.checkCancellation()
+            await status(.mapping(done: index, total: windows.count))
+            let windowWords = words[window]
+            do {
+                let map = try await openRouter.mapShortsWindow(
+                    words: windowWords.map(\.publicPayload),
+                    model: model, effort: effort, apiKey: apiKey)
+                if let line = Self.mapLine(for: map, windowWords: windowWords) {
+                    mapLines.append(line)
+                }
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                failedWindows += 1
+                Logger.network.error(
+                    "Shorts: карта окна \(index + 1)/\(windows.count) не собралась: \(error.localizedDescription, privacy: .public)"
+                )
+            }
+        }
+        let warning =
+            failedWindows > 0
+            ? ShortsAnalysisWarning.mapWindowsFailed(
+                failed: failedWindows,
+                total: windows.count)
+            : nil
+        return (mapLines.joined(separator: "\n"), warning)
     }
 
     /// Компактная строка карты для контекста других проходов: время — о чём

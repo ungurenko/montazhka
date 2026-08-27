@@ -8,6 +8,49 @@ import Testing
 @MainActor
 struct ShortsControllerTests {
     @Test
+    func controllersLoadAndSaveOnlyThroughInjectedPreferences() async throws {
+        let root = temporaryDirectory("injected-preferences")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let preferences = ControllerPreferenceStore()
+        ShortsCount.eight.save(in: preferences)
+        SmartEditModel.luna.save(in: preferences)
+        ReasoningChoice.effort(.high).save(
+            key: ShortsController.reasoningKey,
+            in: preferences)
+        ShortsSubtitleSettings(enabled: true, style: .boxed, size: .large)
+            .save(in: preferences)
+
+        let repository = ProjectStore(baseDirectory: root)
+        let shorts = ShortsController(
+            sourceURL: root.appendingPathComponent("source.mov"),
+            store: repository,
+            openRouterKeyStore: EmptyOpenRouterKeyStore(),
+            previewBuilder: ControlledShortsPreviewBuilder(),
+            preferences: preferences)
+        let editor = EditorController(
+            project: Project(name: "Тест"),
+            store: repository,
+            openRouterKeyStore: EmptyOpenRouterKeyStore(),
+            preferences: preferences)
+
+        #expect(shorts.count == .eight)
+        #expect(shorts.model == .luna)
+        #expect(shorts.reasoningChoice == .effort(.high))
+        #expect(shorts.subtitlesEnabled)
+        #expect(shorts.subtitleStyle == .boxed)
+        #expect(shorts.subtitleSize == .large)
+        #expect(editor.smartEditModel == .luna)
+
+        shorts.count = .three
+        shorts.subtitleStyle = .accent
+        #expect(ShortsCount.saved(in: preferences) == .three)
+        #expect(ShortsSubtitleSettings.saved(in: preferences).style == .accent)
+
+        await shorts.shutdown()
+        await editor.shutdown()
+    }
+
+    @Test
     func previewRequestCarriesSelectedFrameModeAndCanvasColor() async throws {
         let root = temporaryDirectory("preview-format")
         defer { try? FileManager.default.removeItem(at: root) }
@@ -131,6 +174,28 @@ struct ShortsControllerTests {
             try await Task.sleep(for: .milliseconds(10))
         }
         Issue.record("Асинхронная операция не завершилась вовремя")
+    }
+}
+
+private final class ControllerPreferenceStore: PreferenceStoring, @unchecked Sendable {
+    private let lock = NSLock()
+    private var strings: [String: String] = [:]
+    private var bools: [String: Bool] = [:]
+
+    func string(forKey key: String) -> String? {
+        lock.withLock { strings[key] }
+    }
+
+    func set(_ value: String?, forKey key: String) {
+        lock.withLock { strings[key] = value }
+    }
+
+    func bool(forKey key: String) -> Bool {
+        lock.withLock { bools[key] ?? false }
+    }
+
+    func set(_ value: Bool, forKey key: String) {
+        lock.withLock { bools[key] = value }
     }
 }
 

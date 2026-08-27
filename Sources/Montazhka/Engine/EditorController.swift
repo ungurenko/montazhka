@@ -90,13 +90,13 @@ final class EditorController: ExportPreparing {
     var smartEditCandidates: [SmartEditCandidate] = []
     private(set) var smartEditStatus: SmartEditStatus = .idle
     var openRouterKeyStatus: OpenRouterKeyStatus { openRouterKeyManager.status }
-    var smartEditModel: SmartEditModel = SmartEditModel.saved() {
+    var smartEditModel: SmartEditModel {
         didSet {
             smartEditModel.save(in: preferences)
             refreshSmartEditReasoningOptions()
         }
     }
-    var smartEditReasoning: ReasoningChoice = ReasoningChoice.saved(key: EditorController.smartEditReasoningKey) {
+    var smartEditReasoning: ReasoningChoice {
         didSet { smartEditReasoning.save(key: EditorController.smartEditReasoningKey, in: preferences) }
     }
     /// Варианты пикера размышлений по возможностям модели; до загрузки
@@ -177,6 +177,10 @@ final class EditorController: ExportPreparing {
         self.projectEditor = ProjectEditor(project: project)
         self.repository = store
         self.preferences = preferences
+        smartEditModel = SmartEditModel.saved(in: preferences)
+        smartEditReasoning = ReasoningChoice.saved(
+            key: EditorController.smartEditReasoningKey,
+            in: preferences)
         self.saveCoordinator = ProjectSaveCoordinator(repository: store)
         self.openRouterKeyManager = OpenRouterKeyManager(store: openRouterKeyStore)
         let voiceStore = VoiceEnhanceStore(cacheDir: store.directories.enhancedAudio)

@@ -45,7 +45,7 @@ actor ParakeetTranscriber {
 
     func transcribe(
         source: MediaReference,
-        progress: (@Sendable (Double?) -> Void)? = nil
+        progress: (@Sendable (Double?) async -> Void)? = nil
     ) async throws -> [TranscriptWord] {
         #if !arch(arm64)
             throw SpeechTranscriptionError.unsupportedMac
@@ -80,15 +80,25 @@ actor ParakeetTranscriber {
         #endif
     }
 
-    private func ensureManager(progress: (@Sendable (Double?) -> Void)?) async throws -> AsrManager {
+    private func ensureManager(progress: (@Sendable (Double?) async -> Void)?) async throws -> AsrManager {
         if let manager { return manager }
+        let progressStream = AsyncStream.makeStream(
+            of: Double?.self,
+            bufferingPolicy: .bufferingNewest(1))
+        let progressConsumer = Task {
+            for await value in progressStream.stream {
+                await progress?(value)
+            }
+        }
         do {
             try FileManager.default.createDirectory(at: modelsDir, withIntermediateDirectories: true)
             let loaded = try await AsrModels.downloadAndLoad(
                 to: modelsDir,
                 version: .v3,
                 encoderPrecision: .int8,
-                progressHandler: { snapshot in progress?(snapshot.fractionCompleted) }
+                progressHandler: { snapshot in
+                    progressStream.continuation.yield(snapshot.fractionCompleted)
+                }
             )
             try Task.checkCancellation()
             let config = ASRConfig(melChunkContext: false, dualDecodeArbitration: true)
@@ -96,11 +106,19 @@ actor ParakeetTranscriber {
             try await manager.loadModels(loaded)
             self.models = loaded
             self.manager = manager
-            progress?(1)
+            progressStream.continuation.yield(1)
+            progressStream.continuation.finish()
+            await progressConsumer.value
             return manager
         } catch is CancellationError {
+            progressStream.continuation.finish()
+            progressConsumer.cancel()
+            await progressConsumer.value
             throw CancellationError()
         } catch let error as AsrModelsError {
+            progressStream.continuation.finish()
+            progressConsumer.cancel()
+            await progressConsumer.value
             switch error {
             case .loadingFailed, .modelCompilationFailed, .modelNotFound:
                 throw SpeechTranscriptionError.damagedModel
@@ -108,6 +126,9 @@ actor ParakeetTranscriber {
                 throw SpeechTranscriptionError.modelDownloadFailed
             }
         } catch {
+            progressStream.continuation.finish()
+            progressConsumer.cancel()
+            await progressConsumer.value
             throw SpeechTranscriptionError.modelDownloadFailed
         }
     }

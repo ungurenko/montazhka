@@ -85,6 +85,25 @@ enum Transcoder {
         to url: URL,
         progress: @escaping @Sendable (Double) -> Void
     ) async throws {
+        var output = AtomicMediaOutput(destinationURL: url)
+        defer { output.discard() }
+        try await exportDirect(
+            input: input,
+            settings: settings,
+            to: output.temporaryURL,
+            progress: progress)
+        try Task.checkCancellation()
+        try output.commit()
+    }
+
+    /// Непосредственная запись всегда получает новый временный URL от
+    /// `AtomicMediaOutput`; пользовательский файл здесь недоступен.
+    private static func exportDirect(
+        input: ExportInput,
+        settings: Settings,
+        to url: URL,
+        progress: @escaping @Sendable (Double) -> Void
+    ) async throws {
         let composition = input.composition
         let audioMix = input.audioMix
         let duration = (try? await composition.load(.duration).seconds) ?? 0
@@ -131,7 +150,6 @@ enum Transcoder {
             audioOutput = output
         }
 
-        try? FileManager.default.removeItem(at: url)
         let writer = try AVAssetWriter(outputURL: url, fileType: .mp4)
         writer.shouldOptimizeForNetworkUse = true  // moov в начале — стриминг в мессенджерах
 

@@ -11,6 +11,11 @@ struct ShortsPreviewRequest {
     let frameSettings: ShortsFrameSettings
 }
 
+private struct ShortsBatchExportItem: Sendable {
+    let index: Int
+    let candidate: ShortCandidate
+}
+
 @MainActor
 protocol ShortsPreviewBuilding {
     func makeItem(for request: ShortsPreviewRequest) async throws -> AVPlayerItem
@@ -43,16 +48,16 @@ final class ShortsController {
     private(set) var prepareError: String?
     private(set) var previewError: String?
 
-    var count: ShortsCount = ShortsCount.saved() {
+    var count: ShortsCount {
         didSet { count.save(in: preferences) }
     }
-    var model: SmartEditModel = SmartEditModel.saved() {
+    var model: SmartEditModel {
         didSet {
             model.save(in: preferences)
             refreshReasoningOptions()
         }
     }
-    var reasoningChoice: ReasoningChoice = ReasoningChoice.saved(key: ShortsController.reasoningKey) {
+    var reasoningChoice: ReasoningChoice {
         didSet { reasoningChoice.save(key: ShortsController.reasoningKey, in: preferences) }
     }
     /// Варианты пикера по возможностям текущей модели; до загрузки каталога —
@@ -67,7 +72,7 @@ final class ShortsController {
         get { frameSettings.canvasColor }
         set { updateFrameSettings { $0.canvasColor = newValue } }
     }
-    private var subtitleSettings: ShortsSubtitleSettings = .saved
+    private var subtitleSettings: ShortsSubtitleSettings
 
     var subtitlesEnabled: Bool {
         get { subtitleSettings.enabled }
@@ -88,6 +93,7 @@ final class ShortsController {
     private(set) var status: ShortsStatus = .idle
     var candidates: [ShortCandidate] = []
     private(set) var transcriptWords: [TranscriptWord] = []
+    private(set) var analysisWarnings: [ShortsAnalysisWarning] = []
     private(set) var exportState: ShortsExportState = .idle
     var openRouterKeyStatus: OpenRouterKeyStatus { keyManager.status }
 
@@ -116,6 +122,8 @@ final class ShortsController {
     @ObservationIgnored private var previewingID: UUID?
     @ObservationIgnored private var timeObserver: Any?
     @ObservationIgnored private var endObserver: NSObjectProtocol?
+    @ObservationIgnored private var remainingExportItems: [ShortsBatchExportItem] = []
+    @ObservationIgnored private var currentExportFolder: URL?
 
     var fileName: String { source.displayName }
 
@@ -139,7 +147,7 @@ final class ShortsController {
         update(&next)
         guard next != subtitleSettings else { return }
         subtitleSettings = next
-        next.save()
+        next.save(in: preferences)
         refreshPreviewAfterDisplayChange()
     }
 
@@ -153,6 +161,12 @@ final class ShortsController {
         let source = MediaReference(url: sourceURL)
         self.source = source
         self.preferences = preferences
+        count = ShortsCount.saved(in: preferences)
+        model = SmartEditModel.saved(in: preferences)
+        reasoningChoice = ReasoningChoice.saved(
+            key: ShortsController.reasoningKey,
+            in: preferences)
+        subtitleSettings = ShortsSubtitleSettings.saved(in: preferences)
         let waveformStore = WaveformStore(cacheDir: store.directories.waveforms)
         self.waveforms = waveformStore
         let transcriptStore = TranscriptStore(
@@ -295,6 +309,7 @@ final class ShortsController {
         let requestedEffort = reasoningChoice.apiEffort
         candidates = []
         transcriptWords = []
+        analysisWarnings = []
         status = .preparingModel(progress: nil)
         analysisOperation.start { [weak self] token in
             guard let self else { return }
@@ -314,6 +329,7 @@ final class ShortsController {
                 guard self.analysisOperation.isCurrent(token) else { return }
                 self.transcriptWords = result.transcript
                 self.candidates = self.preselected(result.candidates)
+                self.analysisWarnings = result.warnings
                 self.status = .ready
             } catch is CancellationError {
                 if self.analysisOperation.isCurrent(token) { self.status = .idle }
@@ -328,6 +344,7 @@ final class ShortsController {
         analysisOperation.cancel()
         candidates = []
         transcriptWords = []
+        analysisWarnings = []
         status = .idle
     }
 
@@ -490,53 +507,104 @@ final class ShortsController {
     func startExport(to folder: URL) {
         let selected = candidates.filter(\.enabled)
         guard !selected.isEmpty else { return }
+        let items = selected.enumerated().map {
+            ShortsBatchExportItem(index: $0.offset, candidate: $0.element)
+        }
+        remainingExportItems = items
+        currentExportFolder = folder
+        runExport(items: items, to: folder, completed: 0, total: items.count)
+    }
+
+    func retryRemainingExport() {
+        guard case .failed(_, let completed, let total, let folder) = exportState,
+            !remainingExportItems.isEmpty
+        else { return }
+        runExport(
+            items: remainingExportItems,
+            to: folder,
+            completed: completed,
+            total: total)
+    }
+
+    private func runExport(
+        items: [ShortsBatchExportItem],
+        to folder: URL,
+        completed: Int,
+        total: Int
+    ) {
         let url = sourceURL
         let sourceName = url.deletingPathExtension().lastPathComponent
         let size = displaySize
         let quality = self.quality
         let frameSettings = self.frameSettings
         let subtitleMode = self.subtitleMode
-        let total = selected.count
-        exportState = .exporting(done: 0, total: total, progress: 0)
+        currentExportFolder = folder
+        exportState = .exporting(done: completed, total: total, progress: 0)
         exportOperation.start { [weak self] token in
             guard let self else { return }
             do {
-                for (index, candidate) in selected.enumerated() {
+                for (offset, item) in items.enumerated() {
+                    let done = completed + offset
                     guard exportOperation.isCurrent(token) else { return }
                     try await ShortsExporter.export(
-                        candidate: candidate, sourceURL: url, displaySize: size,
+                        candidate: item.candidate, sourceURL: url, displaySize: size,
                         quality: quality, frameSettings: frameSettings,
                         subtitleMode: subtitleMode,
                         to: ShortsExporter.fileURL(
                             in: folder, sourceName: sourceName,
-                            index: index, title: candidate.title),
+                            index: item.index, title: item.candidate.title),
                         progress: { fraction in
                             Task { @MainActor [weak self] in
                                 guard let self, exportOperation.isCurrent(token),
-                                    case .exporting(let done, _, _) = self.exportState,
-                                    done == index
+                                    case .exporting(let currentDone, _, _) = self.exportState,
+                                    currentDone == done
                                 else { return }
                                 self.exportState = .exporting(
-                                    done: index, total: total,
+                                    done: done, total: total,
                                     progress: fraction)
                             }
                         })
                     guard exportOperation.isCurrent(token) else { return }
-                    self.exportState = .exporting(done: index + 1, total: total, progress: 0)
+                    self.remainingExportItems = Array(items.dropFirst(offset + 1))
+                    self.exportState = .exporting(done: done + 1, total: total, progress: 0)
                 }
+                self.remainingExportItems = []
                 self.exportState = .done(folder)
             } catch {
                 // Отмена доходит только из cancelExport/перезапуска/shutdown — каждый
                 // уже выставил состояние сам; устаревшему запуску писать нельзя.
                 guard exportOperation.isCurrent(token), !(error is CancellationError) else { return }
-                self.exportState = .failed("Не получилось сохранить ролики: \(error.localizedDescription)")
+                let done: Int
+                if case .exporting(let currentDone, _, _) = self.exportState {
+                    done = currentDone
+                } else {
+                    done = completed
+                }
+                self.exportState = .failed(
+                    message: "Не получилось сохранить ролики: \(error.localizedDescription)",
+                    completed: done,
+                    total: total,
+                    folder: folder)
             }
         }
     }
 
     func cancelExport() {
+        let cancelledState: ShortsExportState
+        if case .exporting(let done, let total, _) = exportState,
+            done > 0,
+            let currentExportFolder
+        {
+            cancelledState = .failed(
+                message: "Экспорт остановлен.",
+                completed: done,
+                total: total,
+                folder: currentExportFolder)
+        } else {
+            cancelledState = .idle
+        }
         exportOperation.cancel()
-        exportState = .idle
+        exportState = cancelledState
     }
 
     func revealFolder(_ url: URL) {

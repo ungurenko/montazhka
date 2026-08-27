@@ -22,9 +22,11 @@ jobs:
     env:
       MONTAZHKA_SIGNING_IDENTITY: ${{ secrets.DEVELOPER_ID_APPLICATION }}
       NOTARY_KEYCHAIN_PROFILE: montazhka-ci
-      NOTARY_KEYCHAIN_PATH: ${{ runner.temp }}/montazhka-release.keychain-db
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Prepare release environment
+        run: echo "NOTARY_KEYCHAIN_PATH=$RUNNER_TEMP/montazhka-release.keychain-db" >> "$GITHUB_ENV"
 
       - name: Select Xcode
         run: sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer

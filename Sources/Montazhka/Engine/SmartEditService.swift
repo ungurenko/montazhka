@@ -1,13 +1,14 @@
 import Foundation
 
 actor SmartEditService {
-    private let transcriptStore: TranscriptStore
-    private let openRouter: OpenRouterClient
-    private let waveforms: WaveformStore
+    private let transcriptStore: any TranscriptProviding
+    private let openRouter: any SmartEditOpenRouterServing
+    private let waveforms: any WaveformProviding
 
     init(
-        transcriptStore: TranscriptStore, openRouter: OpenRouterClient,
-        waveforms: WaveformStore
+        transcriptStore: any TranscriptProviding,
+        openRouter: any SmartEditOpenRouterServing,
+        waveforms: any WaveformProviding
     ) {
         self.transcriptStore = transcriptStore
         self.openRouter = openRouter
@@ -34,12 +35,10 @@ actor SmartEditService {
                 await status(.transcribing(done: index, total: sources.count, progress: nil))
             }
             let words = try await transcriptStore.ensure(source: source) { progress in
-                Task {
-                    if preparesModel, (progress ?? 0) < 1 {
-                        await status(.preparingModel(progress: progress))
-                    } else {
-                        await status(.transcribing(done: index, total: sources.count, progress: nil))
-                    }
+                if preparesModel, (progress ?? 0) < 1 {
+                    await status(.preparingModel(progress: progress))
+                } else {
+                    await status(.transcribing(done: index, total: sources.count, progress: nil))
                 }
             }
             transcripts.append(contentsOf: words)

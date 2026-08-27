@@ -218,6 +218,8 @@ struct ShortsView: View {
                 errorLabel(error)
             } else if case .failed(let message) = controller.status {
                 errorLabel(message)
+            } else if !controller.analysisWarnings.isEmpty {
+                analysisWarningBlock
             } else if controller.status == .ready && controller.candidates.isEmpty {
                 Label(
                     "Не нашёл моментов, из которых получается сильный ролик.",
@@ -320,6 +322,9 @@ struct ShortsView: View {
 
     private var resultsSection: some View {
         VStack(alignment: .leading, spacing: 12) {
+            if !controller.analysisWarnings.isEmpty {
+                analysisWarningBlock
+            }
             HStack {
                 Text(
                     "\(controller.candidates.count) \(Plurals.candidates(controller.candidates.count)) · выбрано \(controller.selectedCount)"
@@ -335,6 +340,26 @@ struct ShortsView: View {
                 candidateCard(candidate)
             }
         }
+    }
+
+    private var analysisWarningBlock: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(Array(controller.analysisWarnings.enumerated()), id: \.offset) { _, warning in
+                Label(warning.message, systemImage: "exclamationmark.triangle.fill")
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Button("Повторить анализ") { controller.analyze() }
+                .buttonStyle(.link)
+                .font(.system(size: 10.5, weight: .medium))
+                .disabled(controller.openRouterKeyStatus != .saved)
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.orange.opacity(0.08))
+        .clipShape(RoundedRectangle(cornerRadius: Theme.radiusSmall, style: .continuous))
+        .accessibilityIdentifier("shorts.analysisWarnings")
     }
 
     private func candidateCard(_ candidate: ShortCandidate) -> some View {
@@ -414,9 +439,25 @@ struct ShortsView: View {
             switch controller.exportState {
             case .idle:
                 exportControls
-            case .failed(let message):
-                errorLabel(message)
-                exportControls
+            case .failed(let message, let completed, let total, let folder):
+                VStack(alignment: .leading, spacing: 8) {
+                    errorLabel(message)
+                    if completed > 0 {
+                        Text("Сохранено \(completed) из \(total)")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(Theme.textPrimary)
+                    }
+                    HStack {
+                        Button("Показать в Finder") { controller.revealFolder(folder) }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                        Button(completed > 0 ? "Сохранить оставшиеся" : "Повторить экспорт") {
+                            controller.retryRemainingExport()
+                        }
+                        .buttonStyle(.link)
+                        .font(.system(size: 11))
+                    }
+                }
             case .exporting(let done, let total, let progress):
                 VStack(alignment: .leading, spacing: 8) {
                     ProgressView(value: (Double(done) + progress) / Double(max(1, total)))

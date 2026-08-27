@@ -205,5 +205,6 @@ private struct QualityRow: View {
             )
         }
         .buttonStyle(.plain)
+        .accessibilityIdentifier("export.quality.\(quality.rawValue)")
     }
 }

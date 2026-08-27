@@ -55,11 +55,12 @@
 Нативное приложение: Swift 6 + SwiftUI + AVFoundation, macOS 14+. SwiftPM-сборке достаточно Command Line Tools; UI-тестам, архивированию и notarization нужен полный Xcode.
 
 ```bash
-./scripts/bootstrap-tools.sh                  # XcodeGen 2.45.4 + SwiftLint 0.65.0
-./scripts/lint.sh                             # swift-format + SwiftLint
-./scripts/test.sh                             # 82 теста на Swift Testing
+./scripts/bootstrap-tools.sh                  # XcodeGen, SwiftLint и actionlint закреплённых версий
+./scripts/lint.sh                             # actionlint + swift-format + SwiftLint
+./scripts/test.sh                             # 134 модульных теста на Swift Testing
 ./scripts/build-app.sh --adhoc                # локальная .app для текущей архитектуры
 ./scripts/build-app.sh --universal --adhoc    # локальная universal .app
+./script/build_and_run.sh                     # собрать и запустить точный локальный .app
 MONTAZHKA_SELFTEST_TIMEOUT=30 .build/release/Montazhka --selftest
 .tools/xcodegen generate                      # Montazhka.xcodeproj для Xcode и UI-тестов
 ```

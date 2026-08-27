@@ -63,7 +63,7 @@ actor TranscriptStore {
 
     func ensure(
         source: MediaReference,
-        progress: (@Sendable (Double?) -> Void)? = nil
+        progress: (@Sendable (Double?) async -> Void)? = nil
     ) async throws -> [TranscriptWord] {
         let url = cacheURL(for: source)
         if let document = try? load(from: url),

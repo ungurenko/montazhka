@@ -1,4 +1,5 @@
 import AppKit
+import Foundation
 import OSLog
 import SwiftUI
 
@@ -100,9 +101,42 @@ final class AppModel {
     private var projectOperationTask: Task<Void, Never>?
     private var projectOperationGeneration = Generation()
 
-    init(store: any ProjectRepository = ProjectStore()) {
-        self.store = store
+    init(store: (any ProjectRepository)? = nil) {
+        let arguments = CommandLine.arguments
+        let environment = ProcessInfo.processInfo.environment
+        let isUITesting =
+            arguments.contains("--ui-testing")
+            && environment["MONTAZHKA_UI_TEST_MODE"] == "1"
+        let resolvedStore = store ?? Self.defaultStore(isUITesting: isUITesting, environment: environment)
+        self.store = resolvedStore
         refreshRecents(openLatestAfterLoad: CommandLine.arguments.contains("--open-latest"))
+        if isUITesting,
+            let videoArgument = arguments.firstIndex(of: "--ui-test-open-video"),
+            arguments.indices.contains(videoArgument + 1)
+        {
+            newProject(with: [URL(fileURLWithPath: arguments[videoArgument + 1])])
+        } else if isUITesting, arguments.contains("--ui-test-open-empty-project") {
+            newProject(with: [])
+        } else if isUITesting, arguments.contains("--ui-test-open-shorts") {
+            startShorts(url: resolvedStore.directories.projects.appendingPathComponent("ui-test-source.mov"))
+        }
+    }
+
+    private static func defaultStore(
+        isUITesting: Bool,
+        environment: [String: String]
+    ) -> any ProjectRepository {
+        guard isUITesting else { return ProjectStore() }
+        let baseDirectory: URL
+        if let path = environment["MONTAZHKA_UI_TEST_DATA_DIR"], !path.isEmpty {
+            baseDirectory = URL(fileURLWithPath: path, isDirectory: true)
+        } else {
+            baseDirectory = FileManager.default.temporaryDirectory
+                .appendingPathComponent(
+                    "montazhka-ui-tests-\(ProcessInfo.processInfo.processIdentifier)",
+                    isDirectory: true)
+        }
+        return ProjectStore(baseDirectory: baseDirectory)
     }
 
     func refreshRecents(openLatestAfterLoad: Bool = false) {

@@ -89,6 +89,39 @@ struct PreferenceStoreTests {
     }
 
     @Test
+    func testShortsSubtitleSettingsRoundTripUsesInjectedStore() {
+        let store = InMemoryPreferenceStore()
+        #expect(ShortsSubtitleSettings.saved(in: store) == .default)
+
+        let selected = ShortsSubtitleSettings(
+            enabled: true,
+            style: .boxed,
+            size: .large)
+        selected.save(in: store)
+
+        #expect(ShortsSubtitleSettings.saved(in: store) == selected)
+    }
+
+    @Test
+    func testReasoningChoiceRoundTripUsesInjectedStore() {
+        let store = InMemoryPreferenceStore()
+        let key = "smartEdit.reasoningEffort"
+        #expect(
+            ReasoningChoice.saved(
+                key: key,
+                in: store) == .auto)
+
+        ReasoningChoice.effort(.high).save(
+            key: key,
+            in: store)
+
+        #expect(
+            ReasoningChoice.saved(
+                key: key,
+                in: store) == .effort(.high))
+    }
+
+    @Test
     func testLegacyVerticalCropPreferenceMigratesWithoutDeletingOldKey() {
         let store = InMemoryPreferenceStore()
         store.set(true, forKey: "shorts.cropVertical")

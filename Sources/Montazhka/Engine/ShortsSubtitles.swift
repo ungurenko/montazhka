@@ -56,23 +56,23 @@ struct ShortsSubtitleSettings: Equatable, Sendable {
     static let `default` = ShortsSubtitleSettings(
         enabled: false, style: .classic, size: .medium)
 
-    static var saved: ShortsSubtitleSettings {
-        let defaults = UserDefaults.standard
+    static func saved(
+        in store: any PreferenceStoring = UserDefaultsPreferenceStore.standard
+    ) -> ShortsSubtitleSettings {
         let style =
             ShortsSubtitleStyle(
-                rawValue: defaults.string(forKey: Keys.style) ?? "") ?? .classic
+                rawValue: store.string(forKey: Keys.style) ?? "") ?? .classic
         let size =
             ShortsSubtitleSize(
-                rawValue: defaults.string(forKey: Keys.size) ?? "") ?? .medium
-        let enabled = defaults.object(forKey: Keys.enabled) as? Bool ?? false
+                rawValue: store.string(forKey: Keys.size) ?? "") ?? .medium
+        let enabled = store.bool(forKey: Keys.enabled)
         return ShortsSubtitleSettings(enabled: enabled, style: style, size: size)
     }
 
-    func save() {
-        let defaults = UserDefaults.standard
-        defaults.set(enabled, forKey: Keys.enabled)
-        defaults.set(style.rawValue, forKey: Keys.style)
-        defaults.set(size.rawValue, forKey: Keys.size)
+    func save(in store: any PreferenceStoring = UserDefaultsPreferenceStore.standard) {
+        store.set(enabled, forKey: Keys.enabled)
+        store.set(style.rawValue, forKey: Keys.style)
+        store.set(size.rawValue, forKey: Keys.size)
     }
 
     func mode(with words: [TranscriptWord]) -> ShortsSubtitleMode {
