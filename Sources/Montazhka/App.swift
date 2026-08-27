@@ -110,15 +110,28 @@ final class AppModel {
         let resolvedStore = store ?? Self.defaultStore(isUITesting: isUITesting, environment: environment)
         self.store = resolvedStore
         refreshRecents(openLatestAfterLoad: CommandLine.arguments.contains("--open-latest"))
-        if isUITesting,
-            let videoArgument = arguments.firstIndex(of: "--ui-test-open-video"),
-            arguments.indices.contains(videoArgument + 1)
-        {
-            newProject(with: [URL(fileURLWithPath: arguments[videoArgument + 1])])
+        if isUITesting, arguments.contains("--ui-test-open-fixture-project") {
+            openUITestFixtureProject(using: resolvedStore)
         } else if isUITesting, arguments.contains("--ui-test-open-empty-project") {
             newProject(with: [])
         } else if isUITesting, arguments.contains("--ui-test-open-shorts") {
-            startShorts(url: resolvedStore.directories.projects.appendingPathComponent("ui-test-source.mov"))
+            startShorts(
+                url: resolvedStore.directories.projects.appendingPathComponent("ui-test-source.mov"),
+                seedUITestCandidate: true)
+        }
+    }
+
+    private func openUITestFixtureProject(using store: any ProjectRepository) {
+        let fixtureURL = store.directories.waveforms.appendingPathComponent("ui-test-fixture.mov")
+        Task { [weak self] in
+            do {
+                try await TestVideoFactory.make(
+                    segments: [(duration: 2, loud: true)],
+                    to: fixtureURL)
+                self?.newProject(with: [fixtureURL])
+            } catch {
+                self?.storeErrorMessage = error.localizedDescription
+            }
         }
     }
 
@@ -232,17 +245,37 @@ final class AppModel {
 
     // MARK: - Нарезка на shorts
 
-    func startShorts(url: URL) {
+    func startShorts(url: URL, seedUITestCandidate: Bool = false) {
         let generation = beginProjectOperation()
         projectOperationTask = Task { [weak self] in
             guard let self else { return }
             guard isCurrentProjectOperation(generation) else { return }
             let controller = ShortsController(sourceURL: url, store: store)
+            if seedUITestCandidate {
+                controller.candidates = [Self.uiTestShortCandidate]
+            }
             shorts = controller
             controller.prepare()
             finishProjectOperation(generation)
         }
     }
+
+    private static let uiTestShortCandidate = ShortCandidate(
+        id: UUID(),
+        rank: 1,
+        title: "Тестовый ролик",
+        reason: "Локальный UI fixture",
+        hook: "Проверка настроек",
+        pattern: "тест",
+        excerpt: "Локальные данные без сети",
+        start: 0,
+        end: 2,
+        confidence: 1,
+        hookScore: 10,
+        standaloneScore: 10,
+        payoffScore: 10,
+        pacingScore: 10,
+        enabled: true)
 
     func closeShorts() {
         guard let closingShorts = shorts else { return }

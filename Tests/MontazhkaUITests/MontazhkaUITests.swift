@@ -58,9 +58,7 @@ final class MontazhkaUITests: XCTestCase {
 
     @MainActor
     func testLocalFixtureProjectOpensCompactExportWithoutNetwork() throws {
-        let fixture = dataDirectory.appendingPathComponent("fixture.mov")
-        try makeLocalFixture(at: fixture)
-        launch(extraArguments: ["--ui-test-open-video", fixture.path])
+        launch(extraArguments: ["--ui-test-open-fixture-project"])
 
         let export = app.buttons["editor.export"]
         XCTAssertTrue(export.waitForExistence(timeout: 15))
@@ -111,15 +109,4 @@ final class MontazhkaUITests: XCTestCase {
         app.launch()
     }
 
-    @MainActor
-    private func makeLocalFixture(at url: URL) throws {
-        try FileManager.default.createDirectory(
-            at: dataDirectory,
-            withIntermediateDirectories: true)
-        let generator = XCUIApplication()
-        generator.launchArguments = ["--gen-video", url.path]
-        generator.launch()
-        XCTAssertTrue(generator.wait(for: .notRunning, timeout: 30))
-        XCTAssertTrue(FileManager.default.fileExists(atPath: url.path))
-    }
 }
