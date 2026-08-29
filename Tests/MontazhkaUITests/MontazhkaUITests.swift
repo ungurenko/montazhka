@@ -105,7 +105,9 @@ final class MontazhkaUITests: XCTestCase {
         launch(extraArguments: ["--ui-test-open-shorts"])
 
         XCTAssertTrue(app.buttons["shorts.back"].waitForExistence(timeout: 10))
-        let appearance = app.buttons["shorts.appearance"]
+        // macOS 15 не возвращает accessibilityIdentifier для кнопок внутри ScrollView,
+        // поэтому сценарий нажимает на её явную accessibilityLabel.
+        let appearance = app.buttons["Оформление"]
         XCTAssertTrue(appearance.waitForExistence(timeout: 5))
         appearance.click()
         let subtitles = app.switches["shorts.subtitles"]

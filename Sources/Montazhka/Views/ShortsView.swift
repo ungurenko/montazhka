@@ -136,6 +136,7 @@ struct ShortsView: View {
                         progressSection
                     } else if !controller.candidates.isEmpty {
                         resultsSection
+                        appearanceSection
                     } else {
                         settingsSection
                     }
@@ -485,7 +486,29 @@ struct ShortsView: View {
     }
 
     private var exportControls: some View {
+        HStack(spacing: Theme.Spacing.small) {
+            Text("Выбрано: \(controller.selectedCount)")
+                .font(.system(size: Theme.TypeScale.helper, weight: .medium))
+                .foregroundStyle(Theme.textSecondary)
+
+            Spacer()
+
+            Button {
+                controller.chooseFolderAndExport()
+            } label: {
+                Label("Сохранить", systemImage: "square.and.arrow.down")
+                    .fontWeight(.semibold)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(Theme.accent)
+            .disabled(controller.selectedCount == 0)
+        }
+    }
+
+    private var appearanceSection: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.small) {
+            Divider()
+
             Button {
                 withAnimation(
                     reduceMotion ? .linear(duration: 0.12) : .easeInOut(duration: 0.2)
@@ -510,6 +533,7 @@ struct ShortsView: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .accessibilityLabel("Оформление")
             .accessibilityIdentifier("shorts.appearance")
             .accessibilityValue(showExportOptions ? "Развёрнуто" : "Свёрнуто")
 
@@ -517,26 +541,6 @@ struct ShortsView: View {
                 appearanceControls
                     .padding(.top, Theme.Spacing.small)
                     .transition(.opacity)
-            }
-
-            Divider()
-
-            HStack(spacing: Theme.Spacing.small) {
-                Text("Выбрано: \(controller.selectedCount)")
-                    .font(.system(size: Theme.TypeScale.helper, weight: .medium))
-                    .foregroundStyle(Theme.textSecondary)
-
-                Spacer()
-
-                Button {
-                    controller.chooseFolderAndExport()
-                } label: {
-                    Label("Сохранить", systemImage: "square.and.arrow.down")
-                        .fontWeight(.semibold)
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(Theme.accent)
-                .disabled(controller.selectedCount == 0)
             }
         }
     }
