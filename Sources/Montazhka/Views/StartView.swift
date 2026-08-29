@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// Стартовый экран: новый монтаж + недавние проекты.
@@ -5,81 +6,145 @@ struct StartView: View {
     @Environment(AppModel.self) private var app
 
     var body: some View {
-        VStack(spacing: 0) {
-            Spacer(minLength: 48)
+        ScrollView {
+            VStack(alignment: .leading, spacing: Theme.Spacing.large) {
+                brand
+                actions
 
-            VStack(spacing: 10) {
-                Image(systemName: "film.stack")
-                    .font(.system(size: 44, weight: .light))
-                    .foregroundStyle(Theme.accent)
-                Text("Монтажка")
-                    .font(.system(size: 34, weight: .bold, design: .rounded))
-                    .foregroundStyle(Theme.textPrimary)
-                Text("Простой монтаж: добавь клипы, вырежи паузы, сохрани")
-                    .font(.system(size: 15))
-                    .foregroundStyle(Theme.textSecondary)
-            }
-
-            Button {
-                let urls = AppModel.pickVideos()
-                if !urls.isEmpty { app.newProject(with: urls) }
-            } label: {
-                Label("Новый монтаж", systemImage: "plus")
-                    .font(.system(size: 16, weight: .semibold, design: .rounded))
-                    .padding(.horizontal, 28)
-                    .padding(.vertical, 14)
-                    .background(Theme.accent)
-                    .foregroundStyle(.white)
-                    .clipShape(Capsule())
-            }
-            .buttonStyle(.plain)
-            .disabled(app.isProjectOperationInProgress)
-            .padding(.top, 28)
-            .accessibilityIdentifier("start.newProject")
-
-            Button {
-                if let url = AppModel.pickVideo() { app.startShorts(url: url) }
-            } label: {
-                Label("Нарезать на shorts", systemImage: "sparkles.rectangle.stack")
-                    .font(.system(size: 14, weight: .medium, design: .rounded))
-                    .padding(.horizontal, 22)
-                    .padding(.vertical, 11)
-                    .background(Theme.accent.opacity(0.08))
-                    .foregroundStyle(Theme.accent)
-                    .clipShape(Capsule())
-            }
-            .buttonStyle(.plain)
-            .disabled(app.isProjectOperationInProgress)
-            .padding(.top, 12)
-            .accessibilityIdentifier("start.shorts")
-
-            if app.isProjectOperationInProgress {
-                ProgressView().controlSize(.small).padding(.top, 12)
-            }
-
-            if !app.recents.isEmpty {
-                VStack(alignment: .leading, spacing: 14) {
-                    Text("Недавние")
-                        .font(.system(size: 18, weight: .semibold, design: .rounded))
+                VStack(alignment: .leading, spacing: Theme.Spacing.medium) {
+                    Text("Недавние проекты")
+                        .font(.system(size: Theme.TypeScale.sectionTitle, weight: .semibold))
                         .foregroundStyle(Theme.textPrimary)
-                        .padding(.horizontal, 4)
 
-                    ScrollView {
-                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 230), spacing: 16)], spacing: 16) {
+                    if app.recents.isEmpty {
+                        Label("Здесь появятся проекты, с которыми ты работал", systemImage: "clock")
+                            .font(.system(size: Theme.TypeScale.body))
+                            .foregroundStyle(Theme.textSecondary)
+                            .padding(Theme.Spacing.medium)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .rowSurfaceStyle()
+                    } else {
+                        LazyVGrid(
+                            columns: [GridItem(.adaptive(minimum: 240), spacing: Theme.Spacing.medium)],
+                            spacing: Theme.Spacing.medium
+                        ) {
                             ForEach(app.recents) { meta in
                                 RecentCard(meta: meta)
                             }
                         }
-                        .padding(4)
                     }
                 }
-                .frame(maxWidth: 780)
-                .padding(.top, 44)
-            }
 
-            Spacer(minLength: 40)
+                if app.isProjectOperationInProgress {
+                    HStack(spacing: Theme.Spacing.small) {
+                        ProgressView().controlSize(.small)
+                        Text("Открываю проект…")
+                            .font(.system(size: Theme.TypeScale.helper))
+                            .foregroundStyle(Theme.textSecondary)
+                    }
+                }
+            }
+            .frame(maxWidth: 920, alignment: .leading)
+            .padding(.horizontal, 32)
+            .padding(.top, 56)
+            .padding(.bottom, 40)
+            .frame(maxWidth: .infinity)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var brand: some View {
+        HStack(spacing: Theme.Spacing.medium) {
+            Image(nsImage: NSApplication.shared.applicationIconImage)
+                .resizable()
+                .scaledToFit()
+                .frame(width: 56, height: 56)
+
+            VStack(alignment: .leading, spacing: Theme.Spacing.compact) {
+                Text("Монтажка")
+                    .font(.system(size: 30, weight: .bold, design: .rounded))
+                    .foregroundStyle(Theme.textPrimary)
+                Text("Простой монтаж: добавь клипы, вырежи паузы, сохрани")
+                    .font(.system(size: Theme.TypeScale.body))
+                    .foregroundStyle(Theme.textSecondary)
+            }
+        }
+    }
+
+    private var actions: some View {
+        HStack(spacing: Theme.Spacing.medium) {
+            StartActionCard(
+                title: "Новый монтаж",
+                subtitle: "Собери ролик, убери паузы и улучши звук",
+                systemImage: "plus.rectangle.on.rectangle",
+                primary: true
+            ) {
+                let urls = AppModel.pickVideos()
+                if !urls.isEmpty { app.newProject(with: urls) }
+            }
+            .disabled(app.isProjectOperationInProgress)
+            .accessibilityIdentifier("start.newProject")
+
+            StartActionCard(
+                title: "Нарезать на shorts",
+                subtitle: "Найди сильные моменты в длинном видео",
+                systemImage: "sparkles.rectangle.stack",
+                primary: false
+            ) {
+                if let url = AppModel.pickVideo() { app.startShorts(url: url) }
+            }
+            .disabled(app.isProjectOperationInProgress)
+            .accessibilityIdentifier("start.shorts")
+        }
+        .frame(maxWidth: .infinity)
+    }
+}
+
+private struct StartActionCard: View {
+    let title: String
+    let subtitle: String
+    let systemImage: String
+    let primary: Bool
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: Theme.Spacing.medium) {
+                Image(systemName: systemImage)
+                    .font(.system(size: 22, weight: .medium))
+                    .foregroundStyle(primary ? Color.white : Theme.accent)
+                    .frame(width: 44, height: 44)
+                    .background(primary ? Theme.accent : Theme.selected)
+                    .clipShape(RoundedRectangle(cornerRadius: Theme.radiusSmall, style: .continuous))
+
+                VStack(alignment: .leading, spacing: Theme.Spacing.compact) {
+                    Text(title)
+                        .font(.system(size: Theme.TypeScale.sectionTitle, weight: .semibold))
+                        .foregroundStyle(Theme.textPrimary)
+                    Text(subtitle)
+                        .font(.system(size: Theme.TypeScale.helper))
+                        .foregroundStyle(Theme.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: Theme.Spacing.small)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Theme.textSecondary)
+            }
+            .padding(Theme.Spacing.medium)
+            .frame(maxWidth: .infinity, minHeight: 88, alignment: .leading)
+            .background(primary ? Theme.selected : (hovering ? Theme.hover : Theme.card))
+            .clipShape(RoundedRectangle(cornerRadius: Theme.radius, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: Theme.radius, style: .continuous)
+                    .stroke(
+                        primary || hovering ? Theme.accent.opacity(primary ? 0.42 : 0.28) : Theme.border,
+                        lineWidth: 1)
+            }
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
     }
 }
 
@@ -97,27 +162,26 @@ private struct RecentCard: View {
                     Image(systemName: "film")
                         .foregroundStyle(Theme.accent)
                     Text(meta.name)
-                        .font(.system(size: 15, weight: .semibold, design: .rounded))
+                        .font(.system(size: Theme.TypeScale.body, weight: .semibold))
                         .foregroundStyle(Theme.textPrimary)
                         .lineLimit(1)
                     Spacer()
                 }
                 Text("\(TimeFormat.spoken(meta.duration)) · \(clipsLabel(meta.clipCount))")
-                    .font(.system(size: 12))
+                    .font(.system(size: Theme.TypeScale.helper))
                     .foregroundStyle(Theme.textSecondary)
                 Text(TimeFormat.date(meta.updatedAt))
-                    .font(.system(size: 12))
+                    .font(.system(size: Theme.TypeScale.helper))
                     .foregroundStyle(Theme.textSecondary)
             }
             .padding(16)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .cardStyle()
+            .background(hovering ? Theme.hover : Theme.card)
+            .clipShape(RoundedRectangle(cornerRadius: Theme.radius, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: Theme.radius, style: .continuous)
-                    .stroke(hovering ? Theme.accent.opacity(0.5) : .clear, lineWidth: 1.5)
+                    .stroke(hovering ? Theme.accent.opacity(0.35) : Theme.border, lineWidth: 1)
             )
-            .scaleEffect(hovering ? 1.02 : 1)
-            .animation(.easeOut(duration: 0.15), value: hovering)
         }
         .buttonStyle(.plain)
         .disabled(app.isProjectOperationInProgress)

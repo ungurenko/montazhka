@@ -131,9 +131,9 @@ struct TimelineView: View {
     // MARK: - Шапка ленты
 
     private func header(duration: Double) -> some View {
-        HStack(spacing: 10) {
+        HStack(spacing: Theme.Spacing.small) {
             Text("Лента")
-                .font(.system(size: 13, weight: .semibold, design: .rounded))
+                .font(.system(size: Theme.TypeScale.body, weight: .semibold))
                 .foregroundStyle(Theme.textSecondary)
             if !controller.candidates.isEmpty {
                 Label("\(controller.candidates.filter(\.enabled).count) пауз к вырезке", systemImage: "scissors")
@@ -212,7 +212,7 @@ struct TimelineView: View {
             ZStack(alignment: .topLeading) {
                 if layout.items.isEmpty {
                     Text("Здесь появятся клипы")
-                        .font(.system(size: 13, design: .rounded))
+                        .font(.system(size: Theme.TypeScale.body))
                         .foregroundStyle(Theme.textSecondary)
                         .frame(width: width, height: clipHeight)
                 } else {
@@ -847,7 +847,7 @@ private struct ToolButton: View {
                 .foregroundStyle(active ? Theme.accent : Theme.textSecondary)
                 .frame(width: 26, height: 22)
                 .background(active ? Theme.accent.opacity(0.12) : .clear)
-                .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+                .clipShape(RoundedRectangle(cornerRadius: Theme.radiusSmall, style: .continuous))
         }
         .buttonStyle(.plain)
         .help(help)

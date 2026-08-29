@@ -8,36 +8,26 @@ struct MusicPanel: View {
     @State private var settings = MusicSettings()
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                Text("Фоновая музыка")
-                    .font(.system(size: 16, weight: .semibold, design: .rounded))
-                    .foregroundStyle(Theme.textPrimary)
-                Spacer()
-                Button {
-                    withAnimation { controller.showMusicPanel = false }
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 16))
-                        .foregroundStyle(Theme.textSecondary.opacity(0.6))
-                }
-                .buttonStyle(.plain)
-            }
-            .padding(16)
-
+        InspectorPanel(
+            title: "Фоновая музыка",
+            systemImage: "music.note",
+            accessibilityIdentifier: "editor.inspector.music",
+            close: { withAnimation { controller.activeInspector = nil } }
+        ) {
             ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
+                VStack(alignment: .leading, spacing: Theme.Spacing.medium) {
                     toggleBlock
-                    tracksBlock
-                    volumeBlock
-                    eqBlock
-                    warningBlock
+                    if settings.enabled {
+                        tracksBlock
+                        volumeBlock
+                        eqBlock
+                        warningBlock
+                    }
                 }
                 .padding(.horizontal, 16)
-                .padding(.bottom, 12)
+                .padding(.bottom, 16)
             }
         }
-        .cardStyle()
         .onAppear { settings = controller.project.music }
         .onChange(of: settings) { _, new in
             controller.updateMusicSettings(new)
@@ -45,16 +35,16 @@ struct MusicPanel: View {
     }
 
     private var toggleBlock: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: Theme.Spacing.small) {
             Toggle("Добавить музыку", isOn: $settings.enabled)
                 .toggleStyle(.switch)
                 .tint(Theme.accent)
-                .font(.system(size: 14, weight: .semibold, design: .rounded))
+                .font(.system(size: Theme.TypeScale.body, weight: .semibold))
                 .foregroundStyle(Theme.textPrimary)
             Text(
-                "Мелодия тихо играет под голосом всё видео: повторяется по кругу и плавно затихает в конце. Слышно сразу в предпросмотре."
+                "Музыка играет под голосом, повторяется по кругу и плавно затихает в конце."
             )
-            .font(.system(size: 11))
+            .font(.system(size: Theme.TypeScale.helper))
             .foregroundStyle(Theme.textSecondary)
         }
     }
@@ -62,12 +52,12 @@ struct MusicPanel: View {
     private var tracksBlock: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Мелодия")
-                .font(.system(size: 13, weight: .semibold, design: .rounded))
+                .font(.system(size: Theme.TypeScale.body, weight: .semibold))
                 .foregroundStyle(Theme.textPrimary)
 
             if MusicLibrary.tracks.isEmpty && settings.customPath == nil {
                 Text("Встроенных мелодий нет — выбери свой аудиофайл.")
-                    .font(.system(size: 11))
+                    .font(.system(size: Theme.TypeScale.helper))
                     .foregroundStyle(Theme.textSecondary)
             }
 
@@ -106,8 +96,6 @@ struct MusicPanel: View {
             }
             .buttonStyle(.bordered)
         }
-        .disabled(!settings.enabled)
-        .opacity(settings.enabled ? 1 : 0.5)
     }
 
     private var volumeBlock: some View {
@@ -118,20 +106,18 @@ struct MusicPanel: View {
             range: 0...100, step: 1,
             display: { "\(Int($0)) %" }
         )
-        .disabled(!settings.enabled)
-        .opacity(settings.enabled ? 1 : 0.5)
     }
 
     private var eqBlock: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: Theme.Spacing.small) {
             Toggle("Не мешать голосу", isOn: $settings.eqEnabled)
                 .toggleStyle(.checkbox)
-                .font(.system(size: 13, weight: .semibold, design: .rounded))
+                .font(.system(size: Theme.TypeScale.body, weight: .semibold))
                 .foregroundStyle(Theme.textPrimary)
             Text(
-                "Приглушает в музыке частоты, на которых звучит речь, и верхние частоты. Голос слышно чётче. Без галочки музыка играет как в оригинале."
+                "Освобождает место для речи, чтобы голос звучал разборчивее."
             )
-            .font(.system(size: 11))
+            .font(.system(size: Theme.TypeScale.helper))
             .foregroundStyle(Theme.textSecondary)
             if controller.musicProcessing {
                 HStack(spacing: 8) {
@@ -142,8 +128,6 @@ struct MusicPanel: View {
                 }
             }
         }
-        .disabled(!settings.enabled)
-        .opacity(settings.enabled ? 1 : 0.5)
     }
 
     @ViewBuilder
@@ -183,22 +167,17 @@ private struct TrackRow: View {
                     .font(.system(size: 14))
                     .foregroundStyle(selected ? Theme.accent : Theme.textSecondary.opacity(0.5))
                 Image(systemName: "music.note")
-                    .font(.system(size: 11))
+                    .font(.system(size: Theme.TypeScale.helper))
                     .foregroundStyle(Theme.textSecondary)
                 Text(title)
-                    .font(.system(size: 13, design: .rounded))
+                    .font(.system(size: Theme.TypeScale.body))
                     .foregroundStyle(Theme.textPrimary)
                     .lineLimit(1)
                 Spacer()
             }
             .padding(.vertical, 7)
-            .padding(.horizontal, 10)
-            .background(Theme.card)
-            .clipShape(RoundedRectangle(cornerRadius: Theme.radiusSmall, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: Theme.radiusSmall, style: .continuous)
-                    .stroke(selected ? Theme.accent : Color.black.opacity(0.06), lineWidth: selected ? 1.5 : 1)
-            )
+            .padding(.horizontal, Theme.Spacing.small)
+            .rowSurfaceStyle(selected: selected)
         }
         .buttonStyle(.plain)
     }

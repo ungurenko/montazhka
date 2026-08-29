@@ -6,26 +6,15 @@ struct PausePanel: View {
     @State private var settings = DetectionSettings()
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                Text("Поиск пауз")
-                    .font(.system(size: 16, weight: .semibold, design: .rounded))
-                    .foregroundStyle(Theme.textPrimary)
-                Spacer()
-                Button {
-                    withAnimation { controller.showPausePanel = false }
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 16))
-                        .foregroundStyle(Theme.textSecondary.opacity(0.6))
-                }
-                .buttonStyle(.plain)
-            }
-            .padding(16)
-
+        InspectorPanel(
+            title: "Поиск пауз",
+            systemImage: "waveform.badge.magnifyingglass",
+            accessibilityIdentifier: "editor.inspector.pauses",
+            close: { withAnimation { controller.activeInspector = nil } }
+        ) {
             ScrollViewReader { proxy in
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 18) {
+                    VStack(alignment: .leading, spacing: Theme.Spacing.medium) {
                         settingsBlock
                         detectButton
                         if !controller.candidates.isEmpty {
@@ -33,8 +22,8 @@ struct PausePanel: View {
                                 .id("results")
                         }
                     }
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, 12)
+                    .padding(.horizontal, Theme.Spacing.medium)
+                    .padding(.bottom, Theme.Spacing.medium)
                 }
                 .onChange(of: controller.candidates.count) { _, count in
                     if count > 0 {
@@ -42,12 +31,11 @@ struct PausePanel: View {
                     }
                 }
             }
-
+        } footer: {
             if !controller.candidates.isEmpty {
                 cutBar
             }
         }
-        .cardStyle()
         .onAppear { settings = controller.project.detection }
         .onChange(of: settings) { _, new in
             controller.updateDetectionSettings(new)
@@ -95,7 +83,7 @@ struct PausePanel: View {
                     Text("Найти паузы")
                 }
             }
-            .font(.system(size: 13, weight: .semibold, design: .rounded))
+            .font(.system(size: Theme.TypeScale.body, weight: .semibold))
             .frame(maxWidth: .infinity)
             .padding(.vertical, 9)
         }
@@ -107,13 +95,13 @@ struct PausePanel: View {
     // MARK: - Результаты
 
     private var resultsBlock: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: Theme.Spacing.small) {
             let enabled = controller.candidates.filter(\.enabled)
             let saved = enabled.reduce(0.0) { $0 + $1.duration }
 
             HStack {
                 Text("Найдено: \(controller.candidates.count)")
-                    .font(.system(size: 13, weight: .semibold, design: .rounded))
+                    .font(.system(size: Theme.TypeScale.body, weight: .semibold))
                     .foregroundStyle(Theme.textPrimary)
                 Spacer()
                 Button(enabled.count == controller.candidates.count ? "Снять все" : "Выбрать все") {
@@ -127,7 +115,7 @@ struct PausePanel: View {
                 .font(.system(size: 12))
                 .foregroundStyle(Theme.textSecondary)
 
-            VStack(spacing: 6) {
+            VStack(spacing: Theme.Spacing.small) {
                 ForEach(Array(controller.candidates.enumerated()), id: \.element.id) { index, candidate in
                     CandidateRow(index: index + 1, candidate: candidate, controller: controller)
                 }
@@ -143,7 +131,7 @@ struct PausePanel: View {
                 controller.cutEnabledCandidates()
             } label: {
                 Label("Вырезать выбранные (\(count))", systemImage: "scissors")
-                    .font(.system(size: 13, weight: .semibold, design: .rounded))
+                    .font(.system(size: Theme.TypeScale.body, weight: .semibold))
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 9)
             }
@@ -182,12 +170,12 @@ private struct CandidateRow: View {
             .toggleStyle(.checkbox)
             .labelsHidden()
 
-            VStack(alignment: .leading, spacing: 1) {
+            VStack(alignment: .leading, spacing: Theme.Spacing.compact) {
                 Text("№\(index) · \(TimeFormat.compact(candidate.start))")
                     .font(.system(size: 12, weight: .medium, design: .monospaced))
                     .foregroundStyle(Theme.textPrimary)
                 Text(String(format: "%.1f сек тишины", candidate.duration))
-                    .font(.system(size: 11))
+                    .font(.system(size: Theme.TypeScale.helper))
                     .foregroundStyle(Theme.textSecondary)
             }
 
@@ -203,7 +191,7 @@ private struct CandidateRow: View {
             .buttonStyle(.plain)
             .help("Послушать это место")
         }
-        .padding(.horizontal, 10)
+        .padding(.horizontal, Theme.Spacing.small)
         .padding(.vertical, 6)
         .background(
             RoundedRectangle(cornerRadius: Theme.radiusSmall, style: .continuous)

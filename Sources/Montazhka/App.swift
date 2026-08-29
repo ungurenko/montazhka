@@ -115,9 +115,7 @@ final class AppModel {
         } else if isUITesting, arguments.contains("--ui-test-open-empty-project") {
             newProject(with: [])
         } else if isUITesting, arguments.contains("--ui-test-open-shorts") {
-            startShorts(
-                url: resolvedStore.directories.projects.appendingPathComponent("ui-test-source.mov"),
-                seedUITestCandidate: true)
+            openUITestShorts(using: resolvedStore)
         }
     }
 
@@ -129,6 +127,20 @@ final class AppModel {
                     segments: [(duration: 2, loud: true)],
                     to: fixtureURL)
                 self?.newProject(with: [fixtureURL])
+            } catch {
+                self?.storeErrorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    private func openUITestShorts(using store: any ProjectRepository) {
+        let fixtureURL = store.directories.waveforms.appendingPathComponent("ui-test-shorts.mov")
+        Task { [weak self] in
+            do {
+                try await TestVideoFactory.make(
+                    segments: [(duration: 24, loud: true)],
+                    to: fixtureURL)
+                self?.startShorts(url: fixtureURL, seedUITestCandidate: true)
             } catch {
                 self?.storeErrorMessage = error.localizedDescription
             }

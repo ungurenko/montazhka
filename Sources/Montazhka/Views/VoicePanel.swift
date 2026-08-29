@@ -6,34 +6,22 @@ struct VoicePanel: View {
     @State private var settings = VoiceEnhanceSettings()
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                Text("Улучшение голоса")
-                    .font(.system(size: 16, weight: .semibold, design: .rounded))
-                    .foregroundStyle(Theme.textPrimary)
-                Spacer()
-                Button {
-                    withAnimation { controller.showVoicePanel = false }
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 16))
-                        .foregroundStyle(Theme.textSecondary.opacity(0.6))
-                }
-                .buttonStyle(.plain)
-            }
-            .padding(16)
-
+        InspectorPanel(
+            title: "Улучшение голоса",
+            systemImage: "waveform.and.mic",
+            accessibilityIdentifier: "editor.inspector.voice",
+            close: { withAnimation { controller.activeInspector = nil } }
+        ) {
             ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
+                VStack(alignment: .leading, spacing: Theme.Spacing.medium) {
                     toggleBlock
-                    slidersBlock
+                    if settings.enabled { slidersBlock }
                     statusBlock
                 }
                 .padding(.horizontal, 16)
-                .padding(.bottom, 12)
+                .padding(.bottom, 16)
             }
         }
-        .cardStyle()
         .onAppear { settings = controller.project.voiceEnhance }
         .onChange(of: settings) { _, new in
             controller.updateVoiceSettings(new)
@@ -41,16 +29,16 @@ struct VoicePanel: View {
     }
 
     private var toggleBlock: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: Theme.Spacing.small) {
             Toggle("Улучшить голос", isOn: $settings.enabled)
                 .toggleStyle(.switch)
                 .tint(Theme.accent)
-                .font(.system(size: 14, weight: .semibold, design: .rounded))
+                .font(.system(size: Theme.TypeScale.body, weight: .semibold))
                 .foregroundStyle(Theme.textPrimary)
             Text(
-                "Выравнивает громкость, приглушает фоновый шум и делает голос звонче. Слышно сразу в предпросмотре, в готовом видео будет так же."
+                "Выравнивает громкость, приглушает шум и делает речь разборчивее. Результат слышно в предпросмотре."
             )
-            .font(.system(size: 11))
+            .font(.system(size: Theme.TypeScale.helper))
             .foregroundStyle(Theme.textSecondary)
         }
     }
@@ -79,8 +67,6 @@ struct VoicePanel: View {
                 display: { "\(Int($0)) %" }
             )
         }
-        .disabled(!settings.enabled)
-        .opacity(settings.enabled ? 1 : 0.5)
     }
 
     @ViewBuilder

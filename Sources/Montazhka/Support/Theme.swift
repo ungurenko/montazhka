@@ -1,11 +1,18 @@
 import SwiftUI
 
-/// Светлая палитра в стиле Apple: много воздуха, мягкие скругления.
+/// Светлая визуальная система приложения.
 enum Theme {
     static let background = Color(red: 0.96, green: 0.96, blue: 0.97)  // #F5F5F7
+    static let workspace = Color(red: 0.94, green: 0.94, blue: 0.95)
     static let card = Color.white
+    static let surfaceMuted = Color.black.opacity(0.025)
+    static let border = Color.black.opacity(0.08)
     static let accent = Color(red: 0.0, green: 0.478, blue: 1.0)  // системный синий
     static let danger = Color(red: 1.0, green: 0.27, blue: 0.23)
+    static let warning = Color.orange
+    static let success = Color.green
+    static let selected = accent.opacity(0.08)
+    static let hover = accent.opacity(0.05)
     static let pauseHighlight = Color(red: 1.0, green: 0.62, blue: 0.04)  // оранжевая подсветка пауз
     static let textPrimary = Color(red: 0.11, green: 0.11, blue: 0.12)
     static let textSecondary = Color(red: 0.43, green: 0.43, blue: 0.45)
@@ -14,15 +21,44 @@ enum Theme {
 
     static let radius: CGFloat = 12
     static let radiusSmall: CGFloat = 8
+
+    enum Spacing {
+        static let compact: CGFloat = 4
+        static let small: CGFloat = 8
+        static let medium: CGFloat = 16
+        static let large: CGFloat = 24
+    }
+
+    enum TypeScale {
+        static let screenTitle: CGFloat = 20
+        static let sectionTitle: CGFloat = 15
+        static let body: CGFloat = 13
+        static let helper: CGFloat = 12
+        static let time: CGFloat = 13
+    }
 }
 
 extension View {
-    /// Белая карточка со скруглением и лёгкой тенью.
+    /// Основная рабочая поверхность: граница даёт иерархию без «карточного» шума.
     func cardStyle(radius: CGFloat = Theme.radius) -> some View {
         self
             .background(Theme.card)
             .clipShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
-            .shadow(color: .black.opacity(0.06), radius: 8, y: 2)
+            .overlay {
+                RoundedRectangle(cornerRadius: radius, style: .continuous)
+                    .stroke(Theme.border, lineWidth: 1)
+            }
+    }
+
+    /// Небольшие строки и элементы выбора внутри рабочих поверхностей.
+    func rowSurfaceStyle(selected: Bool = false) -> some View {
+        self
+            .background(selected ? Theme.selected : Theme.surfaceMuted)
+            .clipShape(RoundedRectangle(cornerRadius: Theme.radiusSmall, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: Theme.radiusSmall, style: .continuous)
+                    .stroke(selected ? Theme.accent.opacity(0.45) : Theme.border, lineWidth: 1)
+            }
     }
 }
 

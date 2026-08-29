@@ -78,10 +78,36 @@ final class MontazhkaUITests: XCTestCase {
     }
 
     @MainActor
+    func testEditorMenusOpenEveryUnifiedInspector() throws {
+        launch(extraArguments: ["--ui-test-open-empty-project"])
+
+        XCTAssertTrue(app.buttons["editor.back"].waitForExistence(timeout: 10))
+        assertInspector(
+            menuIdentifier: "editor.cleanupMenu",
+            itemTitle: "Найти паузы",
+            inspectorIdentifier: "editor.inspector.pauses")
+        assertInspector(
+            menuIdentifier: "editor.cleanupMenu",
+            itemTitle: "Умный монтаж",
+            inspectorIdentifier: "editor.inspector.smartEdit")
+        assertInspector(
+            menuIdentifier: "editor.soundMenu",
+            itemTitle: "Улучшить голос",
+            inspectorIdentifier: "editor.inspector.voice")
+        assertInspector(
+            menuIdentifier: "editor.soundMenu",
+            itemTitle: "Фоновая музыка",
+            inspectorIdentifier: "editor.inspector.music")
+    }
+
+    @MainActor
     func testShortsSettingsWorkWithoutNetworkOrUserData() throws {
         launch(extraArguments: ["--ui-test-open-shorts"])
 
         XCTAssertTrue(app.buttons["shorts.back"].waitForExistence(timeout: 10))
+        let appearance = app.descendants(matching: .any)["shorts.appearance"]
+        XCTAssertTrue(appearance.waitForExistence(timeout: 5))
+        appearance.click()
         let subtitles = app.switches["shorts.subtitles"]
         XCTAssertTrue(subtitles.waitForExistence(timeout: 5))
         subtitles.click()
@@ -94,6 +120,23 @@ final class MontazhkaUITests: XCTestCase {
         XCTAssertTrue(app.menuItems["Целиком 9:16"].waitForExistence(timeout: 3))
         app.menuItems["Целиком 9:16"].click()
         XCTAssertTrue(app.descendants(matching: .any)["shorts.canvasColor"].waitForExistence(timeout: 3))
+    }
+
+    @MainActor
+    private func assertInspector(
+        menuIdentifier: String,
+        itemTitle: String,
+        inspectorIdentifier: String
+    ) {
+        let menu = app.descendants(matching: .any)[menuIdentifier]
+        XCTAssertTrue(menu.waitForExistence(timeout: 5))
+        menu.click()
+        let item = app.menuItems[itemTitle]
+        XCTAssertTrue(item.waitForExistence(timeout: 3))
+        item.click()
+
+        let inspector = app.descendants(matching: .any)[inspectorIdentifier]
+        XCTAssertTrue(inspector.waitForExistence(timeout: 3))
     }
 
     @MainActor

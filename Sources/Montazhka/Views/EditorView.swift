@@ -10,44 +10,37 @@ struct EditorView: View {
     @State private var projectName: String = ""
     @State private var showExport = false
     @State private var dropTask: Task<Void, Never>?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         VStack(spacing: 0) {
             topBar
-            HStack(spacing: 12) {
-                VStack(spacing: 12) {
-                    playerArea
-                    TransportBar(controller: controller)
-                }
-                if controller.showSmartEditPanel {
-                    SmartEditPanel(controller: controller)
-                        .frame(width: 340)
-                        .transition(.move(edge: .trailing).combined(with: .opacity))
-                } else if controller.showMusicPanel {
-                    MusicPanel(controller: controller)
-                        .frame(width: 300)
-                        .transition(.move(edge: .trailing).combined(with: .opacity))
-                } else if controller.showVoicePanel {
-                    VoicePanel(controller: controller)
-                        .frame(width: 300)
-                        .transition(.move(edge: .trailing).combined(with: .opacity))
-                } else if controller.showPausePanel {
-                    PausePanel(controller: controller)
-                        .frame(width: 300)
-                        .transition(.move(edge: .trailing).combined(with: .opacity))
-                }
-            }
-            .padding(.horizontal, 16)
-            .animation(.easeInOut(duration: 0.2), value: controller.showPausePanel)
-            .animation(.easeInOut(duration: 0.2), value: controller.showVoicePanel)
-            .animation(.easeInOut(duration: 0.2), value: controller.showMusicPanel)
-            .animation(.easeInOut(duration: 0.2), value: controller.showSmartEditPanel)
+            VSplitView {
+                HStack(spacing: Theme.Spacing.medium) {
+                    VStack(spacing: 0) {
+                        playerArea
+                        Divider()
+                        TransportBar(controller: controller)
+                    }
+                    .cardStyle()
 
-            TimelineView(controller: controller)
-                .frame(height: 168)
-                .padding(16)
+                    inspector
+                }
+                .frame(minHeight: 280)
+                .padding(.horizontal, Theme.Spacing.medium)
+                .padding(.bottom, Theme.Spacing.small)
+
+                TimelineView(controller: controller)
+                    .frame(minHeight: 180, idealHeight: 220, maxHeight: 360)
+                    .padding(.horizontal, Theme.Spacing.medium)
+                    .padding(.bottom, Theme.Spacing.medium)
+            }
         }
         .background(Theme.background)
+        .animation(
+            reduceMotion ? .linear(duration: 0.12) : .easeInOut(duration: 0.2),
+            value: controller.activeInspector
+        )
         .sheet(isPresented: $showExport) {
             ExportSheet(controller: controller)
         }
@@ -126,9 +119,9 @@ struct EditorView: View {
 
             TextField("Название", text: $projectName)
                 .textFieldStyle(.plain)
-                .font(.system(size: 15, weight: .semibold, design: .rounded))
+                .font(.system(size: Theme.TypeScale.sectionTitle, weight: .semibold))
                 .foregroundStyle(Theme.textPrimary)
-                .frame(maxWidth: 260)
+                .frame(width: 220)
                 .onSubmit { controller.renameProject(projectName) }
                 .accessibilityIdentifier("editor.projectName")
 
@@ -148,59 +141,59 @@ struct EditorView: View {
             Menu {
                 Button {
                     withAnimation {
-                        controller.showPausePanel = true
-                        controller.showSmartEditPanel = false
-                        controller.showVoicePanel = false
-                        controller.showMusicPanel = false
+                        controller.activeInspector = .pauses
                     }
                 } label: {
-                    Label("Найти паузы", systemImage: "waveform.badge.magnifyingglass")
+                    Label(
+                        "Найти паузы",
+                        systemImage: controller.activeInspector == .pauses
+                            ? "checkmark" : "waveform.badge.magnifyingglass")
                 }
                 Button {
                     withAnimation {
-                        controller.showSmartEditPanel = true
-                        controller.showPausePanel = false
-                        controller.showVoicePanel = false
-                        controller.showMusicPanel = false
+                        controller.activeInspector = .smartEdit
                     }
                 } label: {
-                    Label("Умный монтаж", systemImage: "wand.and.sparkles")
+                    Label(
+                        "Умный монтаж",
+                        systemImage: controller.activeInspector == .smartEdit ? "checkmark" : "wand.and.sparkles")
                 }
             } label: {
                 Label("Чистка", systemImage: "wand.and.stars")
+                    .foregroundStyle(
+                        controller.activeInspector == .pauses || controller.activeInspector == .smartEdit
+                            ? Theme.accent : Theme.textPrimary)
             }
-            .menuStyle(.borderlessButton)
+            .menuStyle(.button)
+            .buttonStyle(.bordered)
             .fixedSize()
+            .accessibilityIdentifier("editor.cleanupMenu")
 
-            Button {
-                withAnimation {
-                    controller.showVoicePanel.toggle()
-                    if controller.showVoicePanel {
-                        controller.showPausePanel = false
-                        controller.showMusicPanel = false
-                        controller.showSmartEditPanel = false
-                    }
+            Menu {
+                Button {
+                    withAnimation { controller.activeInspector = .voice }
+                } label: {
+                    Label(
+                        "Улучшить голос",
+                        systemImage: controller.activeInspector == .voice ? "checkmark" : "waveform.and.mic")
+                }
+                Button {
+                    withAnimation { controller.activeInspector = .music }
+                } label: {
+                    Label(
+                        "Фоновая музыка",
+                        systemImage: controller.activeInspector == .music ? "checkmark" : "music.note")
                 }
             } label: {
-                Label("Улучшить голос", systemImage: "waveform.and.mic")
+                Label("Звук", systemImage: "speaker.wave.2")
+                    .foregroundStyle(
+                        controller.activeInspector == .voice || controller.activeInspector == .music
+                            ? Theme.accent : Theme.textPrimary)
             }
+            .menuStyle(.button)
             .buttonStyle(.bordered)
-            .tint(controller.showVoicePanel || controller.project.voiceEnhance.enabled ? Theme.accent : nil)
-
-            Button {
-                withAnimation {
-                    controller.showMusicPanel.toggle()
-                    if controller.showMusicPanel {
-                        controller.showPausePanel = false
-                        controller.showVoicePanel = false
-                        controller.showSmartEditPanel = false
-                    }
-                }
-            } label: {
-                Label("Музыка", systemImage: "music.note")
-            }
-            .buttonStyle(.bordered)
-            .tint(controller.showMusicPanel || controller.project.music.enabled ? Theme.accent : nil)
+            .fixedSize()
+            .accessibilityIdentifier("editor.soundMenu")
 
             Button {
                 controller.player.pause()
@@ -216,7 +209,35 @@ struct EditorView: View {
         }
         .padding(.leading, 84)  // место под «светофор» окна
         .padding(.trailing, 16)
-        .padding(.vertical, 12)
+        .frame(height: 56)
+    }
+
+    @ViewBuilder
+    private var inspector: some View {
+        switch controller.activeInspector {
+        case .pauses:
+            PausePanel(controller: controller)
+                .frame(width: 340)
+                .transition(inspectorTransition)
+        case .smartEdit:
+            SmartEditPanel(controller: controller)
+                .frame(width: 340)
+                .transition(inspectorTransition)
+        case .voice:
+            VoicePanel(controller: controller)
+                .frame(width: 340)
+                .transition(inspectorTransition)
+        case .music:
+            MusicPanel(controller: controller)
+                .frame(width: 340)
+                .transition(inspectorTransition)
+        case nil:
+            EmptyView()
+        }
+    }
+
+    private var inspectorTransition: AnyTransition {
+        reduceMotion ? .opacity : .move(edge: .trailing).combined(with: .opacity)
     }
 
     @ViewBuilder
@@ -243,8 +264,7 @@ struct EditorView: View {
 
     private var playerArea: some View {
         ZStack {
-            RoundedRectangle(cornerRadius: Theme.radius, style: .continuous)
-                .fill(Color.black)
+            Color.black
             if controller.project.clips.isEmpty {
                 dropHint
             } else if controller.previewState == .ready {
@@ -252,7 +272,6 @@ struct EditorView: View {
                     controller.togglePlay()
                 } label: {
                     PlayerLayerView(player: controller.player)
-                        .clipShape(RoundedRectangle(cornerRadius: Theme.radius, style: .continuous))
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(controller.isPlaying ? "Поставить видео на паузу" : "Воспроизвести видео")
@@ -272,7 +291,7 @@ struct EditorView: View {
                 .font(.system(size: 36, weight: .light))
             Text("Перетащи сюда видео\nили нажми «Добавить видео»")
                 .multilineTextAlignment(.center)
-                .font(.system(size: 15, design: .rounded))
+                .font(.system(size: Theme.TypeScale.sectionTitle))
         }
         .foregroundStyle(.white.opacity(0.55))
     }
@@ -297,7 +316,7 @@ struct EditorView: View {
                         Label(message, systemImage: "exclamationmark.triangle.fill")
                             .font(.system(size: 12))
                             .foregroundStyle(.white)
-                            .padding(10)
+                            .padding(Theme.Spacing.small)
                             .background(Color.orange.opacity(0.92))
                             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                             .padding(12)
@@ -308,23 +327,23 @@ struct EditorView: View {
     }
 
     private func playerProgress(_ text: String) -> some View {
-        VStack(spacing: 10) {
+        VStack(spacing: Theme.Spacing.small) {
             ProgressView()
                 .controlSize(.regular)
                 .tint(.white)
             Text(text)
-                .font(.system(size: 14, weight: .medium, design: .rounded))
+                .font(.system(size: Theme.TypeScale.body, weight: .medium))
         }
         .foregroundStyle(.white.opacity(0.9))
     }
 
     private func playerError(title: String, message: String) -> some View {
-        VStack(spacing: 10) {
+        VStack(spacing: Theme.Spacing.small) {
             Image(systemName: "exclamationmark.triangle.fill")
                 .font(.system(size: 28))
                 .foregroundStyle(.orange)
             Text(title)
-                .font(.system(size: 15, weight: .semibold, design: .rounded))
+                .font(.system(size: Theme.TypeScale.sectionTitle, weight: .semibold))
             Text(message)
                 .font(.system(size: 12))
                 .foregroundStyle(.white.opacity(0.7))
@@ -362,7 +381,7 @@ private struct TransportBar: View {
     var controller: EditorController
 
     var body: some View {
-        HStack(spacing: 18) {
+        HStack(spacing: Theme.Spacing.medium) {
             PlaybackTimeLabel(controller: controller)
 
             Spacer()
@@ -403,13 +422,12 @@ private struct TransportBar: View {
             Spacer()
 
             Text(TimeFormat.short(controller.duration))
-                .font(.system(size: 15, weight: .medium, design: .monospaced))
+                .font(.system(size: Theme.TypeScale.time, weight: .medium, design: .monospaced))
                 .foregroundStyle(Theme.textSecondary)
                 .frame(width: 84, alignment: .trailing)
         }
-        .padding(.horizontal, 18)
-        .padding(.vertical, 10)
-        .cardStyle()
+        .padding(.horizontal, Theme.Spacing.medium)
+        .padding(.vertical, Theme.Spacing.small)
     }
 }
 
@@ -419,7 +437,7 @@ private struct PlaybackTimeLabel: View {
 
     var body: some View {
         Text(TimeFormat.short(controller.currentTime))
-            .font(.system(size: 15, weight: .semibold, design: .monospaced))
+            .font(.system(size: Theme.TypeScale.time, weight: .semibold, design: .monospaced))
             .foregroundStyle(Theme.textPrimary)
             .frame(width: 84, alignment: .leading)
     }

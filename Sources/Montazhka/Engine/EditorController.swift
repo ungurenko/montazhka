@@ -53,6 +53,14 @@ enum OpenRouterKeyStatus: Equatable, Sendable {
     case failed(String)
 }
 
+/// Единственная выбранная панель редактора.
+enum EditorInspectorSection: String, Equatable, Sendable {
+    case pauses
+    case smartEdit
+    case voice
+    case music
+}
+
 /// Сердце монтажки: держит проект, собирает предпросмотр, режет, отменяет, сохраняет.
 @MainActor
 @Observable
@@ -70,10 +78,7 @@ final class EditorController: ExportPreparing {
     }
     var isDetecting: Bool { waveformAnalysis.isDetecting }
     var waveformVersion: Int { waveformAnalysis.version }
-    var showPausePanel = false
-    var showVoicePanel = false
-    var showMusicPanel = false
-    var showSmartEditPanel = false
+    var activeInspector: EditorInspectorSection?
     private(set) var voiceStatus: VoiceEnhanceStatus = .idle
     private(set) var musicProcessing = false
     var canUndo = false

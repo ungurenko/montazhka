@@ -9,7 +9,7 @@ struct ExportSheet: View {
     @State private var sourceSize: CGSize?
 
     var body: some View {
-        VStack(spacing: 20) {
+        VStack(spacing: Theme.Spacing.large) {
             switch export.state {
             case .idle:
                 chooser
@@ -23,8 +23,8 @@ struct ExportSheet: View {
                 failedView(message)
             }
         }
-        .padding(28)
-        .frame(width: 440)
+        .padding(Theme.Spacing.large)
+        .frame(width: 480)
         .background(Theme.background)
         .task { sourceSize = await controller.sourceDisplaySize() }
         .onDisappear { export.cancel() }
@@ -33,29 +33,38 @@ struct ExportSheet: View {
     // MARK: - Выбор качества
 
     private var chooser: some View {
-        VStack(spacing: 18) {
-            VStack(spacing: 6) {
+        VStack(alignment: .leading, spacing: Theme.Spacing.medium) {
+            VStack(alignment: .leading, spacing: 4) {
                 Text("Сохранить видео")
-                    .font(.system(size: 20, weight: .bold, design: .rounded))
+                    .font(.system(size: Theme.TypeScale.screenTitle, weight: .bold))
                     .foregroundStyle(Theme.textPrimary)
                 Text("Итог: \(TimeFormat.spoken(controller.duration)) · формат MP4")
-                    .font(.system(size: 13))
+                    .font(.system(size: Theme.TypeScale.body))
                     .foregroundStyle(Theme.textSecondary)
             }
 
-            VStack(spacing: 8) {
+            VStack(spacing: 0) {
                 ForEach(ExportQuality.allCases) { q in
                     QualityRow(
                         quality: q,
+                        displaySize: sourceSize ?? CGSize(width: 1920, height: 1080),
                         estimate: q.estimateText(
                             duration: controller.duration,
                             displaySize: sourceSize ?? CGSize(width: 1920, height: 1080)),
                         selected: quality == q
                     ) { quality = q }
+                    if q != ExportQuality.allCases.last { Divider().padding(.leading, 44) }
                 }
+            }
+            .background(Theme.card)
+            .clipShape(RoundedRectangle(cornerRadius: Theme.radius, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: Theme.radius, style: .continuous)
+                    .stroke(Theme.border, lineWidth: 1)
             }
 
             HStack(spacing: 12) {
+                Spacer()
                 Button("Отмена") { dismiss() }
                     .buttonStyle(.bordered)
                 Button {
@@ -93,7 +102,7 @@ struct ExportSheet: View {
     private var preparingView: some View {
         VStack(spacing: 16) {
             Text("Подготавливаю видео…")
-                .font(.system(size: 17, weight: .semibold, design: .rounded))
+                .font(.system(size: Theme.TypeScale.sectionTitle, weight: .semibold))
                 .foregroundStyle(Theme.textPrimary)
             ProgressView()
                 .controlSize(.large)
@@ -110,7 +119,7 @@ struct ExportSheet: View {
     private var progressView: some View {
         VStack(spacing: 16) {
             Text("Сохраняю видео…")
-                .font(.system(size: 17, weight: .semibold, design: .rounded))
+                .font(.system(size: Theme.TypeScale.sectionTitle, weight: .semibold))
                 .foregroundStyle(Theme.textPrimary)
             ProgressView(value: export.progress)
                 .progressViewStyle(.linear)
@@ -131,7 +140,7 @@ struct ExportSheet: View {
                 .font(.system(size: 44))
                 .foregroundStyle(.green)
             Text("Готово!")
-                .font(.system(size: 20, weight: .bold, design: .rounded))
+                .font(.system(size: Theme.TypeScale.screenTitle, weight: .bold))
                 .foregroundStyle(Theme.textPrimary)
             Text(url.lastPathComponent)
                 .font(.system(size: 13))
@@ -154,7 +163,7 @@ struct ExportSheet: View {
                 .font(.system(size: 40))
                 .foregroundStyle(Theme.pauseHighlight)
             Text("Что-то пошло не так")
-                .font(.system(size: 18, weight: .bold, design: .rounded))
+                .font(.system(size: Theme.TypeScale.screenTitle, weight: .bold))
                 .foregroundStyle(Theme.textPrimary)
             Text(message)
                 .font(.system(size: 13))
@@ -173,6 +182,7 @@ struct ExportSheet: View {
 
 private struct QualityRow: View {
     let quality: ExportQuality
+    let displaySize: CGSize
     let estimate: String
     let selected: Bool
     let select: () -> Void
@@ -180,15 +190,15 @@ private struct QualityRow: View {
     var body: some View {
         Button(action: select) {
             HStack(spacing: 12) {
-                Image(systemName: selected ? "largecircle.fill.circle" : "circle")
+                Image(systemName: selected ? "checkmark.circle.fill" : "circle")
                     .font(.system(size: 16))
                     .foregroundStyle(selected ? Theme.accent : Theme.textSecondary.opacity(0.5))
-                VStack(alignment: .leading, spacing: 2) {
+                VStack(alignment: .leading, spacing: Theme.Spacing.compact) {
                     Text(quality.title)
-                        .font(.system(size: 14, weight: .semibold, design: .rounded))
+                        .font(.system(size: Theme.TypeScale.body, weight: .semibold))
                         .foregroundStyle(Theme.textPrimary)
-                    Text(quality.subtitle)
-                        .font(.system(size: 12))
+                    Text("\(dimensionsText) · \(purposeText)")
+                        .font(.system(size: Theme.TypeScale.helper))
                         .foregroundStyle(Theme.textSecondary)
                 }
                 Spacer()
@@ -196,15 +206,25 @@ private struct QualityRow: View {
                     .font(.system(size: 12, design: .monospaced))
                     .foregroundStyle(selected ? Theme.accent : Theme.textSecondary)
             }
-            .padding(12)
-            .background(Theme.card)
-            .clipShape(RoundedRectangle(cornerRadius: Theme.radiusSmall, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: Theme.radiusSmall, style: .continuous)
-                    .stroke(selected ? Theme.accent : Color.black.opacity(0.06), lineWidth: selected ? 1.5 : 1)
-            )
+            .padding(.horizontal, 12)
+            .padding(.vertical, Theme.Spacing.small)
+            .background(selected ? Theme.selected : Color.clear)
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier("export.quality.\(quality.rawValue)")
+    }
+
+    private var dimensionsText: String {
+        let size = quality.targetDimensions(forDisplaySize: displaySize)
+        return "\(Int(size.width)) × \(Int(size.height))"
+    }
+
+    private var purposeText: String {
+        switch quality {
+        case .maximum: return "исходное качество"
+        case .high: return "лучшая картинка"
+        case .medium: return "баланс качества и размера"
+        case .compact: return "для быстрой отправки"
+        }
     }
 }

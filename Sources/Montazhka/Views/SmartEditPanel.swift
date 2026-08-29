@@ -31,43 +31,30 @@ struct SmartEditPanel: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            header
+        InspectorPanel(
+            title: "Умный монтаж",
+            systemImage: "wand.and.sparkles",
+            accessibilityIdentifier: "editor.inspector.smartEdit",
+            close: {
+                controller.cancelSmartEdit()
+                withAnimation { controller.activeInspector = nil }
+            }
+        ) {
             ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
+                VStack(alignment: .leading, spacing: Theme.Spacing.medium) {
                     process
                     results
                 }
-                .padding(.horizontal, 20)
-                .padding(.bottom, 20)
+                .padding(.horizontal, Theme.Spacing.medium)
+                .padding(.bottom, Theme.Spacing.medium)
             }
+        } footer: {
             if !controller.smartEditCandidates.isEmpty { applyBar }
         }
-        .cardStyle()
         .task {
             controller.aiConnection.refreshAgents()
             controller.aiConnection.refreshReasoningOptions()
         }
-    }
-
-    private var header: some View {
-        HStack {
-            Label("Умный монтаж", systemImage: "wand.and.sparkles")
-                .font(.system(size: 16, weight: .semibold, design: .rounded))
-                .foregroundStyle(Theme.textPrimary)
-            Spacer()
-            Button {
-                controller.cancelSmartEdit()
-                withAnimation { controller.showSmartEditPanel = false }
-            } label: {
-                Image(systemName: "xmark.circle.fill")
-                    .font(.system(size: 16))
-                    .foregroundStyle(Theme.textSecondary.opacity(0.6))
-            }
-            .buttonStyle(.plain)
-        }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 18)
     }
 
     private var process: some View {
@@ -102,13 +89,13 @@ struct SmartEditPanel: View {
                         .frame(minHeight: stage == .connection && shouldExpandConnection ? 180 : 34)
                 }
             }
-            VStack(alignment: .leading, spacing: 10) {
-                VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: Theme.Spacing.small) {
+                VStack(alignment: .leading, spacing: Theme.Spacing.compact) {
                     Text(stage.title)
-                        .font(.system(size: 13, weight: .semibold, design: .rounded))
+                        .font(.system(size: Theme.TypeScale.body, weight: .semibold))
                         .foregroundStyle(stageTitleColor(stage))
                     Text(stageSubtitle(stage))
-                        .font(.system(size: 10.5))
+                        .font(.system(size: Theme.TypeScale.helper))
                         .foregroundStyle(Theme.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -123,7 +110,7 @@ struct SmartEditPanel: View {
     private func stageMarker(_ stage: ProcessStage) -> some View {
         if isStageComplete(stage) {
             Image(systemName: "checkmark")
-                .font(.system(size: 9, weight: .bold))
+                .font(.system(size: Theme.TypeScale.helper, weight: .bold))
                 .foregroundStyle(.white)
                 .frame(width: 22, height: 22)
                 .background(Color.green)
@@ -134,7 +121,7 @@ struct SmartEditPanel: View {
                 .frame(width: 22, height: 22)
         } else {
             Text("\(stage.rawValue)")
-                .font(.system(size: 10, weight: .semibold, design: .rounded))
+                .font(.system(size: Theme.TypeScale.helper, weight: .semibold))
                 .foregroundStyle(activeStage == stage ? .white : Theme.textSecondary)
                 .frame(width: 22, height: 22)
                 .background(activeStage == stage ? Theme.accent : Theme.background)
@@ -152,7 +139,7 @@ struct SmartEditPanel: View {
                 .frame(maxWidth: .infinity)
             if controller.aiConnection.reasoningOptions.count > 1 {
                 Text("Глубина «размышлений» модели. Выше уровень — вдумчивее склейки, но дольше анализ.")
-                    .font(.system(size: 10))
+                    .font(.system(size: Theme.TypeScale.helper))
                     .foregroundStyle(Theme.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -169,13 +156,13 @@ struct SmartEditPanel: View {
 
             if !SmartEditPlatform.isSupported {
                 Label("Умный монтаж доступен на Mac с Apple Silicon.", systemImage: "cpu")
-                    .font(.system(size: 10.5, weight: .medium))
+                    .font(.system(size: Theme.TypeScale.helper, weight: .medium))
                     .foregroundStyle(Theme.danger)
             }
 
             if controller.aiConnection.provider == .openRouter {
                 Link("Получить ключ OpenRouter", destination: URL(string: "https://openrouter.ai/settings/keys")!)
-                    .font(.system(size: 10.5, weight: .medium))
+                    .font(.system(size: Theme.TypeScale.helper, weight: .medium))
             }
         }
     }
@@ -183,12 +170,12 @@ struct SmartEditPanel: View {
     @ViewBuilder
     private var activeStageContent: some View {
         if isWorking {
-            VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: Theme.Spacing.small) {
                 ProgressView(value: progressValue)
                     .progressViewStyle(.linear)
                     .tint(Theme.accent)
                 Text(statusTitle)
-                    .font(.system(size: 10.5))
+                    .font(.system(size: Theme.TypeScale.helper))
                     .foregroundStyle(Theme.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
                 Button("Отменить анализ") { controller.cancelSmartEdit() }
@@ -197,13 +184,13 @@ struct SmartEditPanel: View {
             }
             .padding(12)
             .background(Theme.accent.opacity(0.07))
-            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: Theme.radiusSmall, style: .continuous))
         } else if activeStage == .editing && controller.smartEditStatus.allowsAnalysisStart {
             Button {
                 controller.analyzeSmartEdits()
             } label: {
                 Label(analysisButtonTitle, systemImage: "sparkles")
-                    .font(.system(size: 13, weight: .semibold, design: .rounded))
+                    .font(.system(size: Theme.TypeScale.body, weight: .semibold))
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 8)
             }
@@ -302,7 +289,7 @@ struct SmartEditPanel: View {
     private var results: some View {
         if case .failed(let message) = controller.smartEditStatus {
             Label(message, systemImage: "exclamationmark.triangle.fill")
-                .font(.system(size: 11))
+                .font(.system(size: Theme.TypeScale.helper))
                 .foregroundStyle(Theme.danger)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(12)
@@ -325,14 +312,14 @@ struct SmartEditPanel: View {
                     Text(
                         "\(controller.smartEditCandidates.count) предложений · экономия \(TimeFormat.spoken(selectedDuration))"
                     )
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(.system(size: Theme.TypeScale.helper, weight: .semibold))
                     Spacer()
                     if !obvious.isEmpty {
                         Button(obvious.allSatisfy(\.enabled) ? "Снять явные" : "Выбрать явные") {
                             controller.setAllObviousSmartEdits(enabled: !obvious.allSatisfy(\.enabled))
                         }
                         .buttonStyle(.link)
-                        .font(.system(size: 10))
+                        .font(.system(size: Theme.TypeScale.helper))
                     }
                 }
                 if !obvious.isEmpty { candidateGroup("Явные исправления", candidates: obvious) }
@@ -349,24 +336,24 @@ struct SmartEditPanel: View {
     }
 
     private func candidateRow(_ candidate: SmartEditCandidate) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: Theme.Spacing.small) {
             Toggle(
                 isOn: Binding(
                     get: { controller.smartEditCandidates.first(where: { $0.id == candidate.id })?.enabled ?? false },
                     set: { _ in controller.toggleSmartEditCandidate(candidate.id) }
                 )
             ) {
-                VStack(alignment: .leading, spacing: 2) {
+                VStack(alignment: .leading, spacing: Theme.Spacing.compact) {
                     Text(candidate.originalText)
-                        .font(.system(size: 11, weight: .medium))
+                        .font(.system(size: Theme.TypeScale.helper, weight: .medium))
                         .lineLimit(3)
                     Text("\(candidate.kind.title) · \(String(format: "%.1f", candidate.duration)) сек")
-                        .font(.system(size: 10))
+                        .font(.system(size: Theme.TypeScale.helper))
                         .foregroundStyle(Theme.textSecondary)
                 }
             }
             Text(candidate.reason)
-                .font(.system(size: 10))
+                .font(.system(size: Theme.TypeScale.helper))
                 .foregroundStyle(Theme.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
             HStack {
@@ -374,7 +361,7 @@ struct SmartEditPanel: View {
                 Button("Склейка") { controller.previewSmartEditJoin(candidate) }
             }
             .buttonStyle(.link)
-            .font(.system(size: 10, weight: .medium))
+            .font(.system(size: Theme.TypeScale.helper, weight: .medium))
         }
         .padding(9)
         .background(Theme.clipBackground.opacity(0.55))
@@ -392,8 +379,8 @@ struct SmartEditPanel: View {
             .tint(Theme.accent)
             .disabled(count == 0)
             .frame(maxWidth: .infinity)
-            .padding(.horizontal, 20)
-            .padding(.vertical, 14)
+            .padding(.horizontal, Theme.Spacing.medium)
+            .padding(.vertical, Theme.Spacing.small)
             .background(Theme.card)
     }
 }
