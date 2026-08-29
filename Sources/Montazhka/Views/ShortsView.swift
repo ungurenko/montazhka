@@ -6,6 +6,7 @@ import SwiftUI
 /// ходом анализа и кандидатами.
 struct ShortsView: View {
     @Environment(AppModel.self) private var app
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Bindable var controller: ShortsController
     @State private var keyInput = ""
     @State private var replacingKey = false
@@ -485,20 +486,38 @@ struct ShortsView: View {
 
     private var exportControls: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.small) {
-            DisclosureGroup(isExpanded: $showExportOptions) {
-                appearanceControls
-                    .padding(.top, Theme.Spacing.small)
+            Button {
+                withAnimation(
+                    reduceMotion ? .linear(duration: 0.12) : .easeInOut(duration: 0.2)
+                ) {
+                    showExportOptions.toggle()
+                }
             } label: {
-                VStack(alignment: .leading, spacing: Theme.Spacing.compact) {
-                    Text("Оформление")
-                        .font(.system(size: Theme.TypeScale.body, weight: .semibold))
-                        .foregroundStyle(Theme.textPrimary)
-                    Text("\(controller.frameMode.title) · \(controller.quality.title)")
-                        .font(.system(size: Theme.TypeScale.helper))
+                HStack(spacing: Theme.Spacing.small) {
+                    VStack(alignment: .leading, spacing: Theme.Spacing.compact) {
+                        Text("Оформление")
+                            .font(.system(size: Theme.TypeScale.body, weight: .semibold))
+                            .foregroundStyle(Theme.textPrimary)
+                        Text("\(controller.frameMode.title) · \(controller.quality.title)")
+                            .font(.system(size: Theme.TypeScale.helper))
+                            .foregroundStyle(Theme.textSecondary)
+                    }
+                    Spacer()
+                    Image(systemName: showExportOptions ? "chevron.down" : "chevron.right")
+                        .font(.system(size: Theme.TypeScale.helper, weight: .semibold))
                         .foregroundStyle(Theme.textSecondary)
                 }
+                .contentShape(Rectangle())
             }
+            .buttonStyle(.plain)
             .accessibilityIdentifier("shorts.appearance")
+            .accessibilityValue(showExportOptions ? "Развёрнуто" : "Свёрнуто")
+
+            if showExportOptions {
+                appearanceControls
+                    .padding(.top, Theme.Spacing.small)
+                    .transition(.opacity)
+            }
 
             Divider()
 

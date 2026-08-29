@@ -105,7 +105,7 @@ final class MontazhkaUITests: XCTestCase {
         launch(extraArguments: ["--ui-test-open-shorts"])
 
         XCTAssertTrue(app.buttons["shorts.back"].waitForExistence(timeout: 10))
-        let appearance = app.descendants(matching: .any)["shorts.appearance"]
+        let appearance = app.buttons["shorts.appearance"]
         XCTAssertTrue(appearance.waitForExistence(timeout: 5))
         appearance.click()
         let subtitles = app.switches["shorts.subtitles"]
