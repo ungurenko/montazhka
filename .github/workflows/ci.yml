@@ -43,14 +43,23 @@ jobs:
           git diff --exit-code -- Resources/Info.plist
 
       - name: Xcode UI tests
-        run: >-
-          xcodebuild
-          -project Montazhka.xcodeproj
-          -scheme Montazhka
-          -destination 'platform=macOS,arch=arm64'
-          ONLY_ACTIVE_ARCH=YES
-          -skipPackagePluginValidation
-          test
+        run: |
+          xcodebuild \
+            -project Montazhka.xcodeproj \
+            -scheme Montazhka \
+            -destination 'platform=macOS,arch=arm64' \
+            -derivedDataPath build.noindex/xcode-ui \
+            ONLY_ACTIVE_ARCH=YES \
+            -skipPackagePluginValidation \
+            build-for-testing
+          xcodebuild \
+            -project Montazhka.xcodeproj \
+            -scheme Montazhka \
+            -destination 'platform=macOS,arch=arm64' \
+            -derivedDataPath build.noindex/xcode-ui \
+            ONLY_ACTIVE_ARCH=YES \
+            -skipPackagePluginValidation \
+            test-without-building
 
       - name: Universal ad-hoc app
         run: ./scripts/build-app.sh --universal --adhoc
