@@ -15,7 +15,6 @@ app_path="$1"
 mode="${2:-}"
 identity="${MONTAZHKA_SIGNING_IDENTITY:-${DEVELOPER_ID_APPLICATION:-}}"
 timestamp=(--timestamp)
-keychain_args=()
 signing_dir="${MONTAZHKA_SIGNING_DIR:-${HOME}/Library/Application Support/ru.ungurenko.montazhka/Signing}"
 keychain_path="$signing_dir/MontazhkaSigning.keychain-db"
 password_path="$signing_dir/keychain-password"
@@ -24,6 +23,7 @@ temporary_dir=""
 keychain_search_changed=false
 original_keychains=()
 uses_developer_id=false
+uses_local_identity=false
 
 cleanup() {
   if [ "$keychain_search_changed" = true ]; then
@@ -39,6 +39,7 @@ trap cleanup EXIT
 
 create_local_identity() {
   local keychain_password p12_password
+  local -a pkcs12_args
 
   mkdir -p "$signing_dir"
   chmod 700 "$signing_dir"
@@ -58,7 +59,11 @@ create_local_identity() {
     -subj "/CN=$local_identity_name/O=Montazhka Local" \
     -addext "keyUsage=critical,digitalSignature" \
     -addext "extendedKeyUsage=critical,codeSigning" >/dev/null 2>&1
-  openssl pkcs12 -export -legacy \
+  pkcs12_args=(-export)
+  if openssl pkcs12 -help 2>&1 | grep -q -- "-legacy"; then
+    pkcs12_args+=(-legacy)
+  fi
+  openssl pkcs12 "${pkcs12_args[@]}" \
     -inkey "$temporary_dir/signing-key.pem" \
     -in "$temporary_dir/signing-certificate.pem" \
     -name "$local_identity_name" \
@@ -68,8 +73,6 @@ create_local_identity() {
     -k "$keychain_path" -P "$p12_password" -T /usr/bin/codesign >/dev/null
   security set-key-partition-list \
     -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$keychain_path" >/dev/null
-  security add-trusted-cert -r trustRoot -p codeSign \
-    -k "$keychain_path" "$temporary_dir/signing-certificate.pem" >/dev/null
 }
 
 prepare_local_identity() {
@@ -102,7 +105,7 @@ prepare_local_identity() {
   fi
 
   identity="$identity_hash"
-  keychain_args=(--keychain "$keychain_path")
+  uses_local_identity=true
   timestamp=(--timestamp=none)
 }
 
@@ -118,13 +121,12 @@ else
   prepare_local_identity
 fi
 
-codesign \
-  --force \
-  --sign "$identity" \
-  "${keychain_args[@]}" \
-  --options runtime \
-  "${timestamp[@]}" \
-  "$app_path"
+codesign_args=(--force --sign "$identity" --options runtime)
+if [ "$uses_local_identity" = true ]; then
+  codesign_args+=(--keychain "$keychain_path")
+fi
+codesign_args+=("${timestamp[@]}" "$app_path")
+codesign "${codesign_args[@]}"
 
 codesign --verify --deep --strict --verbose=2 "$app_path"
 
