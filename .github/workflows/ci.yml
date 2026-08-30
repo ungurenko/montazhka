@@ -17,11 +17,9 @@ jobs:
 
       - name: Select Xcode
         run: |
-          # Xcode 16.4 ломает UI-тесты xcodegen-проекта («module name ""»,
-          # «bundle identifier couldn't be read») — держим проверенную 16.2,
-          # а при отсутствии печатаем список доступных для диагностики.
-          if [ -d /Applications/Xcode_16.2.app ]; then
-            sudo xcode-select --switch /Applications/Xcode_16.2.app/Contents/Developer
+          # MCP SDK 0.12 requires Swift 6.1 or newer.
+          if [ -d /Applications/Xcode_26.3.app ]; then
+            sudo xcode-select --switch /Applications/Xcode_26.3.app/Contents/Developer
           else
             ls -d /Applications/Xcode*.app
             sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer
