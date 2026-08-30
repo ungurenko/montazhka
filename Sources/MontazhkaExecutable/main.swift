@@ -1,3 +1,3 @@
 import MontazhkaKit
 
-runMontazhka()
+await runMontazhka()

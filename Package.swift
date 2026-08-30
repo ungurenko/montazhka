@@ -12,7 +12,11 @@ let package = Package(
         .package(
             url: "https://github.com/FluidInference/FluidAudio.git",
             exact: "0.15.5"
-        )
+        ),
+        .package(
+            url: "https://github.com/modelcontextprotocol/swift-sdk.git",
+            exact: "0.12.1"
+        ),
     ],
     targets: [
         .target(
@@ -25,6 +29,7 @@ let package = Package(
             dependencies: [
                 "MontazhkaCore",
                 .product(name: "FluidAudio", package: "FluidAudio"),
+                .product(name: "MCP", package: "swift-sdk"),
             ],
             path: "Sources/Montazhka",
             swiftSettings: [

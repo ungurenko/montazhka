@@ -22,6 +22,29 @@ public enum TimelineTrimEdge: Equatable, Sendable {
 }
 
 public enum TimelineOps {
+    /// Удаляет интервалы в координатах исходного файла. Повторный вызов с теми
+    /// же диапазонами ничего не меняет, потому что уже вырезанных частей в
+    /// списке клипов больше нет.
+    public static func removingSourceRanges(
+        clips: [Clip],
+        sourcePath: String,
+        ranges: [(start: Double, end: Double)]
+    ) -> [Clip] {
+        let merged = mergeSourceRanges(ranges)
+        guard !merged.isEmpty else { return clips }
+
+        return clips.flatMap { clip -> [Clip] in
+            guard clip.sourcePath == sourcePath else { return [clip] }
+            var fragments = [clip]
+            for range in merged {
+                fragments = fragments.flatMap { fragment in
+                    subtractSourceRange(range, from: fragment)
+                }
+            }
+            return fragments
+        }
+    }
+
     public static func shorteningClip(
         clips: [Clip],
         id: UUID,
@@ -88,6 +111,47 @@ public enum TimelineOps {
         var result = clips
         result[index] = left
         result.insert(right, at: index + 1)
+        return result
+    }
+
+    private static func mergeSourceRanges(
+        _ ranges: [(start: Double, end: Double)]
+    ) -> [(start: Double, end: Double)] {
+        let sorted =
+            ranges
+            .filter { $0.start.isFinite && $0.end.isFinite && $0.end > $0.start }
+            .sorted { $0.start < $1.start }
+        var result: [(start: Double, end: Double)] = []
+        for range in sorted {
+            if let last = result.last, range.start <= last.end {
+                result[result.count - 1].end = max(last.end, range.end)
+            } else {
+                result.append(range)
+            }
+        }
+        return result
+    }
+
+    private static func subtractSourceRange(
+        _ range: (start: Double, end: Double),
+        from clip: Clip
+    ) -> [Clip] {
+        let start = max(clip.start, range.start)
+        let end = min(clip.end, range.end)
+        guard start < end else { return [clip] }
+        var result: [Clip] = []
+        if start > clip.start + 0.02 {
+            var left = clip
+            left.id = UUID()
+            left.end = start
+            result.append(left)
+        }
+        if end < clip.end - 0.02 {
+            var right = clip
+            right.id = UUID()
+            right.start = end
+            result.append(right)
+        }
         return result
     }
 }

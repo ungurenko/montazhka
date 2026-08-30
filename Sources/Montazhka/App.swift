@@ -100,6 +100,8 @@ final class AppModel {
     private var recentsGeneration = 0
     private var projectOperationTask: Task<Void, Never>?
     private var projectOperationGeneration = Generation()
+    var agentIntegration = AgentIntegrationInstaller.status()
+    private(set) var isAgentIntegrationInProgress = false
 
     init(store: (any ProjectRepository)? = nil) {
         let arguments = CommandLine.arguments
@@ -116,6 +118,18 @@ final class AppModel {
             newProject(with: [])
         } else if isUITesting, arguments.contains("--ui-test-open-shorts") {
             openUITestShorts(using: resolvedStore)
+        }
+    }
+
+    func connectAgents() {
+        guard !isAgentIntegrationInProgress else { return }
+        isAgentIntegrationInProgress = true
+        Task { [weak self] in
+            guard let self else { return }
+            do { agentIntegration = try await AgentIntegrationInstaller.install() } catch {
+                agentIntegration = AgentIntegrationStatus(installed: false, message: error.localizedDescription)
+            }
+            isAgentIntegrationInProgress = false
         }
     }
 

@@ -10,6 +10,7 @@ struct StartView: View {
             VStack(alignment: .leading, spacing: Theme.Spacing.large) {
                 brand
                 actions
+                agentIntegration
 
                 VStack(alignment: .leading, spacing: Theme.Spacing.medium) {
                     Text("Недавние проекты")
@@ -97,6 +98,34 @@ struct StartView: View {
             .accessibilityIdentifier("start.shorts")
         }
         .frame(maxWidth: .infinity)
+    }
+
+    private var agentIntegration: some View {
+        HStack(spacing: Theme.Spacing.medium) {
+            Image(systemName: app.agentIntegration.installed ? "checkmark.circle.fill" : "terminal")
+                .font(.system(size: 22, weight: .medium))
+                .foregroundStyle(app.agentIntegration.installed ? Color.green : Theme.accent)
+                .frame(width: 44, height: 44)
+                .background(Theme.selected)
+                .clipShape(RoundedRectangle(cornerRadius: Theme.radiusSmall, style: .continuous))
+            VStack(alignment: .leading, spacing: Theme.Spacing.compact) {
+                Text("AI-агенты")
+                    .font(.system(size: Theme.TypeScale.body, weight: .semibold))
+                    .foregroundStyle(Theme.textPrimary)
+                Text(app.agentIntegration.message)
+                    .font(.system(size: Theme.TypeScale.helper))
+                    .foregroundStyle(Theme.textSecondary)
+            }
+            Spacer()
+            Button(app.agentIntegration.installed ? "Обновить подключение" : "Подключить AI-агентов") {
+                app.connectAgents()
+            }
+            .disabled(app.isAgentIntegrationInProgress)
+            if app.isAgentIntegrationInProgress { ProgressView().controlSize(.small) }
+        }
+        .padding(Theme.Spacing.medium)
+        .rowSurfaceStyle()
+        .accessibilityIdentifier("start.agentIntegration")
     }
 }
 
