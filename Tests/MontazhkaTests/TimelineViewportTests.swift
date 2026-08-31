@@ -5,6 +5,21 @@ import Testing
 @Suite
 struct TimelineViewportTests {
     @Test
+    func testLayoutPreservesClipOrderAndStarts() {
+        let clips = [
+            Clip(sourcePath: "/tmp/a.mov", start: 0, end: 2),
+            Clip(sourcePath: "/tmp/b.mov", start: 4, end: 7),
+            Clip(sourcePath: "/tmp/c.mov", start: 10, end: 14),
+        ]
+
+        let layout = TimelineLayout(clips: clips)
+
+        #expect(layout.items.map(\.start) == [0, 2, 5])
+        #expect(layout.items.map(\.clip.id) == clips.map(\.id))
+        #expect(layout.duration == 9)
+    }
+
+    @Test
     func testDragPreviewNeverUsesFullWidthOfALongClip() {
         #expect((TimelineDragPreviewMath.width(forClipWidth: 12_000)) == (240))
         #expect((TimelineDragPreviewMath.width(forClipWidth: 160)) == (160))

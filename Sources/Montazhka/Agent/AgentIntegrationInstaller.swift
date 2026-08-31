@@ -58,11 +58,11 @@ enum AgentIntegrationInstaller {
         try installSkill(at: home.appendingPathComponent(".codex/skills/montazhka/SKILL.md"))
         try installSkill(at: home.appendingPathComponent(".claude/skills/montazhka/SKILL.md"))
 
-        if let codex = executable(named: "codex") {
+        if let codex = LocalProcessRunner.executable(named: "codex") {
             _ = try? await run(codex, ["mcp", "remove", "montazhka"])
             try await run(codex, ["mcp", "add", "montazhka", "--", wrapper.path, "mcp", "serve"])
         }
-        if let claude = executable(named: "claude") {
+        if let claude = LocalProcessRunner.executable(named: "claude") {
             _ = try? await run(claude, ["mcp", "remove", "--scope", "user", "montazhka"])
             try await run(claude, ["mcp", "add", "--scope", "user", "montazhka", "--", wrapper.path, "mcp", "serve"])
         }
@@ -80,8 +80,10 @@ enum AgentIntegrationInstaller {
             try FileManager.default.removeItem(at: url)
         }
         try updateShellPath(home: home, remove: true)
-        if let codex = executable(named: "codex") { _ = try? await run(codex, ["mcp", "remove", "montazhka"]) }
-        if let claude = executable(named: "claude") {
+        if let codex = LocalProcessRunner.executable(named: "codex") {
+            _ = try? await run(codex, ["mcp", "remove", "montazhka"])
+        }
+        if let claude = LocalProcessRunner.executable(named: "claude") {
             _ = try? await run(claude, ["mcp", "remove", "--scope", "user", "montazhka"])
         }
         return AgentIntegrationStatus(installed: false, message: "AI-агенты отключены")
@@ -107,48 +109,18 @@ enum AgentIntegrationInstaller {
         try Data(text.utf8).write(to: url, options: .atomic)
     }
 
-    private static func executable(named name: String) -> URL? {
-        let pathCandidates = (ProcessInfo.processInfo.environment["PATH"] ?? "")
-            .split(separator: ":")
-            .map { URL(fileURLWithPath: String($0), isDirectory: true).appendingPathComponent(name) }
-        let candidates =
-            pathCandidates + [
-                URL(fileURLWithPath: "/opt/homebrew/bin/\(name)"),
-                URL(fileURLWithPath: "/usr/local/bin/\(name)"),
-            ]
-        return candidates.first { FileManager.default.isExecutableFile(atPath: $0.path) }
-    }
-
     @discardableResult
     private static func run(_ executable: URL, _ arguments: [String]) async throws -> String {
-        try await withCheckedThrowingContinuation { continuation in
-            let process = Process()
-            let outputURL = FileManager.default.temporaryDirectory
-                .appendingPathComponent("montazhka-command-\(UUID().uuidString).log")
-            FileManager.default.createFile(atPath: outputURL.path, contents: nil)
-            guard let output = try? FileHandle(forWritingTo: outputURL) else {
-                continuation.resume(throwing: CocoaError(.fileWriteUnknown))
-                return
-            }
-            process.executableURL = executable; process.arguments = arguments
-            process.standardOutput = output; process.standardError = output
-            process.terminationHandler = { process in
-                try? output.close()
-                let text = (try? String(contentsOf: outputURL, encoding: .utf8)) ?? ""
-                try? FileManager.default.removeItem(at: outputURL)
-                if process.terminationStatus == 0 {
-                    continuation.resume(returning: text)
-                } else {
-                    continuation.resume(
-                        throwing: AgentIntegrationError.commandFailed(
-                            text.trimmingCharacters(in: .whitespacesAndNewlines)))
-                }
-            }
-            do { try process.run() } catch {
-                try? output.close()
-                try? FileManager.default.removeItem(at: outputURL)
-                continuation.resume(throwing: error)
-            }
+        let result = try await LocalProcessRunner.run(
+            executable: executable,
+            arguments: arguments,
+            timeout: 180,
+            mergeStandardError: true)
+        let text = String(decoding: result.standardOutput, as: UTF8.self)
+        guard result.exitCode == 0 else {
+            throw AgentIntegrationError.commandFailed(
+                text.trimmingCharacters(in: .whitespacesAndNewlines))
         }
+        return text
     }
 }

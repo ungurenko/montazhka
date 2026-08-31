@@ -15,7 +15,7 @@ actor AIAgentDiscovery {
     }
 
     private func discoverCodex() async -> AIAgentAvailability {
-        guard let executable = executable(named: "codex", extraPaths: []) else {
+        guard let executable = LocalProcessRunner.executable(named: "codex") else {
             return unavailable(.codexCLI, "Codex CLI не установлен")
         }
         do {
@@ -50,7 +50,7 @@ actor AIAgentDiscovery {
 
     private func discoverOpenCode() async -> AIAgentAvailability {
         guard
-            let executable = executable(
+            let executable = LocalProcessRunner.executable(
                 named: "opencode",
                 extraPaths: [".opencode/bin", ".local/bin"])
         else {
@@ -90,25 +90,6 @@ actor AIAgentDiscovery {
             executablePath: path,
             models: [],
             message: message)
-    }
-
-    private func executable(named name: String, extraPaths: [String]) -> URL? {
-        let fileManager = FileManager.default
-        let home = fileManager.homeDirectoryForCurrentUser
-        var candidates = extraPaths.map { home.appendingPathComponent($0).appendingPathComponent(name) }
-        let path = ProcessInfo.processInfo.environment["PATH"] ?? ""
-        candidates += path.split(separator: ":").map {
-            URL(fileURLWithPath: String($0), isDirectory: true).appendingPathComponent(name)
-        }
-        candidates += [
-            URL(fileURLWithPath: "/usr/local/bin/\(name)"),
-            URL(fileURLWithPath: "/opt/homebrew/bin/\(name)"),
-            home.appendingPathComponent(".local/bin/\(name)"),
-        ]
-        var seen = Set<String>()
-        return candidates.first { candidate in
-            seen.insert(candidate.path).inserted && fileManager.isExecutableFile(atPath: candidate.path)
-        }
     }
 
     private func codexModels(from data: Data) -> [AIModelOption] {

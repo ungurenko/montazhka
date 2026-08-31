@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 import Testing
 
 @testable import MontazhkaKit
@@ -106,6 +107,75 @@ struct TimelineEditingTests {
         #expect((TimelineSelection(start: 2, end: 2.03, duration: 10)) == nil)
     }
 
+    @Test
+    func testRangeRemovalAndSplitPreserveDurationAndIdentity() throws {
+        let first = Clip(sourcePath: "/tmp/first.mov", start: 0, end: 4)
+        let second = Clip(sourcePath: "/tmp/second.mov", start: 0, end: 6)
+
+        let middle = TimelineOps.removingRange(
+            clips: [Clip(sourcePath: "/tmp/middle.mov", start: 0, end: 10)],
+            start: 3,
+            end: 5)
+        #expect(middle.count == 2)
+        #expect(middle[0].end == 3 && middle[1].start == 5)
+
+        let removed = TimelineOps.removingRange(clips: [first, second], start: 3, end: 6)
+        #expect(removed.count == 2)
+        #expect(abs(removed.reduce(0) { $0 + $1.duration } - 7) < 0.001)
+
+        let withoutFirst = TimelineOps.removingRange(clips: [first, second], start: 0, end: 4)
+        #expect(withoutFirst.count == 1 && withoutFirst[0].duration == 6)
+
+        let source = Clip(sourcePath: "/tmp/source.mov", start: 2, end: 12)
+        let split = try #require(TimelineOps.splitting(clips: [source], at: 0, offset: 4))
+        #expect(split.count == 2)
+        #expect(split[0].id == source.id)
+        #expect(split[1].id != source.id)
+        #expect(split[0].start == 2 && split[0].end == 6)
+        #expect(split[1].start == 6 && split[1].end == 12)
+        #expect(split.reduce(0) { $0 + $1.duration } == source.duration)
+        #expect(TimelineOps.splitting(clips: [source], at: 0, offset: 0.01) == nil)
+    }
+
+    @Test
+    func testGenerationRejectsStaleResults() {
+        var generation = Generation()
+        let stale = generation.advance()
+        let current = generation.advance()
+
+        #expect(!generation.isCurrent(stale))
+        #expect(generation.isCurrent(current))
+    }
+
+    @MainActor
+    @Test
+    func testPlaybackObservationDoesNotInvalidateProject() async {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("montazhka-observation-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let controller = EditorController(
+            project: Project(name: "Observation"),
+            store: ProjectStore(baseDirectory: root),
+            openRouterKeyStore: EmptyOpenRouterKeyStore())
+        let probe = ObservationProbe()
+
+        withObservationTracking {
+            _ = controller.currentTime
+        } onChange: {
+            probe.playbackChanged = true
+        }
+        withObservationTracking {
+            _ = controller.project
+        } onChange: {
+            probe.projectChanged = true
+        }
+
+        controller.currentTime = 1
+        #expect(probe.playbackChanged)
+        #expect(!probe.projectChanged)
+        await controller.shutdown()
+    }
+
     @MainActor
     @Test
     func testUndoRestoresProjectSettingsAsOneDocumentSnapshot() async {
@@ -180,6 +250,11 @@ struct TimelineEditingTests {
         #expect((controller.player.currentItem) == nil)
         #expect((controller.previewState) == (.empty))
     }
+}
+
+private final class ObservationProbe: @unchecked Sendable {
+    var playbackChanged = false
+    var projectChanged = false
 }
 
 private actor RecordingOpenRouterKeyStore: OpenRouterKeyStoring {

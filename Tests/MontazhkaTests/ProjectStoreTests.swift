@@ -41,6 +41,26 @@ struct ProjectStoreTests {
         #expect((project.clips.first?.source.lastKnownPath) == ("/tmp/source.mov"))
         #expect((project.clips.first?.start) == (1.5))
         #expect((project.clips.first?.end) == (9.0))
+        #expect(project.voiceEnhance == VoiceEnhanceSettings())
+        #expect(project.music == MusicSettings())
+    }
+
+    @Test
+    func testLegacyMusicSettingsKeepEQAndVolumeOnlyComparison() throws {
+        let decoded = try JSONDecoder().decode(
+            MusicSettings.self,
+            from: Data(#"{"enabled":true,"volume":18}"#.utf8))
+        #expect(decoded.eqEnabled)
+
+        var base = MusicSettings()
+        base.enabled = true
+        var volumeOnly = base
+        volumeOnly.volume = 55
+        var trackChanged = base
+        trackChanged.trackID = "calm"
+
+        #expect(volumeOnly.differsOnlyByVolume(from: base))
+        #expect(!trackChanged.differsOnlyByVolume(from: base))
     }
 
     @Test

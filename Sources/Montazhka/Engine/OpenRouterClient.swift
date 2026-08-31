@@ -69,7 +69,7 @@ struct ReviewEnvelope: Codable, Equatable, Sendable {
 
 struct ReviewDTO: Codable, Equatable, Sendable {
     let editID: String
-    let decision: SmartEditReview.Decision
+    let decision: SmartEditDecision
     let firstWordID: String
     let lastWordID: String
     let reason: String

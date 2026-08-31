@@ -83,4 +83,29 @@ struct SmartEditDomainTests {
                 words: words, clip: clip, clipTimelineStart: 0,
                 peaks: [Float](repeating: 0.1, count: 500), projectThresholdDB: -40)) == nil)
     }
+
+    @Test
+    func testBoundaryResolverUsesQuietPointsAroundWords() throws {
+        let source = MediaReference(path: "/tmp/a.mov")
+        let clip = Clip(source: source, start: 1, end: 9)
+        let transcript = [
+            TranscriptWord(sourceID: source.id, text: "я", start: 2.1, end: 2.2, confidence: 0.95),
+            TranscriptWord(sourceID: source.id, text: "точнее", start: 2.25, end: 2.55, confidence: 0.94),
+        ]
+        let map = TranscriptTimelineMapper.make(clips: [clip], transcripts: transcript)
+        let words = try #require(map.range(firstWordID: "w000001", lastWordID: "w000002"))
+        var peaks = [Float](repeating: 0.08, count: 1_000)
+        for index in 198..<212 { peaks[index] = 0.001 }
+        for index in 255..<270 { peaks[index] = 0.001 }
+
+        let boundary = SmartCutBoundaryResolver.resolve(
+            words: words,
+            clip: clip,
+            clipTimelineStart: 0,
+            peaks: peaks,
+            projectThresholdDB: -40)
+
+        #expect(boundary != nil)
+        #expect((boundary?.timelineEnd ?? 0) - (boundary?.timelineStart ?? 0) >= 0.25)
+    }
 }

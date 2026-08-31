@@ -4,7 +4,6 @@ enum AgentRunKind: String, Codable, Sendable {
     case editVideo
     case editProject
     case makeShorts
-    case inspect
     case export
 }
 
@@ -14,7 +13,6 @@ enum AgentRunStatus: String, Codable, Sendable {
     case waitingForApproval
     case completed
     case failed
-    case cancelled
 }
 
 struct AgentRun: Codable, Equatable, Identifiable, Sendable {

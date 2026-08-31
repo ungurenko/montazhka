@@ -60,12 +60,33 @@ enum LocalProcessRunner {
         "/usr/sbin", "/sbin",
     ].joined(separator: ":")
 
+    static func executable(named name: String, extraPaths: [String] = []) -> URL? {
+        let fileManager = FileManager.default
+        let home = fileManager.homeDirectoryForCurrentUser
+        var candidates = extraPaths.map { home.appendingPathComponent($0).appendingPathComponent(name) }
+        let path = ProcessInfo.processInfo.environment["PATH"] ?? ""
+        candidates += path.split(separator: ":").map {
+            URL(fileURLWithPath: String($0), isDirectory: true).appendingPathComponent(name)
+        }
+        candidates += [
+            URL(fileURLWithPath: "/usr/local/bin/\(name)"),
+            URL(fileURLWithPath: "/opt/homebrew/bin/\(name)"),
+            home.appendingPathComponent(".local/bin/\(name)"),
+        ]
+        var seen = Set<String>()
+        return candidates.first { candidate in
+            seen.insert(candidate.path).inserted
+                && fileManager.isExecutableFile(atPath: candidate.path)
+        }
+    }
+
     static func run(
         executable: URL,
         arguments: [String],
         input: Data? = nil,
         currentDirectory: URL? = nil,
-        timeout: TimeInterval = 180
+        timeout: TimeInterval = 180,
+        mergeStandardError: Bool = false
     ) async throws -> LocalProcessResult {
         let box = RunningProcessBox()
         return try await withTaskCancellationHandler {
@@ -90,7 +111,7 @@ enum LocalProcessRunner {
                 environment["PATH"] = commandPath + (inheritedPath.isEmpty ? "" : ":\(inheritedPath)")
                 process.environment = environment
                 process.standardOutput = outputHandle
-                process.standardError = FileHandle.nullDevice
+                process.standardError = mergeStandardError ? outputHandle : FileHandle.nullDevice
 
                 let inputPipe: Pipe?
                 if input != nil {

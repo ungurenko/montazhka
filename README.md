@@ -99,9 +99,9 @@ App Sandbox пока намеренно выключен: прямой кана�
 
 ```
 Sources/
-├── MontazhkaCore/          # модели проекта, операции ленты и полная история правок
 ├── MontazhkaExecutable/    # тонкий host: GUI или --selftest
-└── Montazhka/              # библиотека MontazhkaKit
+└── Montazhka/              # единая библиотека MontazhkaKit
+    ├── Core/               # модели проекта, операции ленты и история правок
     ├── AppEntry.swift      # единая точка входа для SwiftPM и Xcode-host
     ├── App.swift           # SwiftUI-приложение и навигация
     ├── Models/             # версионное JSON-хранилище проектов

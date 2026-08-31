@@ -20,14 +20,8 @@ let package = Package(
     ],
     targets: [
         .target(
-            name: "MontazhkaCore",
-            path: "Sources/MontazhkaCore",
-            swiftSettings: [.swiftLanguageMode(.v6)]
-        ),
-        .target(
             name: "MontazhkaKit",
             dependencies: [
-                "MontazhkaCore",
                 .product(name: "FluidAudio", package: "FluidAudio"),
                 .product(name: "MCP", package: "swift-sdk"),
             ],
@@ -44,7 +38,7 @@ let package = Package(
         ),
         .testTarget(
             name: "MontazhkaTests",
-            dependencies: ["MontazhkaKit", "MontazhkaCore"],
+            dependencies: ["MontazhkaKit"],
             path: "Tests/MontazhkaTests",
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),

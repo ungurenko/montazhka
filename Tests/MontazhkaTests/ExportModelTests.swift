@@ -8,6 +8,32 @@ import Testing
 @MainActor
 struct ExportModelTests {
     @Test
+    func exportQualityKeepsExpectedDimensionsAndEstimates() {
+        let fullHD = CGSize(width: 1920, height: 1080)
+
+        #expect(ExportQuality.compact.targetDimensions(forDisplaySize: fullHD) == CGSize(width: 1280, height: 720))
+        #expect(
+            ExportQuality.compact.targetDimensions(forDisplaySize: CGSize(width: 1080, height: 1920))
+                == CGSize(width: 720, height: 1280))
+        #expect(
+            ExportQuality.medium.targetDimensions(forDisplaySize: CGSize(width: 3840, height: 2160))
+                == CGSize(width: 1920, height: 1080))
+        #expect(
+            ExportQuality.maximum.targetDimensions(forDisplaySize: CGSize(width: 3840, height: 2160))
+                == CGSize(width: 3840, height: 2160))
+        #expect(
+            ExportQuality.compact.targetDimensions(forDisplaySize: CGSize(width: 320, height: 180))
+                == CGSize(width: 320, height: 180))
+
+        let odd = ExportQuality.medium.targetDimensions(forDisplaySize: CGSize(width: 1279, height: 717))
+        #expect(Int(odd.width) % 2 == 0 && Int(odd.height) % 2 == 0)
+        #expect(ExportQuality.compact.estimatedBytes(duration: 300, displaySize: fullHD) == 81_744_000)
+        #expect(ExportQuality.medium.estimatedBytes(duration: 300, displaySize: fullHD) == 180_492_000)
+        #expect(ExportQuality.compact.estimateText(duration: 300, displaySize: fullHD) == "≈ 82 МБ")
+        #expect(ExportQuality.maximum.estimateText(duration: 1200, displaySize: fullHD) == "≈ 2.5 ГБ")
+    }
+
+    @Test
     func preparationAndExportHaveObservableStates() async throws {
         let exporter = ControlledVideoExporter()
         let model = ExportModel(videoExporter: exporter)

@@ -1,7 +1,6 @@
 import Foundation
 import Testing
 
-@testable import MontazhkaCore
 @testable import MontazhkaKit
 
 @Suite("Agent headless contract")

@@ -1,8 +1,7 @@
 @preconcurrency import AVFoundation
 import Foundation
-import Observation
 
-/// Самопроверка движка: математика ленты, извлечение волны, поиск пауз, склейка, экспорт.
+/// Сквозная самопроверка готового движка: звук, субтитры, склейка и экспорт.
 /// Запуск: `.build/debug/Montazhka --selftest`
 enum SelfTest {
     // Все записи идут последовательно из единственной задачи runAll.
@@ -67,13 +66,6 @@ enum SelfTest {
     }
 
     private static func runAll() async {
-        testTimelineMath()
-        await testObservationIsolation()
-        await testMissingSourceInvalidation()
-        await testProjectListing()
-        testEditHistory()
-        failures += SmartEditSelfTest.run()
-        testExportEstimator()
         failures += await ShortsSubtitleSelfTest.run()
         await testAudioPipeline()
         await testVoiceEnhance()
@@ -99,291 +91,6 @@ enum SelfTest {
         }
         RunLoop.main.run()
         exit(2)
-    }
-
-    // MARK: - Математика ленты
-
-    private static func testTimelineMath() {
-        print("Математика ленты:")
-        func clip(_ start: Double, _ end: Double) -> Clip {
-            Clip(sourcePath: "/tmp/fake.mov", start: start, end: end)
-        }
-
-        // Вырезка из середины делит клип на два
-        var result = TimelineOps.removingRange(clips: [clip(0, 10)], start: 3, end: 5)
-        check(
-            result.count == 2
-                && approx(result[0].end, 3, 0.001)
-                && approx(result[1].start, 5, 0.001),
-            "вырезка из середины делит клип на два")
-
-        // Вырезка через границу двух клипов
-        result = TimelineOps.removingRange(clips: [clip(0, 4), clip(0, 6)], start: 3, end: 6)
-        let total = result.reduce(0) { $0 + $1.duration }
-        check(
-            result.count == 2 && approx(total, 7, 0.001),
-            "вырезка через границу клипов сохраняет остаток (7 сек)")
-
-        // Вырезка целого клипа
-        result = TimelineOps.removingRange(clips: [clip(0, 4), clip(0, 6)], start: 0, end: 4)
-        check(
-            result.count == 1 && approx(result[0].duration, 6, 0.001),
-            "вырезка целого клипа убирает его совсем")
-
-        let layoutClips = [clip(0, 2), clip(4, 7), clip(10, 14)]
-        let layout = TimelineLayout(clips: layoutClips)
-        check(
-            layout.items.map(\.start) == [0, 2, 5]
-                && layout.items.map(\.clip.id) == layoutClips.map(\.id)
-                && approx(layout.duration, 9, 0.001),
-            "раскладка ленты одним проходом сохраняет порядок и начала")
-
-        let sharedSource = MediaReference(path: "/tmp/shared.mov")
-        let repeated = (0..<78).map { index in
-            Clip(source: sharedSource, start: Double(index), end: Double(index + 1))
-        }
-        check(
-            uniqueMediaSources(in: repeated).map(\.id) == [sharedSource.id],
-            "78 фрагментов одного файла дают одну проверку исходника")
-
-        let availableURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("montazhka-available-\(UUID().uuidString).mov")
-        try? Data("video".utf8).write(to: availableURL)
-        let availableSource = MediaReference(path: availableURL.path)
-        let missingSource = MediaReference(path: "/tmp/montazhka-missing-\(UUID().uuidString).mov")
-        let mixedSources = uniqueMediaSources(in: [
-            Clip(source: availableSource, start: 0, end: 1),
-            Clip(source: missingSource, start: 0, end: 1),
-            Clip(source: missingSource, start: 1, end: 2),
-        ])
-        let missing = unavailableMediaSources(mixedSources)
-        let paths = mixedSources.compactMap { $0.resolvedURL?.path }
-        check(
-            missing.map(\.id) == [missingSource.id]
-                && paths == [availableURL.path],
-            "проверка путей в фоне пропускает доступный и объединяет отсутствующий исходник")
-        try? FileManager.default.removeItem(at: availableURL)
-
-        var sourceCheckGeneration = Generation()
-        let staleCheck = sourceCheckGeneration.advance()
-        let currentCheck = sourceCheckGeneration.advance()
-        check(
-            !sourceCheckGeneration.isCurrent(staleCheck)
-                && sourceCheckGeneration.isCurrent(currentCheck),
-            "поздний результат проверки исходников не заменяет новое состояние")
-
-        // Разрез
-        let sourceClip = clip(2, 12)
-        if let split = TimelineOps.splitting(clips: [sourceClip], at: 0, offset: 4) {
-            check(
-                split.count == 2
-                    && split[0].id != split[1].id
-                    && split[0].id == sourceClip.id
-                    && approx(split[0].start, 2, 0.001)
-                    && approx(split[0].duration, 4, 0.001)
-                    && approx(split[0].end, 6, 0.001)
-                    && approx(split[1].start, 6, 0.001)
-                    && approx(split[1].duration, 6, 0.001)
-                    && approx(split[1].end, 12, 0.001)
-                    && approx(split[0].duration + split[1].duration, sourceClip.duration, 0.001),
-                "разрез даёт два самостоятельных куска с точными границами")
-        } else {
-            check(false, "разрез даёт два куска без потери длительности")
-        }
-        check(
-            TimelineOps.splitting(clips: [clip(0, 10)], at: 0, offset: 0.01) == nil,
-            "разрез у самого края отклоняется")
-    }
-
-    private final class ObservationProbe: @unchecked Sendable {
-        var playbackChanged = false
-        var projectChanged = false
-    }
-
-    private static func testObservationIsolation() async {
-        print("Observation интерфейса:")
-        let result = await Task { @MainActor in
-            let root = FileManager.default.temporaryDirectory
-                .appendingPathComponent("montazhka-observation-\(UUID().uuidString)", isDirectory: true)
-            defer { try? FileManager.default.removeItem(at: root) }
-            let controller = EditorController(
-                project: Project(name: "Observation"),
-                store: ProjectStore(baseDirectory: root),
-                openRouterKeyStore: EmptyOpenRouterKeyStore())
-            let probe = ObservationProbe()
-
-            withObservationTracking {
-                _ = controller.currentTime
-            } onChange: {
-                probe.playbackChanged = true
-            }
-            withObservationTracking {
-                _ = controller.project
-            } onChange: {
-                probe.projectChanged = true
-            }
-
-            controller.currentTime = 1
-            await controller.shutdown()
-            return (playback: probe.playbackChanged, project: probe.projectChanged)
-        }.value
-        check(
-            result.playback && !result.project,
-            "время воспроизведения обновляется без инвалидации проекта")
-    }
-
-    private static func testMissingSourceInvalidation() async {
-        let result = await Task { @MainActor in
-            let root = FileManager.default.temporaryDirectory
-                .appendingPathComponent("montazhka-missing-race-\(UUID().uuidString)", isDirectory: true)
-            let missing = MediaReference(path: "/tmp/montazhka-stale-\(UUID().uuidString).mov")
-            let clip = Clip(source: missing, start: 0, end: 1)
-            let controller = EditorController(
-                project: Project(name: "Гонка", clips: [clip]),
-                store: ProjectStore(baseDirectory: root),
-                openRouterKeyStore: EmptyOpenRouterKeyStore())
-            controller.deleteClip(id: clip.id)
-            try? await Task.sleep(nanoseconds: 100_000_000)
-            let isClean =
-                controller.missingSources.isEmpty
-                && controller.missingFilesMessage == nil
-            await controller.shutdown()
-            try? FileManager.default.removeItem(at: root)
-            return isClean
-        }.value
-        check(
-            result,
-            "поздняя проверка удалённого исходника не возвращает предупреждение")
-    }
-
-    private static func testProjectListing() async {
-        print("Список проектов:")
-        let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("montazhka-listing-\(UUID().uuidString)", isDirectory: true)
-        defer { try? FileManager.default.removeItem(at: root) }
-        let store = ProjectStore(baseDirectory: root)
-        let valid = Project(
-            name: "Исправный",
-            clips: [
-                Clip(sourcePath: "/tmp/video.mov", start: 2, end: 7)
-            ])
-        let legacyID = UUID()
-
-        do {
-            try await store.save(valid)
-            let legacy = """
-                {
-                  "id":"\(legacyID.uuidString)",
-                  "name":"Старый проект",
-                  "clips":[],
-                  "createdAt":"2026-01-01T00:00:00Z",
-                  "updatedAt":"2026-01-01T00:00:00Z"
-                }
-                """
-            try Data(legacy.utf8).write(
-                to: store.projectsDir.appendingPathComponent("legacy.json")
-            )
-            try Data("{broken-json".utf8).write(
-                to: store.projectsDir.appendingPathComponent("damaged.json")
-            )
-            let newer = """
-                {"id":"\(UUID().uuidString)","schemaVersion":999,"name":"Из будущего","clips":[]}
-                """
-            try Data(newer.utf8).write(
-                to: store.projectsDir.appendingPathComponent("newer.json")
-            )
-
-            let listing = try await store.listProjects()
-            check(
-                Set(listing.projects.map(\.id)) == Set([valid.id, legacyID])
-                    && listing.projects.first?.duration == 5
-                    && listing.issues.count == 2,
-                "фоновый список сохраняет текущую, старую, новую и повреждённую схемы")
-        } catch {
-            check(false, "фоновый список сохраняет текущую, старую, новую и повреждённую схемы")
-        }
-    }
-
-    // MARK: - История отмены
-
-    private static func testEditHistory() {
-        print("История отмены:")
-        var history = EditHistory<Int>(limit: 3)
-
-        check(!history.canUndo && !history.canRedo, "новая история пуста")
-        check(
-            history.undo(current: 0) == nil && history.redo(current: 0) == nil,
-            "отмена и повтор на пустой истории ничего не возвращают")
-
-        // Правки: 1 → 2 → 3 (record сохраняет состояние ДО правки)
-        history.record(1)
-        history.record(2)
-        check(history.canUndo && !history.canRedo, "после записи есть отмена, повтора нет")
-
-        let undone = history.undo(current: 3)
-        check(undone == 2 && history.canRedo, "отмена возвращает предыдущий снимок (2)")
-        check(history.undo(current: 2) == 1, "вторая отмена возвращает первый снимок (1)")
-        check(
-            history.redo(current: 1) == 2 && history.redo(current: 2) == 3,
-            "повтор проходит цепочку обратно (2, затем 3)")
-        check(!history.canRedo, "после полного повтора повторять нечего")
-
-        // Новая правка сбрасывает ветку повтора
-        _ = history.undo(current: 3)
-        history.record(3)
-        check(!history.canRedo, "новая запись сбрасывает ветку повтора")
-
-        // Лимит: старые снимки вытесняются
-        var capped = EditHistory<Int>(limit: 3)
-        for value in 1...5 { capped.record(value) }
-        check(
-            capped.undo(current: 6) == 5 && capped.undo(current: 5) == 4
-                && capped.undo(current: 4) == 3 && !capped.canUndo,
-            "лимит 3: остаются только три последних снимка")
-    }
-
-    // MARK: - Оценка размера экспорта
-
-    private static func testExportEstimator() {
-        print("Оценка размера экспорта:")
-        let fullHD = CGSize(width: 1920, height: 1080)
-
-        check(
-            ExportQuality.compact.targetDimensions(forDisplaySize: fullHD) == CGSize(width: 1280, height: 720),
-            "компактное: 1920×1080 → 1280×720")
-        check(
-            ExportQuality.compact.targetDimensions(forDisplaySize: CGSize(width: 1080, height: 1920))
-                == CGSize(width: 720, height: 1280),
-            "компактное: вертикальное 1080×1920 → 720×1280")
-        check(
-            ExportQuality.medium.targetDimensions(forDisplaySize: CGSize(width: 3840, height: 2160))
-                == CGSize(width: 1920, height: 1080),
-            "среднее: 4K ужимается до Full HD")
-        check(
-            ExportQuality.maximum.targetDimensions(forDisplaySize: CGSize(width: 3840, height: 2160))
-                == CGSize(width: 3840, height: 2160),
-            "максимальное: 4K остаётся как есть")
-        check(
-            ExportQuality.compact.targetDimensions(forDisplaySize: CGSize(width: 320, height: 180))
-                == CGSize(width: 320, height: 180),
-            "маленькое видео не растягивается")
-        let odd = ExportQuality.medium.targetDimensions(forDisplaySize: CGSize(width: 1279, height: 717))
-        check(
-            Int(odd.width) % 2 == 0 && Int(odd.height) % 2 == 0,
-            "стороны кадра всегда чётные (получено \(Int(odd.width))×\(Int(odd.height)))")
-
-        check(
-            ExportQuality.compact.estimatedBytes(duration: 300, displaySize: fullHD) == 81_744_000,
-            "компактное, 5 мин Full HD: 81 744 000 байт (≈ 82 МБ)")
-        check(
-            ExportQuality.medium.estimatedBytes(duration: 300, displaySize: fullHD) == 180_492_000,
-            "среднее, 5 мин Full HD: 180 492 000 байт (≈ 180 МБ)")
-        check(
-            ExportQuality.compact.estimateText(duration: 300, displaySize: fullHD) == "≈ 82 МБ",
-            "подпись «≈ 82 МБ»")
-        check(
-            ExportQuality.maximum.estimateText(duration: 1200, displaySize: fullHD) == "≈ 2.5 ГБ",
-            "длинное видео подписывается в гигабайтах")
     }
 
     /// Типы верхнеуровневых кусков MP4-файла по порядку — для проверки, что `moov`
@@ -663,18 +370,6 @@ enum SelfTest {
             check(false, "обработка через кэш-хранилище")
         }
 
-        // Старые проекты без нового поля открываются
-        let oldJSON = """
-            {"id":"\(UUID().uuidString)","name":"Старый проект","clips":[],
-             "createdAt":"2026-01-01T00:00:00Z","updatedAt":"2026-01-01T00:00:00Z",
-             "detection":{"thresholdDB":-40,"minPauseDuration":0.8,"paddingMS":150}}
-            """
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        let decoded = try? decoder.decode(Project.self, from: Data(oldJSON.utf8))
-        check(
-            decoded != nil && decoded?.voiceEnhance == VoiceEnhanceSettings(),
-            "старый проект без настроек голоса открывается с настройками по умолчанию")
     }
 
     // MARK: - Фоновая музыка
@@ -786,18 +481,6 @@ enum SelfTest {
             tail < silenceWithMusic * 0.6,
             "в конце музыка затихает (хвост \(String(format: "%.4f", tail)))")
 
-        // Старый проект без поля музыки открывается с выключенной музыкой
-        let oldJSON = """
-            {"id":"\(UUID().uuidString)","name":"Старый проект","clips":[],
-             "createdAt":"2026-01-01T00:00:00Z","updatedAt":"2026-01-01T00:00:00Z",
-             "detection":{"thresholdDB":-40,"minPauseDuration":0.8,"paddingMS":150}}
-            """
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        let decoded = try? decoder.decode(Project.self, from: Data(oldJSON.utf8))
-        check(
-            decoded != nil && decoded?.music == MusicSettings(),
-            "старый проект без настроек музыки открывается с музыкой по умолчанию (выключена)")
     }
 
     // MARK: - Эквалайзер музыки («не мешать голосу»)
@@ -860,25 +543,5 @@ enum SelfTest {
             check(false, "обработка через кэш-хранилище музыки")
         }
 
-        // Настройки музыки без поля галочки читаются с включённой подстройкой
-        let json = #"{"enabled":true,"volume":18}"#
-        let decoded = try? JSONDecoder().decode(MusicSettings.self, from: Data(json.utf8))
-        check(
-            decoded?.eqEnabled == true,
-            "настройки музыки без галочки читаются с включённой подстройкой под голос")
-
-        // Сравнение настроек «изменилась только громкость»
-        var base = MusicSettings()
-        base.enabled = true
-        var volumeOnly = base
-        volumeOnly.volume = 55
-        var trackChanged = base
-        trackChanged.trackID = "calm"
-        check(
-            volumeOnly.differsOnlyByVolume(from: base),
-            "сдвиг громкости распознаётся как «изменилась только громкость»")
-        check(
-            !trackChanged.differsOnlyByVolume(from: base),
-            "смена мелодии — это не «только громкость»")
     }
 }

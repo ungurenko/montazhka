@@ -70,6 +70,35 @@ struct AIAgentTests {
         }
     }
 
+    @Test
+    func localProcessRunnerFindsExecutableInExtraHomePath() throws {
+        let relativeDirectory = ".montazhka-test-\(UUID().uuidString)"
+        let directory = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(relativeDirectory, isDirectory: true)
+        let executable = directory.appendingPathComponent("test-command")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try Data("#!/bin/sh\n".utf8).write(to: executable)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
+
+        #expect(
+            LocalProcessRunner.executable(named: "test-command", extraPaths: [relativeDirectory])
+                == executable)
+    }
+
+    @Test
+    func localProcessRunnerCanMergeStandardError() async throws {
+        let result = try await LocalProcessRunner.run(
+            executable: URL(fileURLWithPath: "/bin/sh"),
+            arguments: ["-c", "printf output; printf error >&2"],
+            mergeStandardError: true)
+
+        #expect(result.exitCode == 0)
+        let output = String(decoding: result.standardOutput, as: UTF8.self)
+        #expect(output.contains("output"))
+        #expect(output.contains("error"))
+    }
+
     @Test @MainActor
     func connectionRestoresTheSavedModelForEachProvider() {
         let store = AITestPreferenceStore()

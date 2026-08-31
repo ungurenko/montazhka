@@ -33,9 +33,6 @@ struct TranscriptWord: Identifiable, Codable, Equatable, Sendable {
     }
 }
 
-/// Совместимость с прежней локальной моделью слов на время миграции панели.
-typealias TranscriptToken = TranscriptWord
-
 struct TranscriptDocument: Codable, Equatable, Sendable {
     static let currentVersion = 2
 

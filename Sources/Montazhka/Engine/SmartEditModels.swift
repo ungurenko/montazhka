@@ -168,24 +168,7 @@ struct SmartEditSnapshot: Equatable, Sendable {
     }
 }
 
-struct SmartEditProposal: Equatable, Sendable {
-    let id: String
-    let kind: SmartEditKind
-    let firstWordID: String
-    let lastWordID: String
-    let reason: String
-    let confidence: Double
-}
-
-struct SmartEditReview: Equatable, Sendable {
-    enum Decision: String, Codable, Sendable { case accept, reject }
-    let editID: String
-    let decision: Decision
-    let firstWordID: String
-    let lastWordID: String
-    let reason: String
-    let confidence: Double
-}
+enum SmartEditDecision: String, Codable, Sendable { case accept, reject }
 
 struct SmartEditAnalysisResult: Sendable {
     let snapshot: SmartEditSnapshot
@@ -195,15 +178,11 @@ struct SmartEditAnalysisResult: Sendable {
 enum SmartEditError: LocalizedError {
     case emptyTranscript
     case staleAnalysis
-    case invalidResponse
-    case noSafeCandidates
 
     var errorDescription: String? {
         switch self {
         case .emptyTranscript: return "Не удалось найти речь в видимой части монтажа."
         case .staleAnalysis: return "Монтаж изменился. Запусти анализ ещё раз."
-        case .invalidResponse: return "ИИ вернул повреждённый ответ. Попробуй ещё раз."
-        case .noSafeCandidates: return "Речь уже звучит чисто — надёжных вырезок не нашёл."
         }
     }
 }
