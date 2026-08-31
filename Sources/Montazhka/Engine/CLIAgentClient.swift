@@ -1,6 +1,14 @@
 import Foundation
 
-actor CLIAgentClient {
+protocol AICompletionServing: Sendable {
+    func complete(
+        system: String,
+        user: String,
+        configuration: AIRequestConfiguration
+    ) async throws -> String
+}
+
+actor CLIAgentClient: AICompletionServing {
     static let disabledCodexFeatures = [
         "shell_tool",
         "unified_exec",

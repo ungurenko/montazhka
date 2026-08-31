@@ -120,6 +120,27 @@ struct AIAgentTests {
     }
 
     @Test
+    func damagedCLIShortsResponseKeepsSelectedEffortDuringRepair() async throws {
+        let cli = RepairingAICompletionStub()
+        let client = UnifiedAIClient(cli: cli)
+        let configuration = AIRequestConfiguration.codexCLI(
+            modelID: "gpt-5.6-sol",
+            effort: "medium",
+            executable: URL(fileURLWithPath: "/usr/local/bin/codex"))
+        let words = [
+            OpenRouterTranscriptWord(
+                id: "w000001", text: "тест", start: 0, end: 0.4)
+        ]
+
+        let result = try await client.mapShortsWindow(
+            words: words,
+            configuration: configuration)
+
+        #expect(result == ShortsMapEnvelope(schemaVersion: 1, summary: "Готово", peaks: []))
+        #expect(await cli.recordedEfforts() == ["medium", "medium"])
+    }
+
+    @Test
     func installedAgentsReturnMachineReadableJSONWhenSmokeEnabled() async throws {
         guard ProcessInfo.processInfo.environment["MONTAZHKA_CLI_SMOKE"] == "1" else { return }
         let agents = await AIAgentDiscovery.shared.discover(force: true)
@@ -176,6 +197,31 @@ struct AIAgentTests {
         let preferredID = provider == .codexCLI ? "gpt-5.6-luna" : "opencode-go/gpt-5.6-luna"
         return models.first(where: { $0.id == preferredID }) ?? models.first
     }
+}
+
+private actor RepairingAICompletionStub: AICompletionServing {
+    private var efforts: [String?] = []
+
+    func complete(
+        system: String,
+        user: String,
+        configuration: AIRequestConfiguration
+    ) -> String {
+        efforts.append(configuration.effort)
+        if efforts.count == 1 {
+            return """
+                {"schema_version":1,"summary":"Готово","peaks":[{
+                "start_id":"w000001","end_id":"w000001","description":"Тест"}]}
+                """
+        }
+        guard user.contains(#""first_word_id""#),
+            user.contains(#""last_word_id""#),
+            user.contains(#""what""#)
+        else { return "контракт не указан" }
+        return #"{"schema_version":1,"summary":"Готово","peaks":[]}"#
+    }
+
+    func recordedEfforts() -> [String?] { efforts }
 }
 
 private final class AITestPreferenceStore: PreferenceStoring, @unchecked Sendable {

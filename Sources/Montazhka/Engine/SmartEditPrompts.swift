@@ -42,10 +42,54 @@ enum SmartEditPrompts {
     static func repairUser(_ content: String, contract: String) -> String {
         """
         Исправь только формат следующего ответа под контракт \(contract). Смысл, ID и решения не меняй. Верни только JSON.
+        Below are FORMAT examples only — do not copy content, names, or specific data from them. Use only the structure and tone.
+        Точная структура контракта:
+        \(contractShape(contract))
         DATA_BROKEN_RESPONSE_BEGIN
         \(content)
         DATA_BROKEN_RESPONSE_END
         """
+    }
+
+    private static func contractShape(_ contract: String) -> String {
+        switch contract {
+        case "proposal_schema_v1":
+            return """
+                {"schema_version":1,"edits":[{"id":"edit_1","kind":"filler_sound",
+                "first_word_id":"w000001","last_word_id":"w000002","reason":"...",
+                "confidence":0.9}]}
+                """
+        case "review_schema_v1":
+            return """
+                {"schema_version":1,"decisions":[{"edit_id":"edit_1","decision":"accept",
+                "first_word_id":"w000001","last_word_id":"w000002","reason":"...",
+                "confidence":0.9}]}
+                """
+        case "shorts_map_schema_v1":
+            return """
+                {"schema_version":1,"summary":"...","peaks":[{
+                "first_word_id":"w000001","last_word_id":"w000002","what":"..."}]}
+                """
+        case "shorts_clips_schema_v1":
+            return """
+                {"schema_version":1,"clips":[{"id":"clip_1",
+                "first_word_id":"w000001","last_word_id":"w000002","title":"...",
+                "reason":"...","confidence":0.9,"hook":"...","pattern":"...","topic":"...",
+                "hook_score":8,"standalone_score":8,"payoff_score":8,"pacing_score":8}]}
+                """
+        case "shorts_decisions_schema_v1":
+            return """
+                {"schema_version":1,"decisions":[{"clip_id":"clip_1","decision":"accept",
+                "rank":1,"title":"...","reason":"...","confidence":0.9}]}
+                """
+        case "shorts_verdicts_schema_v1":
+            return """
+                {"schema_version":1,"verdicts":[{
+                "clip_id":"clip_1","keep":true,"verdict":"..."}]}
+                """
+        default:
+            return "Сохрани schema_version=1 и исходные данные без переименования полей."
+        }
     }
 
     private static func encoded<T: Encodable>(_ value: T) throws -> String {

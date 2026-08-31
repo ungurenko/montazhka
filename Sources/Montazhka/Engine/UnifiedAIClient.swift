@@ -2,10 +2,14 @@ import Foundation
 
 actor UnifiedAIClient: SmartEditAIServing, ShortsAIServing {
     private let openRouter: OpenRouterClient
-    private let cli = CLIAgentClient()
+    private let cli: any AICompletionServing
 
-    init(openRouter: OpenRouterClient = OpenRouterClient()) {
+    init(
+        openRouter: OpenRouterClient = OpenRouterClient(),
+        cli: any AICompletionServing = CLIAgentClient()
+    ) {
         self.openRouter = openRouter
+        self.cli = cli
     }
 
     func ensureModelAvailable(_ configuration: AIRequestConfiguration) async throws {
@@ -149,12 +153,9 @@ actor UnifiedAIClient: SmartEditAIServing, ShortsAIServing {
         contract: String,
         configuration: AIRequestConfiguration
     ) async throws -> String {
-        let repairConfiguration =
-            configuration.effort == "minimal"
-            ? configuration : configuration.withEffort("minimal")
         return try await cli.complete(
             system: "Ты исправляешь только JSON-формат.",
             user: SmartEditPrompts.repairUser(content, contract: contract),
-            configuration: repairConfiguration)
+            configuration: configuration)
     }
 }
