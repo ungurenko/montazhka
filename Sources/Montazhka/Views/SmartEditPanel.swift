@@ -288,22 +288,20 @@ struct SmartEditPanel: View {
     @ViewBuilder
     private var results: some View {
         if case .failed(let message) = controller.smartEditStatus {
-            Label(message, systemImage: "exclamationmark.triangle.fill")
-                .font(.system(size: Theme.TypeScale.helper))
-                .foregroundStyle(Theme.danger)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(12)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Theme.danger.opacity(0.07))
-                .clipShape(RoundedRectangle(cornerRadius: Theme.radiusSmall, style: .continuous))
+            StatusBanner(
+                kind: .error,
+                title: message,
+                hint: "Проверь подключение к модели и запусти анализ ещё раз.",
+                actions: [
+                    StatusBanner.Action(
+                        title: "Повторить анализ",
+                        perform: { controller.analyzeSmartEdits() })
+                ])
         } else if controller.smartEditStatus == .ready && controller.smartEditCandidates.isEmpty {
-            Label(
-                "Речь уже звучит чисто — надёжных вырезок не нашёл",
-                systemImage: "checkmark.seal.fill"
-            )
-            .font(.system(size: 12, weight: .medium))
-            .foregroundStyle(Theme.textSecondary)
-            .fixedSize(horizontal: false, vertical: true)
+            StatusBanner(
+                kind: .success,
+                title: "Речь уже звучит чисто",
+                hint: "Надёжных вырезок не нашлось — резать нечего.")
         } else if !controller.smartEditCandidates.isEmpty {
             let obvious = controller.smartEditCandidates.filter { $0.kind != .semanticRepeat }
             let semantic = controller.smartEditCandidates.filter { $0.kind == .semanticRepeat }

@@ -2,60 +2,19 @@ import SwiftUI
 
 // MARK: - Кнопки с текстом
 
-/// Главное действие экрана: заливка акцентом, белый текст.
-struct PrimaryButtonStyle: ButtonStyle {
-    /// Растянуть по ширине родителя — для кнопок внизу панели.
-    var fillsWidth = false
-    var compact = false
-
-    func makeBody(configuration: Configuration) -> some View {
-        TextButtonSurface(
-            configuration: configuration,
-            kind: .primary,
-            fillsWidth: fillsWidth,
-            compact: compact)
-    }
-}
-
-/// Второстепенное действие: белая подложка с границей.
-struct SecondaryButtonStyle: ButtonStyle {
-    var fillsWidth = false
-    var compact = false
-
-    func makeBody(configuration: Configuration) -> some View {
-        TextButtonSurface(
-            configuration: configuration,
-            kind: .secondary,
-            fillsWidth: fillsWidth,
-            compact: compact)
-    }
-}
-
 /// Действие-ссылка: только текст акцентом, без подложки.
 struct QuietButtonStyle: ButtonStyle {
     var compact = false
 
     func makeBody(configuration: Configuration) -> some View {
-        TextButtonSurface(
-            configuration: configuration,
-            kind: .quiet,
-            fillsWidth: false,
-            compact: compact)
+        QuietButtonSurface(configuration: configuration, compact: compact)
     }
 }
 
-private enum TextButtonKind {
-    case primary
-    case secondary
-    case quiet
-}
-
-/// Общая подложка текстовых кнопок: держит все четыре состояния —
-/// обычное, наведение, нажатие и выключенное.
-private struct TextButtonSurface: View {
+/// Подложка кнопки-ссылки: даёт ей наведение и нажатие, которых у
+/// голого `.plain` нет вовсе.
+private struct QuietButtonSurface: View {
     let configuration: ButtonStyleConfiguration
-    let kind: TextButtonKind
-    let fillsWidth: Bool
     let compact: Bool
 
     @Environment(\.isEnabled) private var isEnabled
@@ -65,13 +24,11 @@ private struct TextButtonSurface: View {
     var body: some View {
         configuration.label
             .typeStyle(compact ? .helperEmphasis : .bodyEmphasis)
-            .foregroundStyle(foreground)
-            .padding(.horizontal, compact ? Theme.Spacing.small : Theme.Spacing.snug)
-            .padding(.vertical, compact ? Theme.Spacing.compact : Theme.Spacing.small)
-            .frame(maxWidth: fillsWidth ? .infinity : nil)
+            .foregroundStyle(Theme.accent)
+            .padding(.horizontal, compact ? Theme.Spacing.compact : Theme.Spacing.small)
+            .padding(.vertical, Theme.Spacing.compact)
             .background(background)
             .clipShape(shape)
-            .overlay { borderOverlay }
             .contentShape(shape)
             .opacity(isEnabled ? 1 : 0.4)
             .scaleEffect(pressScale)
@@ -84,8 +41,6 @@ private struct TextButtonSurface: View {
         RoundedRectangle(cornerRadius: Theme.radiusSmall, style: .continuous)
     }
 
-    private var isHighlighted: Bool { hovering && isEnabled }
-
     private var pressScale: CGFloat {
         guard configuration.isPressed, isEnabled, !reduceMotion else { return 1 }
         return 0.97
@@ -95,42 +50,14 @@ private struct TextButtonSurface: View {
         Theme.Motion.adapting(Theme.Motion.press, reduceMotion: reduceMotion)
     }
 
-    private var foreground: Color {
-        switch kind {
-        case .primary: return .white
-        case .secondary: return Theme.textPrimary
-        case .quiet: return Theme.accent
-        }
-    }
-
     @ViewBuilder
     private var background: some View {
-        switch kind {
-        case .primary:
-            Theme.accent.opacity(configuration.isPressed ? 0.82 : (isHighlighted ? 0.92 : 1))
-        case .secondary:
-            if configuration.isPressed {
-                Theme.selected
-            } else if isHighlighted {
-                Theme.hover
-            } else {
-                Theme.card
-            }
-        case .quiet:
-            if configuration.isPressed {
-                Theme.selected
-            } else if isHighlighted {
-                Theme.hover
-            } else {
-                Color.clear
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var borderOverlay: some View {
-        if kind == .secondary {
-            shape.stroke(isHighlighted ? Theme.accent.opacity(0.35) : Theme.border, lineWidth: 1)
+        if configuration.isPressed {
+            Theme.selected
+        } else if hovering && isEnabled {
+            Theme.hover
+        } else {
+            Color.clear
         }
     }
 }
@@ -240,20 +167,6 @@ private struct IconButtonSurface: View {
 }
 
 // MARK: - Короткая запись
-
-extension ButtonStyle where Self == PrimaryButtonStyle {
-    static var mzPrimary: Self { .init() }
-    static func mzPrimary(fillsWidth: Bool = false, compact: Bool = false) -> Self {
-        .init(fillsWidth: fillsWidth, compact: compact)
-    }
-}
-
-extension ButtonStyle where Self == SecondaryButtonStyle {
-    static var mzSecondary: Self { .init() }
-    static func mzSecondary(fillsWidth: Bool = false, compact: Bool = false) -> Self {
-        .init(fillsWidth: fillsWidth, compact: compact)
-    }
-}
 
 extension ButtonStyle where Self == QuietButtonStyle {
     static var mzQuiet: Self { .init() }

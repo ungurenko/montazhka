@@ -161,24 +161,14 @@ private struct TrackRow: View {
     let select: () -> Void
 
     var body: some View {
-        Button(action: select) {
-            HStack(spacing: 8) {
-                Image(systemName: selected ? "largecircle.fill.circle" : "circle")
-                    .font(.system(size: 14))
-                    .foregroundStyle(selected ? Theme.accent : Theme.textSecondary.opacity(0.5))
-                Image(systemName: "music.note")
-                    .font(.system(size: Theme.TypeScale.helper))
-                    .foregroundStyle(Theme.textSecondary)
-                Text(title)
-                    .font(.system(size: Theme.TypeScale.body))
-                    .foregroundStyle(Theme.textPrimary)
-                    .lineLimit(1)
-                Spacer()
-            }
-            .padding(.vertical, 7)
-            .padding(.horizontal, Theme.Spacing.small)
-            .rowSurfaceStyle(selected: selected)
-        }
-        .buttonStyle(.plain)
+        SelectableRow(
+            marker: .choice,
+            title: title,
+            titleStyle: .body,
+            leadingSystemImage: "music.note",
+            isSelected: selected,
+            select: select
+        )
+        .rowSurfaceStyle(selected: selected)
     }
 }

@@ -77,6 +77,8 @@ final class EditorController: ExportPreparing {
         set { waveformAnalysis.candidates = newValue }
     }
     var isDetecting: Bool { waveformAnalysis.isDetecting }
+    /// Поиск пауз уже отработал — можно честно сказать, нашлось что-то или нет.
+    var hasPauseResult: Bool { waveformAnalysis.hasResult }
     var waveformVersion: Int { waveformAnalysis.version }
     var activeInspector: EditorInspectorSection?
     private(set) var voiceStatus: VoiceEnhanceStatus = .idle

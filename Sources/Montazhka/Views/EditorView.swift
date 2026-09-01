@@ -105,30 +105,23 @@ struct EditorView: View {
     // MARK: - Верхняя панель
 
     private var topBar: some View {
-        HStack(spacing: 12) {
-            Button {
-                app.closeProject()
-            } label: {
-                Label("Проекты", systemImage: "chevron.left")
-                    .font(.system(size: 13, weight: .medium))
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(Theme.accent)
-            .disabled(app.isProjectOperationInProgress)
-            .accessibilityIdentifier("editor.back")
-
+        TopBar(
+            back: TopBarBackButton(
+                title: "Проекты",
+                accessibilityIdentifier: "editor.back",
+                isDisabled: app.isProjectOperationInProgress,
+                action: { app.closeProject() })
+        ) {
             TextField("Название", text: $projectName)
                 .textFieldStyle(.plain)
-                .font(.system(size: Theme.TypeScale.sectionTitle, weight: .semibold))
+                .typeStyle(.sectionTitle)
                 .foregroundStyle(Theme.textPrimary)
                 .frame(width: 220)
                 .onSubmit { controller.renameProject(projectName) }
                 .accessibilityIdentifier("editor.projectName")
 
             saveStatusView
-
-            Spacer()
-
+        } actions: {
             Button {
                 let urls = AppModel.pickVideos()
                 controller.addClips(urls: urls)
@@ -207,9 +200,6 @@ struct EditorView: View {
             .disabled(controller.project.clips.isEmpty)
             .accessibilityIdentifier("editor.export")
         }
-        .padding(.leading, 84)  // место под «светофор» окна
-        .padding(.trailing, 16)
-        .frame(height: 56)
     }
 
     @ViewBuilder
@@ -217,19 +207,19 @@ struct EditorView: View {
         switch controller.activeInspector {
         case .pauses:
             PausePanel(controller: controller)
-                .frame(width: 340)
+                .frame(width: Theme.Metrics.inspectorWidth)
                 .transition(inspectorTransition)
         case .smartEdit:
             SmartEditPanel(controller: controller)
-                .frame(width: 340)
+                .frame(width: Theme.Metrics.inspectorWidth)
                 .transition(inspectorTransition)
         case .voice:
             VoicePanel(controller: controller)
-                .frame(width: 340)
+                .frame(width: Theme.Metrics.inspectorWidth)
                 .transition(inspectorTransition)
         case .music:
             MusicPanel(controller: controller)
-                .frame(width: 340)
+                .frame(width: Theme.Metrics.inspectorWidth)
                 .transition(inspectorTransition)
         case nil:
             EmptyView()
@@ -286,14 +276,11 @@ struct EditorView: View {
     }
 
     private var dropHint: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "arrow.down.doc")
-                .font(.system(size: 36, weight: .light))
-            Text("Перетащи сюда видео\nили нажми «Добавить видео»")
-                .multilineTextAlignment(.center)
-                .font(.system(size: Theme.TypeScale.sectionTitle))
-        }
-        .foregroundStyle(.white.opacity(0.55))
+        EmptyStateView(
+            systemImage: "arrow.down.doc",
+            title: "Перетащи сюда видео",
+            message: "Или нажми «Добавить видео» в верхней панели",
+            appearance: .onMedia)
     }
 
     @ViewBuilder

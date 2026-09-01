@@ -20,6 +20,19 @@ struct PausePanel: View {
                         if !controller.candidates.isEmpty {
                             resultsBlock
                                 .id("results")
+                        } else if controller.hasPauseResult && !controller.isDetecting {
+                            EmptyStateView(
+                                systemImage: "waveform",
+                                title: "Пауз не нашлось",
+                                message:
+                                    "Речь идёт без заметных остановок. Подними чувствительность "
+                                    + "или уменьши минимальную паузу и поищи ещё раз.",
+                                action: EmptyStateView.Action(
+                                    title: "Искать снова",
+                                    accessibilityIdentifier: "pauses.retry",
+                                    perform: { controller.detectPauses() })
+                            )
+                            .frame(maxWidth: .infinity)
                         }
                     }
                     .padding(.horizontal, Theme.Spacing.medium)
@@ -159,43 +172,26 @@ private struct CandidateRow: View {
     let controller: EditorController
 
     var body: some View {
-        HStack(spacing: 8) {
-            Toggle(
-                "",
-                isOn: Binding(
+        SelectableRow(
+            marker: .checkbox(
+                Binding(
                     get: { candidate.enabled },
-                    set: { _ in controller.toggleCandidate(candidate.id) }
-                )
-            )
-            .toggleStyle(.checkbox)
-            .labelsHidden()
-
-            VStack(alignment: .leading, spacing: Theme.Spacing.compact) {
-                Text("№\(index) · \(TimeFormat.compact(candidate.start))")
-                    .font(.system(size: 12, weight: .medium, design: .monospaced))
-                    .foregroundStyle(Theme.textPrimary)
-                Text(String(format: "%.1f сек тишины", candidate.duration))
-                    .font(.system(size: Theme.TypeScale.helper))
-                    .foregroundStyle(Theme.textSecondary)
-            }
-
-            Spacer()
-
-            Button {
+                    set: { _ in controller.toggleCandidate(candidate.id) })),
+            title: "№\(index) · \(TimeFormat.compact(candidate.start))",
+            titleStyle: .time,
+            subtitle: String(format: "%.1f сек тишины", candidate.duration),
+            isSelected: candidate.enabled,
+            tint: Theme.pauseHighlight
+        ) {
+            IconButton(
+                icon: "play.circle",
+                help: "Послушать это место",
+                size: .toolbar
+            ) {
                 controller.previewCandidate(candidate)
-            } label: {
-                Image(systemName: "play.circle")
-                    .font(.system(size: 16))
-                    .foregroundStyle(Theme.accent)
             }
-            .buttonStyle(.plain)
-            .help("Послушать это место")
+            .foregroundStyle(Theme.accent)
         }
-        .padding(.horizontal, Theme.Spacing.small)
-        .padding(.vertical, 6)
-        .background(
-            RoundedRectangle(cornerRadius: Theme.radiusSmall, style: .continuous)
-                .fill(candidate.enabled ? Theme.pauseHighlight.opacity(0.08) : Color.black.opacity(0.02))
-        )
+        .clipShape(RoundedRectangle(cornerRadius: Theme.radiusSmall, style: .continuous))
     }
 }

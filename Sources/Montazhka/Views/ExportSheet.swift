@@ -188,30 +188,19 @@ private struct QualityRow: View {
     let select: () -> Void
 
     var body: some View {
-        Button(action: select) {
-            HStack(spacing: 12) {
-                Image(systemName: selected ? "checkmark.circle.fill" : "circle")
-                    .font(.system(size: 16))
-                    .foregroundStyle(selected ? Theme.accent : Theme.textSecondary.opacity(0.5))
-                VStack(alignment: .leading, spacing: Theme.Spacing.compact) {
-                    Text(quality.title)
-                        .font(.system(size: Theme.TypeScale.body, weight: .semibold))
-                        .foregroundStyle(Theme.textPrimary)
-                    Text("\(dimensionsText) · \(purposeText)")
-                        .font(.system(size: Theme.TypeScale.helper))
-                        .foregroundStyle(Theme.textSecondary)
-                }
-                Spacer()
-                Text(estimate)
-                    .font(.system(size: 12, design: .monospaced))
-                    .foregroundStyle(selected ? Theme.accent : Theme.textSecondary)
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, Theme.Spacing.small)
-            .background(selected ? Theme.selected : Color.clear)
+        SelectableRow(
+            marker: .choice,
+            title: quality.title,
+            subtitle: "\(dimensionsText) · \(purposeText)",
+            isSelected: selected,
+            accessibilityIdentifier: "export.quality.\(quality.rawValue)",
+            select: select
+        ) {
+            Text(estimate)
+                .typeStyle(.helper)
+                .monospaced()
+                .foregroundStyle(selected ? Theme.accent : Theme.textSecondary)
         }
-        .buttonStyle(.plain)
-        .accessibilityIdentifier("export.quality.\(quality.rawValue)")
     }
 
     private var dimensionsText: String {

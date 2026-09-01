@@ -6,6 +6,9 @@ import Observation
 final class WaveformAnalysisCoordinator {
     var candidates: [PauseCandidate] = []
     private(set) var isDetecting = false
+    /// Поиск уже отработал хотя бы раз на текущих настройках.
+    /// Без этого пустой список пауз неотличим от «ещё не искали».
+    private(set) var hasResult = false
     private(set) var version = 0
 
     let store: WaveformStore
@@ -41,6 +44,7 @@ final class WaveformAnalysisCoordinator {
         analysisDetached?.cancel()
         let current = detectionGeneration.advance()
         isDetecting = true
+        hasResult = false
         detectionTask = Task { [weak self, store] in
             await withTaskGroup(of: Void.self) { group in
                 for path in Set(clips.map(\.sourcePath)) {
@@ -62,6 +66,7 @@ final class WaveformAnalysisCoordinator {
             guard !Task.isCancelled, detectionGeneration.isCurrent(current) else { return }
             version += 1
             candidates = found
+            hasResult = true
             isDetecting = false
         }
     }
@@ -75,7 +80,11 @@ final class WaveformAnalysisCoordinator {
         analysisDetached = nil
         _ = detectionGeneration.advance()
         isDetecting = false
+        hasResult = false
     }
 
-    func clearCandidates() { candidates = [] }
+    func clearCandidates() {
+        candidates = []
+        hasResult = false
+    }
 }

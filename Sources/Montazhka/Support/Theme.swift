@@ -40,6 +40,18 @@ enum Theme {
         static let time: CGFloat = 13
     }
 
+    /// Размеры, которые обязаны совпадать на всех экранах.
+    enum Metrics {
+        /// Высота верхней панели.
+        static let topBarHeight: CGFloat = 56
+        /// Отступ слева под «светофор» окна — заголовок не должен налезать на кнопки.
+        static let trafficLightInset: CGFloat = 84
+        /// Ширина правой панели-инспектора.
+        static let inspectorWidth: CGFloat = 340
+        /// Высота шапки внутри панели-инспектора.
+        static let inspectorHeaderHeight: CGFloat = 52
+    }
+
     /// Тень означает высоту слоя, а не украшение: чем выше слой над
     /// содержимым, тем мягче и дальше падает тень.
     enum Elevation {

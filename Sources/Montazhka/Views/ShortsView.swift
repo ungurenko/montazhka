@@ -25,7 +25,7 @@ struct ShortsView: View {
                 }
                 .cardStyle()
                 sidePanel
-                    .frame(width: 340)
+                    .frame(width: Theme.Metrics.inspectorWidth)
             }
             .padding(.horizontal, Theme.Spacing.medium)
             .padding(.bottom, Theme.Spacing.medium)
@@ -43,33 +43,18 @@ struct ShortsView: View {
     // MARK: - Верхняя панель
 
     private var topBar: some View {
-        HStack(spacing: 12) {
-            Button {
-                app.closeShorts()
-            } label: {
-                Label("Назад", systemImage: "chevron.left")
-                    .font(.system(size: 13, weight: .medium))
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(Theme.accent)
-            .disabled(app.isProjectOperationInProgress)
-            .accessibilityIdentifier("shorts.back")
-
-            VStack(alignment: .leading, spacing: Theme.Spacing.compact) {
-                Text("Нарезка на shorts")
-                    .font(.system(size: Theme.TypeScale.sectionTitle, weight: .semibold))
-                    .foregroundStyle(Theme.textPrimary)
-                Text("\(controller.fileName) · \(TimeFormat.compact(controller.sourceDuration)) · русская речь")
-                    .font(.system(size: Theme.TypeScale.helper))
-                    .foregroundStyle(Theme.textSecondary)
-                    .lineLimit(1)
-            }
-
-            Spacer()
+        TopBar(
+            back: TopBarBackButton(
+                title: "Назад",
+                accessibilityIdentifier: "shorts.back",
+                isDisabled: app.isProjectOperationInProgress,
+                action: { app.closeShorts() })
+        ) {
+            TopBarTitle(
+                title: "Нарезка на shorts",
+                subtitle:
+                    "\(controller.fileName) · \(TimeFormat.compact(controller.sourceDuration)) · русская речь")
         }
-        .padding(.leading, 84)  // место под «светофор» окна
-        .padding(.trailing, 16)
-        .frame(height: 56)
     }
 
     // MARK: - Плеер
@@ -108,14 +93,11 @@ struct ShortsView: View {
                 .foregroundStyle(.white)
                 .padding(24)
             } else if controller.candidates.isEmpty && !controller.status.isWorking {
-                VStack(spacing: Theme.Spacing.small) {
-                    Image(systemName: "sparkles.rectangle.stack")
-                        .font(.system(size: 32, weight: .light))
-                    Text("Выбери параметры справа\nи нажми «Найти моменты»")
-                        .multilineTextAlignment(.center)
-                        .font(.system(size: Theme.TypeScale.body))
-                }
-                .foregroundStyle(.white.opacity(0.55))
+                EmptyStateView(
+                    systemImage: "sparkles.rectangle.stack",
+                    title: "Готов искать сильные моменты",
+                    message: "Выбери параметры справа и нажми «Найти моменты»",
+                    appearance: .onMedia)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -243,15 +225,8 @@ struct ShortsView: View {
             || controller.sourceDuration < ShortsLimits.minSourceDuration || !SmartEditPlatform.isSupported
     }
 
-    private func errorLabel(_ message: String) -> some View {
-        Label(message, systemImage: "exclamationmark.triangle.fill")
-            .font(.system(size: Theme.TypeScale.helper))
-            .foregroundStyle(Theme.danger)
-            .fixedSize(horizontal: false, vertical: true)
-            .padding(Theme.Spacing.small)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Theme.danger.opacity(0.07))
-            .clipShape(RoundedRectangle(cornerRadius: Theme.radiusSmall, style: .continuous))
+    private func errorLabel(_ message: String, hint: String? = nil) -> some View {
+        StatusBanner(kind: .error, title: message, hint: hint)
     }
 
     // MARK: - Прогресс анализа
