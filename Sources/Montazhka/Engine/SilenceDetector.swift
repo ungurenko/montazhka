@@ -15,17 +15,13 @@ struct PauseCandidate: Identifiable, Equatable {
 }
 
 enum SilenceDetector {
-    /// Ищет тихие участки внутри каждого клипа по заранее посчитанным пикам громкости.
+    /// Ищет тихие участки внутри каждого клипа по заранее посчитанным пикам
+    /// громкости. Результат — в секундах ленты.
     static func findPauses(
         clips: [Clip],
         peaksFor: (String) -> [Float]?,
         settings: DetectionSettings
     ) -> [PauseCandidate] {
-        let wps = WaveformStore.windowsPerSecond
-        let threshold = Float(pow(10.0, settings.thresholdDB / 20.0))
-        let padding = settings.paddingMS / 1000.0
-        let minCut = 0.15  // совсем короткие вырезки не имеют смысла
-
         var result: [PauseCandidate] = []
         var timelineOffset = 0.0
 
@@ -34,32 +30,56 @@ enum SilenceDetector {
             defer { timelineOffset += clip.duration }
             guard let peaks = peaksFor(clip.sourcePath), !peaks.isEmpty else { continue }
 
-            let first = max(0, Int(clip.start * wps))
-            let last = min(peaks.count, Int(clip.end * wps))
-            guard first < last else { continue }
+            let offset = timelineOffset - clip.start
+            for pause in pauses(in: peaks, from: clip.start, to: clip.end, settings: settings) {
+                var moved = pause
+                moved.start += offset
+                moved.end += offset
+                moved.fullStart += offset
+                moved.fullEnd += offset
+                result.append(moved)
+            }
+        }
+        return result
+    }
 
-            var runStart: Int? = nil
-            for i in first...last {
-                let silent = i < last && peaks[i] < threshold
-                if silent && runStart == nil { runStart = i }
-                if !silent, let rs = runStart {
-                    runStart = nil
-                    let runFrom = Double(rs) / wps  // секунды исходника
-                    let runTo = Double(i) / wps
-                    guard runTo - runFrom >= settings.minPauseDuration else { continue }
+    /// Тихие участки внутри одного диапазона исходника. Все времена — секунды
+    /// исходника. Чистая функция: её переиспользует нарезка shorts, где нет
+    /// ленты и клипов.
+    static func pauses(
+        in peaks: [Float],
+        from: Double,
+        to: Double,
+        settings: DetectionSettings
+    ) -> [PauseCandidate] {
+        let wps = WaveformStore.windowsPerSecond
+        let threshold = Float(pow(10.0, settings.thresholdDB / 20.0))
+        let padding = settings.paddingMS / 1000.0
+        let minCut = 0.15  // совсем короткие вырезки не имеют смысла
 
-                    let cutFrom = runFrom + padding
-                    let cutTo = runTo - padding
-                    guard cutTo - cutFrom >= minCut else { continue }
+        let first = max(0, Int(from * wps))
+        let last = min(peaks.count, Int(to * wps))
+        guard first < last else { return [] }
 
-                    let toTimeline = { (src: Double) in timelineOffset + (src - clip.start) }
-                    result.append(
-                        PauseCandidate(
-                            start: toTimeline(cutFrom),
-                            end: toTimeline(cutTo),
-                            fullStart: toTimeline(runFrom),
-                            fullEnd: toTimeline(runTo)))
-                }
+        var result: [PauseCandidate] = []
+        var runStart: Int? = nil
+        for i in first...last {
+            let silent = i < last && peaks[i] < threshold
+            if silent && runStart == nil { runStart = i }
+            if !silent, let rs = runStart {
+                runStart = nil
+                let runFrom = Double(rs) / wps
+                let runTo = Double(i) / wps
+                guard runTo - runFrom >= settings.minPauseDuration else { continue }
+
+                let cutFrom = runFrom + padding
+                let cutTo = runTo - padding
+                guard cutTo - cutFrom >= minCut else { continue }
+
+                result.append(
+                    PauseCandidate(
+                        start: cutFrom, end: cutTo,
+                        fullStart: runFrom, fullEnd: runTo))
             }
         }
         return result

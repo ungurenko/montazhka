@@ -24,7 +24,7 @@ enum ShortsVideoCompositionBuilder {
         asset: AVAsset,
         frameRequest: ShortsFrameRequest,
         subtitleMode: ShortsSubtitleMode,
-        subtitleTimeline: ShortsSubtitleTimeline
+        subtitleTimeMap: ShortsTimeMap
     ) async throws -> ShortsVideoCompositionPlan {
         let frameComposition: AVMutableVideoComposition?
         switch frameRequest {
@@ -68,18 +68,15 @@ enum ShortsVideoCompositionBuilder {
         switch subtitleMode {
         case .off:
             videoComposition = base
-        case let .on(words, style, size):
-            let cues = ShortsSubtitleCueBuilder.make(
-                words: words,
-                sourceStart: subtitleTimeline.sourceStart,
-                sourceEnd: subtitleTimeline.sourceEnd,
-                relativeTo: subtitleTimeline.relativeTo)
+        case let .on(words, style, size, highlight):
+            let cues = ShortsSubtitleCueBuilder.make(words: words, timeMap: subtitleTimeMap)
             videoComposition = ShortsSubtitleRenderer.applying(
                 base,
                 cues: cues,
                 style: style,
                 size: size,
-                duration: subtitleTimeline.duration)
+                highlight: highlight,
+                duration: subtitleTimeMap.outputDuration)
         }
 
         return ShortsVideoCompositionPlan(

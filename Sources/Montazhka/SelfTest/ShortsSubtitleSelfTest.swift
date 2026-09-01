@@ -25,6 +25,8 @@ enum ShortsSubtitleSelfTest {
             .appendingPathComponent("montazhka-selftest-subtitles-\(runID).mp4")
         let croppedOutput = FileManager.default.temporaryDirectory
             .appendingPathComponent("montazhka-selftest-subtitles-cropped-\(runID).mp4")
+        let trimmedOutput = FileManager.default.temporaryDirectory
+            .appendingPathComponent("montazhka-selftest-subtitles-trimmed-\(runID).mp4")
         let blackFitOutput = FileManager.default.temporaryDirectory
             .appendingPathComponent("montazhka-selftest-fit-black-\(runID).mp4")
         let whiteFitOutput = FileManager.default.temporaryDirectory
@@ -33,6 +35,7 @@ enum ShortsSubtitleSelfTest {
             try? FileManager.default.removeItem(at: source)
             try? FileManager.default.removeItem(at: output)
             try? FileManager.default.removeItem(at: croppedOutput)
+            try? FileManager.default.removeItem(at: trimmedOutput)
             try? FileManager.default.removeItem(at: blackFitOutput)
             try? FileManager.default.removeItem(at: whiteFitOutput)
         }
@@ -49,19 +52,30 @@ enum ShortsSubtitleSelfTest {
                     start: 2.0, end: 2.8, confidence: 1),
             ]
             let mode = ShortsSubtitleMode.on(
-                words: words, style: .boxed, size: .large)
-            let cues = ShortsSubtitleCueBuilder.make(
-                words: words, sourceStart: 1, sourceEnd: 3, relativeTo: 1)
+                words: words, style: .boxed, size: .large, highlight: true)
+            let timeMap = ShortsTimeMap.single(start: 1, end: 3)
+            let cues = ShortsSubtitleCueBuilder.make(words: words, timeMap: timeMap)
             check(
                 cues.count == 2 && abs((cues.first?.start ?? 0) - 0.2) < 0.001,
                 "субтитры собираются с относительными таймкодами")
+
+            // Вырезанная пауза сдвигает всё, что после неё: слова второй фразы
+            // приезжают к концу первой.
+            let trimmed = ShortsTimeMap(segments: [
+                ShortsSegment(start: 1, end: 1.9), ShortsSegment(start: 1.95, end: 3),
+            ])
+            let trimmedCues = ShortsSubtitleCueBuilder.make(words: words, timeMap: trimmed)
+            check(
+                trimmedCues.count == 2
+                    && abs((trimmedCues.last?.start ?? 0) - 0.95) < 0.01,
+                "вырезанная пауза сдвигает субтитры на своей длине")
 
             let sourceAsset = AVURLAsset(url: source)
             let disabledPlan = try await ShortsVideoCompositionBuilder.make(
                 asset: sourceAsset,
                 frameRequest: .original,
                 subtitleMode: .off,
-                subtitleTimeline: .empty)
+                subtitleTimeMap: .single(start: 0, end: 0))
             check(
                 disabledPlan.videoComposition == nil,
                 "выключенные субтитры не добавляют видеокомпозицию")
@@ -73,12 +87,13 @@ enum ShortsSubtitleSelfTest {
                 previewPlan == nil,
                 "горизонтальный preview оставляет текстовый слой интерфейсу")
             let previewOverlay = ShortsSubtitleOverlayBuilder.make(
-                at: 1.4, sourceStart: 1, sourceEnd: 3, mode: mode)
+                at: 0.4, timeMap: timeMap, mode: mode)
             check(
                 previewOverlay?.text == "Проверяем автоматические субтитры"
                     && previewOverlay?.style == .boxed
-                    && previewOverlay?.size == .large,
-                "preview получает активную фразу и выбранный стиль")
+                    && previewOverlay?.size == .large
+                    && previewOverlay?.activeWordIndex == 0,
+                "preview получает активную фразу, стиль и подсвеченное слово")
             let croppedPreview = try await ShortsExporter.previewComposition(
                 for: sourceAsset,
                 frameSettings: ShortsFrameSettings(mode: .verticalCrop))
@@ -93,12 +108,9 @@ enum ShortsSubtitleSelfTest {
                     let variant = try await ShortsVideoCompositionBuilder.make(
                         asset: sourceAsset,
                         frameRequest: .original,
-                        subtitleMode: .on(words: words, style: style, size: size),
-                        subtitleTimeline: ShortsSubtitleTimeline(
-                            sourceStart: 1,
-                            sourceEnd: 3,
-                            relativeTo: 0,
-                            duration: 4))
+                        subtitleMode: .on(
+                            words: words, style: style, size: size, highlight: true),
+                        subtitleTimeMap: .single(start: 1, end: 3))
                     everyVariantHasLayer =
                         everyVariantHasLayer
                         && variant.videoComposition?.animationTool != nil
@@ -110,9 +122,10 @@ enum ShortsSubtitleSelfTest {
                 id: UUID(), rank: 1, title: "Проверка субтитров", reason: "", hook: "",
                 pattern: "", excerpt: "", start: 1, end: 3, confidence: 1,
                 hookScore: 10, standaloneScore: 10, payoffScore: 10, pacingScore: 10,
-                enabled: true)
+                segments: [], enabled: true)
             try await ShortsExporter.export(
                 candidate: candidate,
+                timeMap: timeMap,
                 sourceURL: source,
                 displaySize: CGSize(width: 320, height: 180),
                 quality: .compact,
@@ -129,6 +142,7 @@ enum ShortsSubtitleSelfTest {
 
             try await ShortsExporter.export(
                 candidate: candidate,
+                timeMap: timeMap,
                 sourceURL: source,
                 displaySize: CGSize(width: 320, height: 180),
                 quality: .compact,
@@ -143,12 +157,17 @@ enum ShortsSubtitleSelfTest {
                 label: "вертикальный MP4 сохраняет субтитры после кропа",
                 check: check)
 
+            try await checkTrimmedExport(
+                candidate: candidate, source: source, mode: mode,
+                output: trimmedOutput, check: check)
+
             for (color, destination) in [
                 (ShortsCanvasColor.black, blackFitOutput),
                 (ShortsCanvasColor.white, whiteFitOutput),
             ] {
                 try await ShortsExporter.export(
                     candidate: candidate,
+                    timeMap: timeMap,
                     sourceURL: source,
                     displaySize: CGSize(width: 320, height: 180),
                     quality: .compact,
@@ -224,6 +243,58 @@ enum ShortsSubtitleSelfTest {
                 && abs(duration - expectedDuration) <= 0.3
                 && hasMeaningfulDifference(between: baseline, and: image),
             "\(label) (\(String(format: "%.2f", duration)) сек)")
+    }
+
+    /// Вырезание пауз: длительность файла равна сумме кусков, а на кадре во
+    /// время слова видна подсветка.
+    private static func checkTrimmedExport(
+        candidate: ShortCandidate,
+        source: URL,
+        mode: ShortsSubtitleMode,
+        output: URL,
+        check: (Bool, String) -> Void
+    ) async throws {
+        let trimmedMap = ShortsTimeMap(segments: [
+            ShortsSegment(start: 1, end: 1.9), ShortsSegment(start: 2.2, end: 3),
+        ])
+        try await ShortsExporter.export(
+            candidate: candidate,
+            timeMap: trimmedMap,
+            sourceURL: source,
+            displaySize: CGSize(width: 320, height: 180),
+            quality: .compact,
+            frameSettings: ShortsFrameSettings(),
+            subtitleMode: mode,
+            to: output
+        ) { _ in }
+        try await checkExportedVideo(
+            output,
+            at: 0.4,
+            expectedDuration: trimmedMap.outputDuration,
+            label: "MP4 без пауз короче исходного диапазона",
+            check: check)
+        check(
+            try hasHighlightColor(in: output, at: 0.4),
+            "подсвеченное слово видно в готовом файле")
+    }
+
+    /// Жёлтая подсветка активного слова в нижней части кадра.
+    private static func hasHighlightColor(in url: URL, at seconds: Double) throws -> Bool {
+        let frame = try image(at: seconds, in: AVURLAsset(url: url))
+        let bitmap = NSBitmapImageRep(cgImage: frame)
+        // NSBitmapImageRep считает y от верха: субтитры живут в нижней трети.
+        for y in stride(from: frame.height * 2 / 3, to: frame.height, by: 1) {
+            for x in stride(from: 0, to: frame.width, by: 2) {
+                guard let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB)
+                else { continue }
+                if color.redComponent > 0.6, color.greenComponent > 0.45,
+                    color.blueComponent < 0.35
+                {
+                    return true
+                }
+            }
+        }
+        return false
     }
 
     private static func image(

@@ -96,6 +96,7 @@ enum AgentToolCatalog {
             "montazhka_make_shorts", "Создать пять вертикальных роликов с субтитрами.",
             properties: [
                 "sourcePath": string, "confirmModelDownload": boolean,
+                "trimPauses": boolean,
             ], required: ["sourcePath"], destructive: true),
         tool(
             "montazhka_edit_project", "Применить точные резы и настройки к копии проекта.",

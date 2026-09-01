@@ -12,6 +12,7 @@ private struct AgentShortCandidateArtifact: Encodable {
 extension AgentService {
     func makeShorts(
         sourcePath: String, confirmModelDownload: Bool,
+        trimPauses: Bool = true,
         runMode: AgentRunMode = .standalone
     ) async -> AgentResponse {
         var activeRunID: UUID?
@@ -62,14 +63,17 @@ extension AgentService {
                     "\(sourceURL.deletingPathExtension().lastPathComponent)-shorts", isDirectory: true)
             try FileManager.default.createDirectory(at: outputDirectory, withIntermediateDirectories: true)
             let frame = ShortsFrameSettings(mode: .verticalCrop, canvasColor: .black)
-            let subtitles = ShortsSubtitleMode.on(words: analysis.transcript, style: .classic, size: .medium)
+            let subtitles = ShortsSubtitleMode.on(
+                words: analysis.transcript, style: .classic, size: .medium, highlight: true)
             var outputs: [String] = []
             for (index, candidate) in selected.enumerated() {
                 let output = ShortsExporter.fileURL(
                     in: outputDirectory, sourceName: sourceURL.deletingPathExtension().lastPathComponent,
                     index: index, title: candidate.title)
                 try await ShortsExporter.export(
-                    candidate: candidate, sourceURL: sourceURL, displaySize: displaySize,
+                    candidate: candidate,
+                    timeMap: candidate.timeMap(trimmingPauses: trimPauses),
+                    sourceURL: sourceURL, displaySize: displaySize,
                     quality: .compact, frameSettings: frame, subtitleMode: subtitles,
                     to: output, progress: { _ in })
                 outputs.append(output.path)

@@ -97,6 +97,13 @@ enum ShortsLimits {
     static let maxCandidates = 10
     /// Видео короче этого нарезать бессмысленно.
     static let minSourceDuration = 20.0
+    /// Пауза короче не стоит склейки: в коротком ролике режем плотнее, чем
+    /// в обычном монтаже (там порог 0.8 с).
+    static let minPauseDuration = 0.45
+    /// «Воздух» вокруг выреза в миллисекундах: дыхание перед фразой остаётся.
+    static let pausePaddingMS = 120.0
+    /// Кусок речи короче — не оставляем отдельным: получится дёрганый монтаж.
+    static let minSegmentDuration = 0.30
 }
 
 /// Кандидат в ролики: границы в секундах исходника, заголовок и ранг силы.
@@ -118,9 +125,21 @@ struct ShortCandidate: Identifiable, Equatable, Sendable {
     let standaloneScore: Int
     let payoffScore: Int
     let pacingScore: Int
+    /// Куски речи без пауз внутри диапазона. Считаются один раз при анализе,
+    /// когда пики громкости уже в памяти; пустой массив = пауз не нашлось.
+    var segments: [ShortsSegment] = []
     var enabled: Bool
 
     var duration: Double { max(0, end - start) }
+
+    /// Карта времени для рендера. Выключенное вырезание пауз и отсутствие
+    /// найденных пауз дают одинаковый непрерывный кусок.
+    func timeMap(trimmingPauses: Bool) -> ShortsTimeMap {
+        guard trimmingPauses, !segments.isEmpty else {
+            return .single(start: start, end: end)
+        }
+        return ShortsTimeMap(segments: segments)
+    }
 }
 
 enum ShortsStatus: Equatable {

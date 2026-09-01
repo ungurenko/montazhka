@@ -156,6 +156,9 @@ actor ShortsCutService {
                     standaloneScore: proposal.standaloneScore,
                     payoffScore: proposal.payoffScore,
                     pacingScore: proposal.pacingScore,
+                    segments: ShortsSegmentPlanner.segments(
+                        start: boundary.start, end: boundary.end,
+                        peaks: peaks, thresholdDB: thresholdDB),
                     enabled: false))
         }
 

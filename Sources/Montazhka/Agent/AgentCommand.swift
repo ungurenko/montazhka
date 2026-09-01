@@ -96,7 +96,9 @@ enum AgentCommand {
                 return .failure(command: "make_shorts", code: "MISSING_INPUT", message: "Укажите --input.")
             }
             return await service.makeShorts(
-                sourcePath: input, confirmModelDownload: args.contains("--confirm-model-download"))
+                sourcePath: input,
+                confirmModelDownload: args.contains("--confirm-model-download"),
+                trimPauses: !args.contains("--keep-pauses"))
         case "integration":
             do {
                 let operation = args.dropFirst().first ?? "status"
@@ -242,7 +244,8 @@ private struct AgentMCPServer {
                 return try await AgentBackgroundJob.submit(
                     .shorts(
                         sourcePath: path,
-                        confirmModelDownload: arguments["confirmModelDownload"]?.boolValue ?? false))
+                        confirmModelDownload: arguments["confirmModelDownload"]?.boolValue ?? false,
+                        trimPauses: arguments["trimPauses"]?.boolValue ?? true))
             } catch {
                 return .failure(command: "make_shorts", code: "JOB_START_FAILED", message: error.localizedDescription)
             }

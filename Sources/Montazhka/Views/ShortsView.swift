@@ -372,7 +372,7 @@ struct ShortsView: View {
                 }
             }
             HStack {
-                Text(TimeFormat.compact(candidate.duration))
+                Text(durationLabel(for: candidate))
                     .font(.system(size: Theme.TypeScale.helper, weight: .medium, design: .monospaced))
                     .foregroundStyle(Theme.textSecondary)
                     .padding(.horizontal, 6)
@@ -420,6 +420,15 @@ struct ShortsView: View {
         }
         .padding(Theme.Spacing.small)
         .rowSurfaceStyle(selected: candidate.enabled)
+    }
+
+    /// «0:45 → 0:38», когда вырезание пауз реально укоротило ролик.
+    private func durationLabel(for candidate: ShortCandidate) -> String {
+        let map = controller.timeMap(for: candidate)
+        guard map.removedDuration >= 0.5 else {
+            return TimeFormat.compact(candidate.duration)
+        }
+        return "\(TimeFormat.compact(candidate.duration)) → \(TimeFormat.compact(map.outputDuration))"
     }
 
     // MARK: - Экспорт
@@ -547,6 +556,18 @@ struct ShortsView: View {
 
     private var appearanceControls: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.medium) {
+            Toggle(isOn: $controller.trimPauses) {
+                VStack(alignment: .leading, spacing: Theme.Spacing.compact) {
+                    Text("Убрать паузы")
+                        .font(.system(size: Theme.TypeScale.body, weight: .medium))
+                    Text("Вырезает вдохи и молчание внутри ролика")
+                        .font(.system(size: Theme.TypeScale.helper))
+                        .foregroundStyle(Theme.textSecondary)
+                }
+            }
+            .toggleStyle(.switch)
+            .accessibilityIdentifier("shorts.trimPauses")
+
             Toggle(isOn: $controller.subtitlesEnabled) {
                 VStack(alignment: .leading, spacing: Theme.Spacing.compact) {
                     Text("Автоматические субтитры")
@@ -588,6 +609,18 @@ struct ShortsView: View {
                     .frame(maxWidth: .infinity)
                     .accessibilityIdentifier("shorts.subtitleSize")
                 }
+
+                Toggle(isOn: $controller.subtitleHighlight) {
+                    VStack(alignment: .leading, spacing: Theme.Spacing.compact) {
+                        Text("Подсвечивать слова")
+                            .font(.system(size: Theme.TypeScale.body, weight: .medium))
+                        Text("Звучащее слово меняет цвет")
+                            .font(.system(size: Theme.TypeScale.helper))
+                            .foregroundStyle(Theme.textSecondary)
+                    }
+                }
+                .toggleStyle(.switch)
+                .accessibilityIdentifier("shorts.subtitleHighlight")
             }
 
             VStack(alignment: .leading, spacing: Theme.Spacing.small) {

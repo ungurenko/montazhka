@@ -8,6 +8,8 @@ import SwiftUI
 struct ShortsPreviewRequest {
     let candidateID: UUID
     let sourceURL: URL
+    /// Куски исходника, из которых собран ролик: те же, что уйдут в экспорт.
+    let timeMap: ShortsTimeMap
     let frameSettings: ShortsFrameSettings
 }
 
@@ -24,8 +26,13 @@ protocol ShortsPreviewBuilding {
 @MainActor
 struct DefaultShortsPreviewBuilder: ShortsPreviewBuilding {
     func makeItem(for request: ShortsPreviewRequest) async throws -> AVPlayerItem {
-        let asset = AVURLAsset(url: request.sourceURL)
+        // Предпросмотр собирается ровно как экспорт: одна композиция, одна
+        // шкала времени — увиденное совпадает с готовым файлом.
+        let built = await CompositionBuilder.build(
+            clips: ShortsExporter.clips(for: request.timeMap, sourceURL: request.sourceURL))
+        let asset = built.composition
         let item = AVPlayerItem(asset: asset)
+        item.audioMix = built.audioMix
         if let videoComposition = try await ShortsExporter.previewComposition(
             for: asset,
             frameSettings: request.frameSettings
@@ -61,6 +68,20 @@ final class ShortsController {
         set { updateFrameSettings { $0.canvasColor = newValue } }
     }
     private var subtitleSettings: ShortsSubtitleSettings
+    /// Вырезание пауз внутри ролика. Строкой, а не флагом: отсутствие ключа
+    /// надо отличать от «выключено», потому что по умолчанию включено.
+    var trimPauses: Bool {
+        didSet {
+            guard trimPauses != oldValue else { return }
+            preferences.set(trimPauses ? "on" : "off", forKey: Self.trimPausesKey)
+            refreshPreviewAfterDisplayChange()
+        }
+    }
+
+    var subtitleHighlight: Bool {
+        get { subtitleSettings.highlightActiveWord }
+        set { updateSubtitleSettings { $0.highlightActiveWord = newValue } }
+    }
 
     var subtitlesEnabled: Bool {
         get { subtitleSettings.enabled }
@@ -97,6 +118,7 @@ final class ShortsController {
     private let preferences: any PreferenceStoring
 
     static let reasoningKey = "shorts.reasoningEffort"
+    static let trimPausesKey = "shorts.trimPauses"
 
     @ObservationIgnored private let analysisOperation = LatestOperation()
     @ObservationIgnored private let exportOperation = LatestOperation()
@@ -123,9 +145,13 @@ final class ShortsController {
         else { return nil }
         return ShortsSubtitleOverlayBuilder.make(
             at: currentTime,
-            sourceStart: candidate.start,
-            sourceEnd: candidate.end,
+            timeMap: timeMap(for: candidate),
             mode: subtitleMode)
+    }
+
+    /// Единственный источник правды о том, из каких кусков собран ролик.
+    func timeMap(for candidate: ShortCandidate) -> ShortsTimeMap {
+        candidate.timeMap(trimmingPauses: trimPauses)
     }
 
     private func updateSubtitleSettings(_ update: (inout ShortsSubtitleSettings) -> Void) {
@@ -149,6 +175,8 @@ final class ShortsController {
         self.preferences = preferences
         count = ShortsCount.saved(in: preferences)
         subtitleSettings = ShortsSubtitleSettings.saved(in: preferences)
+        trimPauses =
+            preferences.string(forKey: ShortsController.trimPausesKey).map { $0 == "on" } ?? true
         let waveformStore = WaveformStore(cacheDir: store.directories.waveforms)
         self.waveforms = waveformStore
         let transcriptStore = TranscriptStore(
@@ -320,11 +348,11 @@ final class ShortsController {
         seekOperation.cancel()
         player.pause()
         isPlaying = false
-        let start = max(0, candidate.start)
-        let end = min(sourceDuration, candidate.end)
+        let map = timeMap(for: candidate)
         let request = ShortsPreviewRequest(
             candidateID: candidate.id,
             sourceURL: sourceURL,
+            timeMap: map,
             frameSettings: frameSettings
         )
         previewOperation.start { [weak self] token in
@@ -343,14 +371,11 @@ final class ShortsController {
             }
             guard self.previewOperation.isCurrent(token) else { return }
             self.player.replaceCurrentItem(with: item)
-            await self.player.seek(
-                to: CMTime(seconds: start, preferredTimescale: 600),
-                toleranceBefore: .zero, toleranceAfter: .zero)
-            guard self.previewOperation.isCurrent(token) else { return }
-            self.currentTime = start
+            self.currentTime = 0
             self.player.play()
             self.isPlaying = true
-            let stop = NSValue(time: CMTime(seconds: end, preferredTimescale: 600))
+            let stop = NSValue(
+                time: CMTime(seconds: map.outputDuration, preferredTimescale: 600))
             self.previewBoundary = self.player.addBoundaryTimeObserver(forTimes: [stop], queue: .main) { [weak self] in
                 MainActor.assumeIsolated {
                     self?.player.pause()
@@ -479,6 +504,7 @@ final class ShortsController {
         let quality = self.quality
         let frameSettings = self.frameSettings
         let subtitleMode = self.subtitleMode
+        let trimPauses = self.trimPauses
         currentExportFolder = folder
         exportState = .exporting(done: completed, total: total, progress: 0)
         exportOperation.start { [weak self] token in
@@ -488,7 +514,9 @@ final class ShortsController {
                     let done = completed + offset
                     guard exportOperation.isCurrent(token) else { return }
                     try await ShortsExporter.export(
-                        candidate: item.candidate, sourceURL: url, displaySize: size,
+                        candidate: item.candidate,
+                        timeMap: item.candidate.timeMap(trimmingPauses: trimPauses),
+                        sourceURL: url, displaySize: size,
                         quality: quality, frameSettings: frameSettings,
                         subtitleMode: subtitleMode,
                         to: ShortsExporter.fileURL(

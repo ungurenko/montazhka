@@ -6,6 +6,7 @@ import Foundation
 enum ShortsExporter {
     static func export(
         candidate: ShortCandidate,
+        timeMap: ShortsTimeMap,
         sourceURL: URL,
         displaySize: CGSize,
         quality: ExportQuality,
@@ -14,18 +15,13 @@ enum ShortsExporter {
         to url: URL,
         progress: @escaping @Sendable (Double) -> Void
     ) async throws {
-        let clip = Clip(sourceURL: sourceURL, start: candidate.start, end: candidate.end)
-        let built = await CompositionBuilder.build(clips: [clip])
+        let built = await CompositionBuilder.build(clips: clips(for: timeMap, sourceURL: sourceURL))
 
         let plan = try await ShortsVideoCompositionBuilder.make(
             asset: built.composition,
             frameRequest: frameSettings.exportRequest(quality: quality),
             subtitleMode: subtitleMode,
-            subtitleTimeline: ShortsSubtitleTimeline(
-                sourceStart: candidate.start,
-                sourceEnd: candidate.end,
-                relativeTo: candidate.start,
-                duration: candidate.duration))
+            subtitleTimeMap: timeMap)
         let dimensions =
             plan.outputRenderSize
             ?? quality.targetDimensions(forDisplaySize: displaySize)
@@ -43,9 +39,15 @@ enum ShortsExporter {
             progress: progress)
     }
 
-    /// Собирает композицию для плеера. Для превью сохраняется шкала исходника,
-    /// поэтому boundary observer продолжает останавливать ролик на его конце,
-    /// а субтитры показываются только внутри выбранного диапазона.
+    /// Куски исходника, из которых собирается ролик. Вырезанные паузы просто
+    /// не попадают в список — склейки и микрофейды делает CompositionBuilder.
+    static func clips(for timeMap: ShortsTimeMap, sourceURL: URL) -> [Clip] {
+        timeMap.segments.map { Clip(sourceURL: sourceURL, start: $0.start, end: $0.end) }
+    }
+
+    /// Собирает композицию для плеера. Предпросмотр и экспорт строятся из одной
+    /// и той же карты времени, поэтому шкала у них общая: ролик всегда идёт
+    /// с нуля, а текст рисуется поверх SwiftUI-слоем.
     static func previewComposition(
         for asset: AVAsset,
         frameSettings: ShortsFrameSettings
@@ -54,7 +56,7 @@ enum ShortsExporter {
             asset: asset,
             frameRequest: frameSettings.previewRequest,
             subtitleMode: .off,
-            subtitleTimeline: .empty)
+            subtitleTimeMap: .single(start: 0, end: 0))
         return plan.videoComposition
     }
 

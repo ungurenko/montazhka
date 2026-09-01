@@ -96,7 +96,8 @@ struct PreferenceStoreTests {
         let selected = ShortsSubtitleSettings(
             enabled: true,
             style: .boxed,
-            size: .large)
+            size: .large,
+            highlightActiveWord: false)
         selected.save(in: store)
 
         #expect(ShortsSubtitleSettings.saved(in: store) == selected)

@@ -17,7 +17,7 @@ struct ShortsControllerTests {
         ReasoningChoice.effort(.high).save(
             key: ShortsController.reasoningKey,
             in: preferences)
-        ShortsSubtitleSettings(enabled: true, style: .boxed, size: .large)
+        ShortsSubtitleSettings(enabled: true, style: .boxed, size: .large, highlightActiveWord: true)
             .save(in: preferences)
 
         let repository = ProjectStore(baseDirectory: root)

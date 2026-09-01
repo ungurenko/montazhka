@@ -2,7 +2,7 @@ import Foundation
 
 enum AgentWorkerRequest: Codable, Sendable {
     case edit(AgentEditRequest)
-    case shorts(sourcePath: String, confirmModelDownload: Bool)
+    case shorts(sourcePath: String, confirmModelDownload: Bool, trimPauses: Bool)
     case export(projectID: UUID, outputPath: String?, quality: String, final: Bool, confirmFinal: Bool, overwrite: Bool)
 }
 
@@ -17,7 +17,7 @@ enum AgentBackgroundJob {
         case .edit(let value):
             kind = value.projectID == nil ? .editVideo : .editProject
             sources = value.sourcePaths
-        case .shorts(let path, _): kind = .makeShorts; sources = [path]
+        case .shorts(let path, _, _): kind = .makeShorts; sources = [path]
         case .export: kind = .export; sources = []
         }
         let run = try await store.create(kind: kind, sourcePaths: sources)
@@ -61,10 +61,10 @@ enum AgentBackgroundJob {
             let result: AgentResponse
             switch request {
             case .edit(let edit): result = await service.edit(edit, runMode: .existing(jobID))
-            case .shorts(let path, let confirm):
+            case .shorts(let path, let confirm, let trimPauses):
                 result = await service.makeShorts(
                     sourcePath: path, confirmModelDownload: confirm,
-                    runMode: .existing(jobID))
+                    trimPauses: trimPauses, runMode: .existing(jobID))
             case .export(let id, let path, let quality, let final, let confirm, let overwrite):
                 result = await service.export(
                     projectID: id, outputPath: path, quality: quality,
