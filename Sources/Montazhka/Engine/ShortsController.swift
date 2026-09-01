@@ -278,7 +278,7 @@ final class ShortsController {
                     })
                 guard self.analysisOperation.isCurrent(token) else { return }
                 self.transcriptWords = result.transcript
-                self.candidates = self.preselected(result.candidates)
+                self.candidates = result.candidates
                 self.analysisWarnings = result.warnings
                 self.status = .ready
             } catch is CancellationError {
@@ -301,16 +301,6 @@ final class ShortsController {
     private func receiveStatus(_ status: ShortsStatus, token: LatestOperation.Token) {
         guard analysisOperation.isCurrent(token) else { return }
         self.status = status
-    }
-
-    /// Галочки на top-N по рангу: один клик — и лучшее уже выбрано.
-    private func preselected(_ candidates: [ShortCandidate]) -> [ShortCandidate] {
-        var result = candidates
-        let limit = count.desired ?? result.count
-        for index in result.indices {
-            result[index].enabled = index < limit
-        }
-        return result
     }
 
     func toggleCandidate(_ id: UUID) {

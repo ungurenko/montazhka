@@ -282,6 +282,23 @@ struct ShortsCutTests {
             (diversified.map(\.title)) == (["мнение 1", "мнение 2", "история", "без паттерна 1", "без паттерна 2"]))
     }
 
+    @Test
+    func testPreselectionEnablesTopCandidatesByRequestedCount() {
+        let candidates = (1...6).map {
+            makeCandidate(rank: $0, title: "ролик \($0)", start: Double($0) * 100, end: Double($0) * 100 + 30)
+        }
+
+        let three = ShortsCutService.preselected(candidates, count: .three)
+        #expect((three.map(\.enabled)) == ([true, true, true, false, false, false]))
+
+        let auto = ShortsCutService.preselected(candidates, count: .auto)
+        #expect((auto.map(\.enabled)) == (Array(repeating: true, count: candidates.count)))
+
+        // Роликов меньше, чем просили: включены все найденные, без падения.
+        let eight = ShortsCutService.preselected(Array(candidates.prefix(2)), count: .eight)
+        #expect((eight.map(\.enabled)) == ([true, true]))
+    }
+
     // MARK: - Границы
 
     private func boundaryWords(start: Double, end: Double) -> (first: MappedTranscriptWord, last: MappedTranscriptWord)

@@ -48,7 +48,7 @@ extension AgentService {
             let source = MediaReference(path: sourceURL.path)
             let analysis = try await service.analyze(
                 source: source, sourceDuration: duration, count: .five,
-                configuration: configuration, thresholdDB: -40,
+                configuration: configuration, thresholdDB: DetectionSettings().thresholdDB,
                 status: { status in
                     try? await self.runs.update(id: run.id) { $0.stage = Self.stage(status) }
                 })

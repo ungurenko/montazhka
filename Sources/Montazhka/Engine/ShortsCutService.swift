@@ -222,9 +222,22 @@ actor ShortsCutService {
         candidates = ShortsWindowPlanner.deduplicated(candidates)
         candidates = Self.diversified(candidates)
         candidates = Array(candidates.prefix(ShortsLimits.maxCandidates))
+        candidates = Self.preselected(candidates, count: count)
         await status(.ready)
         return ShortsAnalysisResult(
             candidates: candidates, transcript: words, warnings: warnings)
+    }
+
+    /// Галочки на top-N по рангу: один клик — и лучшее уже выбрано. Живёт в
+    /// сервисе, а не в экране: агентная нарезка отбирает ролики по этому же
+    /// признаку и без предвыбора получала пустой список.
+    static func preselected(_ candidates: [ShortCandidate], count: ShortsCount) -> [ShortCandidate] {
+        var result = candidates
+        let limit = count.desired ?? result.count
+        for index in result.indices {
+            result[index].enabled = index < limit
+        }
+        return result
     }
 
     /// Принятые решения в порядке силы: валидный ранг важнее порядка ответа,
