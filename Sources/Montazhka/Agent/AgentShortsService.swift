@@ -44,7 +44,8 @@ extension AgentService {
             let service = ShortsCutService(
                 transcriptStore: transcriptStore,
                 ai: UnifiedAIClient(openRouter: OpenRouterClient()),
-                waveforms: waveforms)
+                waveforms: waveforms,
+                cache: ShortsAnalysisCache(cacheDir: store.shortsAnalysisDir))
             let source = MediaReference(path: sourceURL.path)
             let analysis = try await service.analyze(
                 source: source, sourceDuration: duration, count: .five,

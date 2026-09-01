@@ -165,7 +165,8 @@ final class ShortsController {
         self.service = ShortsCutService(
             transcriptStore: transcriptStore,
             ai: aiClient,
-            waveforms: waveformStore)
+            waveforms: waveformStore,
+            cache: ShortsAnalysisCache(cacheDir: store.directories.shortsAnalysis))
         self.previewBuilder = previewBuilder
         frameSettings = ShortsFrameSettings.loadAndMigrate(in: preferences)
         attachObservers()

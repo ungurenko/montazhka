@@ -7,15 +7,18 @@ actor ShortsCutService {
     private let transcriptStore: any TranscriptProviding
     private let ai: any ShortsAIServing
     private let waveforms: any WaveformProviding
+    private let cache: ShortsAnalysisCache?
 
     init(
         transcriptStore: any TranscriptProviding,
         ai: any ShortsAIServing,
-        waveforms: any WaveformProviding
+        waveforms: any WaveformProviding,
+        cache: ShortsAnalysisCache? = nil
     ) {
         self.transcriptStore = transcriptStore
         self.ai = ai
         self.waveforms = waveforms
+        self.cache = cache
     }
 
     func analyze(
@@ -50,80 +53,17 @@ actor ShortsCutService {
         guard !windows.isEmpty else { throw ShortsError.emptyTranscript }
         var warnings: [ShortsAnalysisWarning] = []
 
-        let mapResult = try await makeVideoMap(
-            windows: windows,
-            words: timelineMap.words,
-            configuration: configuration,
-            status: status)
-        if let warning = mapResult.warning { warnings.append(warning) }
-        let videoMap = mapResult.value
-        try Task.checkCancellation()
-
-        // Проход 1: предложения по каждому окну с картой всего видео в
-        // контексте. Ошибка одного окна (таймаут, битый ответ после ремонта)
-        // не губит весь анализ — работаем с теми окнами, что отвечают.
-        var contexts: [String: ProposalContext] = [:]
-        var ordered: [ShortsProposalDTO] = []
-        var failedWindows = 0
-        var lastWindowError: Error?
-        for (index, window) in windows.enumerated() {
-            try Task.checkCancellation()
-            await status(.searching(done: index, total: windows.count))
-            let windowWords = timelineMap.words[window]
-            do {
-                let envelope = try await ai.proposeShorts(
-                    words: windowWords.map(\.publicPayload),
-                    configuration: configuration,
-                    videoMap: videoMap)
-                for proposal in envelope.clips {
-                    // Модель любит одинаковые ID в каждом окне (clip_1…),
-                    // а кандидаты разных окон должны быть уникальны.
-                    let uniqueID = "w\(index)-\(proposal.id)"
-                    guard contexts[uniqueID] == nil,
-                        let range = timelineMap.range(
-                            firstWordID: proposal.firstWordID,
-                            lastWordID: proposal.lastWordID),
-                        let trimmed = ShortsWindowPlanner.trimmedToMaxDuration(range),
-                        let first = trimmed.first, let last = trimmed.last
-                    else { continue }
-                    let excerpt = trimmed.map(\.text).joined(separator: " ")
-                    let uniqueProposal = ShortsProposalDTO(
-                        id: uniqueID,
-                        firstWordID: proposal.firstWordID,
-                        lastWordID: proposal.lastWordID,
-                        title: proposal.title,
-                        reason: proposal.reason,
-                        confidence: proposal.confidence,
-                        hook: proposal.hook,
-                        pattern: proposal.pattern,
-                        topic: proposal.topic,
-                        hookScore: proposal.hookScore,
-                        standaloneScore: proposal.standaloneScore,
-                        payoffScore: proposal.payoffScore,
-                        pacingScore: proposal.pacingScore)
-                    contexts[uniqueID] = ProposalContext(
-                        first: first, last: last, excerpt: excerpt,
-                        duration: last.sourceEnd - first.sourceStart)
-                    ordered.append(uniqueProposal)
-                }
-            } catch is CancellationError {
-                throw CancellationError()
-            } catch {
-                failedWindows += 1
-                lastWindowError = error
-                Logger.network.error(
-                    "Shorts: окно \(index + 1)/\(windows.count) не ответило: \(error.localizedDescription, privacy: .public)"
-                )
-            }
-        }
+        let search = try await searchCandidates(
+            windows: windows, timelineMap: timelineMap,
+            configuration: configuration, status: status)
+        warnings.append(contentsOf: search.warnings)
+        let videoMap = search.videoMap
+        let ordered = search.proposals
+        let contexts = search.contexts
         guard !ordered.isEmpty else {
-            if failedWindows > 0, let lastWindowError { throw lastWindowError }
+            if let error = search.lastError { throw error }
             return ShortsAnalysisResult(
                 candidates: [], transcript: words, warnings: warnings)
-        }
-        if failedWindows > 0 {
-            warnings.append(
-                .proposalWindowsFailed(failed: failedWindows, total: windows.count))
         }
         try Task.checkCancellation()
 
@@ -228,17 +168,185 @@ actor ShortsCutService {
             candidates: candidates, transcript: words, warnings: warnings)
     }
 
-    /// Галочки на top-N по рангу: один клик — и лучшее уже выбрано. Живёт в
-    /// сервисе, а не в экране: агентная нарезка отбирает ролики по этому же
-    /// признаку и без предвыбора получала пустой список.
-    static func preselected(_ candidates: [ShortCandidate], count: ShortsCount) -> [ShortCandidate] {
-        var result = candidates
-        let limit = count.desired ?? result.count
-        for index in result.indices {
-            result[index].enabled = index < limit
-        }
-        return result
+    // MARK: - Проходы 0 и 1
+
+    private struct CandidateSearch {
+        let videoMap: String
+        let proposals: [ShortsProposalDTO]
+        let contexts: [String: ProposalContext]
+        let warnings: [ShortsAnalysisWarning]
+        /// Ошибка последнего молчавшего окна: нужна, только если кандидатов нет вовсе.
+        let lastError: Error?
     }
+
+    /// Карта видео и предложения по окнам — самая дорогая часть анализа и
+    /// единственная, которая не зависит от запрошенного количества роликов.
+    /// Поэтому результат берётся из кэша целиком либо считается целиком.
+    private func searchCandidates(
+        windows: [Range<Int>],
+        timelineMap: TranscriptTimelineMap,
+        configuration: AIRequestConfiguration,
+        status: @escaping @Sendable (ShortsStatus) async -> Void
+    ) async throws -> CandidateSearch {
+        let key = ShortsAnalysisCache.key(
+            words: timelineMap.words, configuration: configuration)
+        if let document = await cache?.load(key: key) {
+            await status(.mapping(done: windows.count, total: windows.count))
+            await status(.searching(done: windows.count, total: windows.count))
+            let resolved = Self.resolveContexts(
+                proposals: document.proposals, timelineMap: timelineMap)
+            return CandidateSearch(
+                videoMap: document.videoMap, proposals: resolved.proposals,
+                contexts: resolved.contexts, warnings: [], lastError: nil)
+        }
+
+        var warnings: [ShortsAnalysisWarning] = []
+
+        // Проход 0: компактная карта всего видео. Ошибка одного окна не
+        // останавливает анализ, но возвращается пользователю предупреждением.
+        let ai = self.ai
+        let words = timelineMap.words
+        let mapRun = try await Self.runWindows(
+            count: windows.count,
+            limit: configuration.maxConcurrentWindows,
+            status: { done in await status(.mapping(done: done, total: windows.count)) },
+            work: { index in
+                let windowWords = words[windows[index]]
+                let map = try await ai.mapShortsWindow(
+                    words: windowWords.map(\.publicPayload),
+                    configuration: configuration)
+                return Self.mapLine(for: map, windowWords: windowWords)
+            })
+        if mapRun.failed > 0 {
+            warnings.append(
+                .mapWindowsFailed(failed: mapRun.failed, total: windows.count))
+        }
+        let videoMap = mapRun.values.compactMap { $0 ?? nil }.joined(separator: "\n")
+        try Task.checkCancellation()
+
+        // Проход 1: предложения по каждому окну с картой всего видео в
+        // контексте. Ошибка одного окна (таймаут, битый ответ после ремонта)
+        // не губит весь анализ — работаем с теми окнами, что отвечают.
+        let proposalRun = try await Self.runWindows(
+            count: windows.count,
+            limit: configuration.maxConcurrentWindows,
+            status: { done in await status(.searching(done: done, total: windows.count)) },
+            work: { index in
+                let windowWords = words[windows[index]]
+                return try await ai.proposeShorts(
+                    words: windowWords.map(\.publicPayload),
+                    configuration: configuration,
+                    videoMap: videoMap)
+            })
+        if proposalRun.failed > 0 {
+            warnings.append(
+                .proposalWindowsFailed(failed: proposalRun.failed, total: windows.count))
+        }
+
+        // Модель любит одинаковые ID в каждом окне (clip_1…), а кандидаты
+        // разных окон должны быть уникальны.
+        var raw: [ShortsProposalDTO] = []
+        for (index, envelope) in proposalRun.values.enumerated() {
+            guard let envelope else { continue }
+            raw.append(contentsOf: envelope.clips.map { $0.prefixed(with: "w\(index)-") })
+        }
+        let resolved = Self.resolveContexts(proposals: raw, timelineMap: timelineMap)
+
+        // Частичный анализ не консервируем: иначе молчание одного окна
+        // навсегда обеднит результат для этого видео.
+        if mapRun.failed == 0, proposalRun.failed == 0, !resolved.proposals.isEmpty {
+            await cache?.store(
+                ShortsAnalysisCacheDocument(videoMap: videoMap, proposals: resolved.proposals),
+                key: key)
+        }
+
+        return CandidateSearch(
+            videoMap: videoMap, proposals: resolved.proposals,
+            contexts: resolved.contexts, warnings: warnings,
+            lastError: proposalRun.lastError)
+    }
+
+    private struct WindowRun<Value: Sendable>: Sendable {
+        let values: [Value?]
+        let failed: Int
+        let lastError: (any Error)?
+    }
+
+    /// Окна независимы, поэтому опрашиваются пачками параллельно. Порядок
+    /// результатов сохраняется по индексу окна, отмена пробрасывается наружу,
+    /// а ошибки отдельных окон копятся — анализ переживает молчание одного.
+    private static func runWindows<Value: Sendable>(
+        count: Int,
+        limit: Int,
+        status: @escaping @Sendable (Int) async -> Void,
+        work: @escaping @Sendable (Int) async throws -> Value
+    ) async throws -> WindowRun<Value> {
+        var values = [Value?](repeating: nil, count: count)
+        var failed = 0
+        var lastError: (any Error)?
+        let batchSize = max(1, limit)
+
+        await status(0)
+        for batchStart in stride(from: 0, to: count, by: batchSize) {
+            try Task.checkCancellation()
+            let batchEnd = min(batchStart + batchSize, count)
+            let results = await withTaskGroup(of: (Int, Result<Value, any Error>).self) { group in
+                for index in batchStart..<batchEnd {
+                    group.addTask {
+                        do { return (index, .success(try await work(index))) } catch {
+                            return (index, .failure(error))
+                        }
+                    }
+                }
+                var collected: [(Int, Result<Value, any Error>)] = []
+                for await result in group { collected.append(result) }
+                return collected
+            }
+            for (index, result) in results.sorted(by: { $0.0 < $1.0 }) {
+                switch result {
+                case .success(let value):
+                    values[index] = value
+                case .failure(let error):
+                    if error is CancellationError { throw CancellationError() }
+                    failed += 1
+                    lastError = error
+                    Logger.network.error(
+                        "Shorts: окно \(index + 1)/\(count) не ответило: \(error.localizedDescription, privacy: .public)"
+                    )
+                }
+            }
+            await status(batchEnd)
+        }
+        return WindowRun(values: values, failed: failed, lastError: lastError)
+    }
+
+    /// Диапазон слов каждого предложения превращается в контекст кандидата.
+    /// Общий шаг для свежего анализа и для загрузки из кэша: предложения
+    /// с неразрешимыми ID слов отбрасываются одинаково.
+    private static func resolveContexts(
+        proposals: [ShortsProposalDTO],
+        timelineMap: TranscriptTimelineMap
+    ) -> (proposals: [ShortsProposalDTO], contexts: [String: ProposalContext]) {
+        var contexts: [String: ProposalContext] = [:]
+        var ordered: [ShortsProposalDTO] = []
+        for proposal in proposals {
+            guard contexts[proposal.id] == nil,
+                let range = timelineMap.range(
+                    firstWordID: proposal.firstWordID,
+                    lastWordID: proposal.lastWordID),
+                let trimmed = ShortsWindowPlanner.trimmedToMaxDuration(range),
+                let first = trimmed.first, let last = trimmed.last
+            else { continue }
+            contexts[proposal.id] = ProposalContext(
+                first: first, last: last,
+                excerpt: trimmed.map(\.text).joined(separator: " "),
+                duration: last.sourceEnd - first.sourceStart)
+            ordered.append(proposal)
+        }
+        return (ordered, contexts)
+    }
+
+    // MARK: - Отбор
 
     /// Принятые решения в порядке силы: валидный ранг важнее порядка ответа,
     /// битая нумерация (rank<1) опускает решение в хвост по порядку ответа.
@@ -280,47 +388,20 @@ actor ShortsCutService {
         }
     }
 
-    private static func proposalByID(_ id: String, in proposals: [ShortsProposalDTO]) -> ShortsProposalDTO? {
-        proposals.first { $0.id == id }
+    /// Галочки на top-N по рангу: один клик — и лучшее уже выбрано. Живёт в
+    /// сервисе, а не в экране: агентная нарезка отбирает ролики по этому же
+    /// признаку и без предвыбора получала пустой список.
+    static func preselected(_ candidates: [ShortCandidate], count: ShortsCount) -> [ShortCandidate] {
+        var result = candidates
+        let limit = count.desired ?? result.count
+        for index in result.indices {
+            result[index].enabled = index < limit
+        }
+        return result
     }
 
-    /// Проход 0: компактная карта всего видео. Ошибка одного окна не
-    /// останавливает анализ, но возвращается пользователю предупреждением.
-    private func makeVideoMap(
-        windows: [Range<Int>],
-        words: [MappedTranscriptWord],
-        configuration: AIRequestConfiguration,
-        status: @escaping @Sendable (ShortsStatus) async -> Void
-    ) async throws -> (value: String, warning: ShortsAnalysisWarning?) {
-        var mapLines: [String] = []
-        var failedWindows = 0
-        for (index, window) in windows.enumerated() {
-            try Task.checkCancellation()
-            await status(.mapping(done: index, total: windows.count))
-            let windowWords = words[window]
-            do {
-                let map = try await ai.mapShortsWindow(
-                    words: windowWords.map(\.publicPayload),
-                    configuration: configuration)
-                if let line = Self.mapLine(for: map, windowWords: windowWords) {
-                    mapLines.append(line)
-                }
-            } catch is CancellationError {
-                throw CancellationError()
-            } catch {
-                failedWindows += 1
-                Logger.network.error(
-                    "Shorts: карта окна \(index + 1)/\(windows.count) не собралась: \(error.localizedDescription, privacy: .public)"
-                )
-            }
-        }
-        let warning =
-            failedWindows > 0
-            ? ShortsAnalysisWarning.mapWindowsFailed(
-                failed: failedWindows,
-                total: windows.count)
-            : nil
-        return (mapLines.joined(separator: "\n"), warning)
+    private static func proposalByID(_ id: String, in proposals: [ShortsProposalDTO]) -> ShortsProposalDTO? {
+        proposals.first { $0.id == id }
     }
 
     /// Компактная строка карты для контекста других проходов: время — о чём
@@ -353,7 +434,7 @@ actor ShortsCutService {
         return String(format: "%02d:%02d", minutes, seconds)
     }
 
-    private struct ProposalContext: Sendable {
+    struct ProposalContext: Sendable {
         let first: MappedTranscriptWord
         let last: MappedTranscriptWord
         let excerpt: String

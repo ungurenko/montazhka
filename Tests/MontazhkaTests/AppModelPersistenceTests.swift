@@ -83,11 +83,13 @@ private final class ControlledProjectRepository: ProjectRepository, @unchecked S
             enhancedAudio: root.appendingPathComponent("EnhancedAudio"),
             musicEQ: root.appendingPathComponent("MusicEQ"),
             transcripts: root.appendingPathComponent("Transcripts"),
-            models: root.appendingPathComponent("Models")
+            models: root.appendingPathComponent("Models"),
+            shortsAnalysis: root.appendingPathComponent("ShortsAnalysis")
         )
         for url in [
             directories.projects, directories.waveforms, directories.enhancedAudio,
             directories.musicEQ, directories.transcripts, directories.models,
+            directories.shortsAnalysis,
         ] {
             try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         }

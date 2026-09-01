@@ -237,6 +237,19 @@ struct ShortsProposalDTO: Codable, Equatable, Sendable {
 }
 
 extension ShortsProposalDTO {
+    /// Уникализирует ID предложения номером окна: модель нумерует клипы
+    /// заново в каждом окне, а кандидаты всего видео должны различаться.
+    func prefixed(with prefix: String) -> ShortsProposalDTO {
+        ShortsProposalDTO(
+            id: prefix + id, firstWordID: firstWordID, lastWordID: lastWordID,
+            title: title, reason: reason, confidence: confidence,
+            hook: hook, pattern: pattern, topic: topic,
+            hookScore: hookScore, standaloneScore: standaloneScore,
+            payoffScore: payoffScore, pacingScore: pacingScore)
+    }
+}
+
+extension ShortsProposalDTO {
     /// Ленентный вход: qwen отвечает без строгой JSON-схемы, поэтому новые
     /// поля могут отсутствовать — подставляем нейтральные значения, а баллы
     /// ещё и зажимаем в 0–10 на случай самодеятельности модели.

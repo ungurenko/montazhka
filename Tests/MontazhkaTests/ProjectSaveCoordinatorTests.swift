@@ -149,7 +149,7 @@ private final class RepositoryMock: ProjectRepository, @unchecked Sendable {
         let root = URL(fileURLWithPath: NSTemporaryDirectory())
         return ProjectDirectories(
             projects: root, waveforms: root, enhancedAudio: root,
-            musicEQ: root, transcripts: root, models: root)
+            musicEQ: root, transcripts: root, models: root, shortsAnalysis: root)
     }
 
     func save(_ project: Project) async throws {

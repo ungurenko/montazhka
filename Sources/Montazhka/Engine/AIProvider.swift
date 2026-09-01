@@ -135,6 +135,15 @@ enum AIRequestConfiguration: Sendable {
         }
     }
 
+    /// Сколько окон транскрипта опрашивать одновременно. CLI-агенты запускают
+    /// по процессу на вызов — им строго по одному.
+    var maxConcurrentWindows: Int {
+        switch self {
+        case .openRouter: return 3
+        case .codexCLI, .openCodeCLI: return 1
+        }
+    }
+
     func withEffort(_ effort: String?) -> AIRequestConfiguration {
         switch self {
         case .openRouter(let model, _, let apiKey):

@@ -57,6 +57,7 @@ final class ProjectStore: ProjectRepository, Sendable {
     var musicEQDir: URL { directories.musicEQ }
     var transcriptsDir: URL { directories.transcripts }
     var modelsDir: URL { directories.models }
+    var shortsAnalysisDir: URL { directories.shortsAnalysis }
 
     init(baseDirectory: URL? = nil) {
         let base =
@@ -70,7 +71,8 @@ final class ProjectStore: ProjectRepository, Sendable {
             enhancedAudio: base.appendingPathComponent("EnhancedAudio", isDirectory: true),
             musicEQ: base.appendingPathComponent("MusicEQ", isDirectory: true),
             transcripts: base.appendingPathComponent("Transcripts", isDirectory: true),
-            models: base.appendingPathComponent("Models", isDirectory: true)
+            models: base.appendingPathComponent("Models", isDirectory: true),
+            shortsAnalysis: base.appendingPathComponent("ShortsAnalysis", isDirectory: true)
         )
         try? prepareDirectories()
     }
@@ -90,6 +92,7 @@ final class ProjectStore: ProjectRepository, Sendable {
             try FileManager.default.createDirectory(at: musicEQDir, withIntermediateDirectories: true)
             try FileManager.default.createDirectory(at: transcriptsDir, withIntermediateDirectories: true)
             try FileManager.default.createDirectory(at: modelsDir, withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(at: shortsAnalysisDir, withIntermediateDirectories: true)
         } catch {
             throw ProjectStoreError.prepareDirectory(error.localizedDescription)
         }

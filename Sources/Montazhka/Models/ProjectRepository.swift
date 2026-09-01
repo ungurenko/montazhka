@@ -7,6 +7,8 @@ struct ProjectDirectories: Sendable {
     let musicEQ: URL
     let transcripts: URL
     let models: URL
+    /// Результаты дорогих проходов ИИ по shorts: переживают перезапуск.
+    let shortsAnalysis: URL
 }
 
 /// Единственная точка доступа к проектам. Все операции одного адаптера выполняются
