@@ -13,16 +13,15 @@ struct InspectorPanel<Content: View, Footer: View>: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: Theme.Spacing.small) {
                 Label(title, systemImage: systemImage)
-                    .font(.system(size: Theme.TypeScale.sectionTitle, weight: .semibold))
+                    .typeStyle(.sectionTitle)
                     .foregroundStyle(Theme.textPrimary)
                 Spacer()
                 if let close {
                     Button(action: close) {
-                        Image(systemName: "xmark.circle.fill")
-                            .font(.system(size: 16))
-                            .foregroundStyle(Theme.textSecondary.opacity(0.65))
+                        Image(systemName: "xmark")
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.mzIcon(.quiet, iconSize: IconScale.inline, width: 24, height: 24))
+                    .foregroundStyle(Theme.textSecondary)
                     .help("Закрыть панель")
                     .accessibilityLabel("Закрыть панель")
                 }

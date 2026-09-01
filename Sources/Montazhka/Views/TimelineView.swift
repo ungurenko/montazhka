@@ -154,32 +154,36 @@ struct TimelineView: View {
                     .foregroundStyle(Theme.accent)
             }
             Spacer()
-            ZoomButton(icon: "arrow.right.to.line", help: "Показать курсор воспроизведения") {
+            IconButton(icon: "arrow.right.to.line", help: "Показать курсор воспроизведения", size: .toolbar) {
                 viewportProxy.center(on: playheadContentX, anchorFraction: 0.3)
             }
             Divider().frame(height: 14)
-            ToolButton(
+            IconButton(
                 icon: handToolActive ? "hand.raised.fill" : "hand.raised",
                 help: "Двигать ленту мышью (удерживай H)",
-                active: handToolActive
+                size: .toolbar,
+                prominence: handToolActive ? .active : .quiet,
+                stateDescription: handToolActive ? "Включено" : "Выключено"
             ) {
                 handToolLatched.toggle()
             }
-            ToolButton(
+            IconButton(
                 icon: followPlayback ? "location.fill" : "location",
                 help: "Следить за воспроизведением",
-                active: followPlayback
+                size: .toolbar,
+                prominence: followPlayback ? .active : .quiet,
+                stateDescription: followPlayback ? "Включено" : "Выключено"
             ) {
                 toggleFollowPlayback()
             }
             Divider().frame(height: 14)
-            ZoomButton(icon: "minus.magnifyingglass", help: "Отдалить") {
+            IconButton(icon: "minus.magnifyingglass", help: "Отдалить", size: .toolbar) {
                 zoom(by: 1 / 1.4, anchorX: pointerX)
             }
-            ZoomButton(icon: "arrow.left.and.right.square", help: "Вся лента целиком") {
+            IconButton(icon: "arrow.left.and.right.square", help: "Вся лента целиком", size: .toolbar) {
                 fitTimeline(duration: duration)
             }
-            ZoomButton(icon: "plus.magnifyingglass", help: "Приблизить") {
+            IconButton(icon: "plus.magnifyingglass", help: "Приблизить", size: .toolbar) {
                 zoom(by: 1.4, anchorX: pointerX)
             }
         }
@@ -813,45 +817,5 @@ private struct WaveformCanvas: View {
             }
             context.fill(path, with: .color(Theme.waveform))
         }
-    }
-}
-
-private struct ZoomButton: View {
-    let icon: String
-    let help: String
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            Image(systemName: icon)
-                .font(.system(size: 13))
-                .foregroundStyle(Theme.textSecondary)
-                .frame(width: 26, height: 22)
-        }
-        .buttonStyle(.plain)
-        .help(help)
-        .accessibilityLabel(help)
-    }
-}
-
-private struct ToolButton: View {
-    let icon: String
-    let help: String
-    let active: Bool
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            Image(systemName: icon)
-                .font(.system(size: 13, weight: active ? .semibold : .regular))
-                .foregroundStyle(active ? Theme.accent : Theme.textSecondary)
-                .frame(width: 26, height: 22)
-                .background(active ? Theme.accent.opacity(0.12) : .clear)
-                .clipShape(RoundedRectangle(cornerRadius: Theme.radiusSmall, style: .continuous))
-        }
-        .buttonStyle(.plain)
-        .help(help)
-        .accessibilityLabel(help)
-        .accessibilityValue(active ? "Включено" : "Выключено")
     }
 }

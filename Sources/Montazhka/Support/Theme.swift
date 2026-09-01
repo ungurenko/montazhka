@@ -23,10 +23,13 @@ enum Theme {
     static let radiusSmall: CGFloat = 8
 
     enum Spacing {
+        static let hairline: CGFloat = 2
         static let compact: CGFloat = 4
         static let small: CGFloat = 8
+        static let snug: CGFloat = 12
         static let medium: CGFloat = 16
         static let large: CGFloat = 24
+        static let xlarge: CGFloat = 32
     }
 
     enum TypeScale {
@@ -35,6 +38,60 @@ enum Theme {
         static let body: CGFloat = 13
         static let helper: CGFloat = 12
         static let time: CGFloat = 13
+    }
+
+    /// Тень означает высоту слоя, а не украшение: чем выше слой над
+    /// содержимым, тем мягче и дальше падает тень.
+    enum Elevation {
+        /// Лежит на фоне: рабочие карточки, панели.
+        case flat
+        /// Приподнято над содержимым: плавающая верхняя панель.
+        case raised
+        /// Оторвано от плоскости: модальные окна, всплывающие подсказки.
+        case floating
+
+        var radius: CGFloat {
+            switch self {
+            case .flat: return 0
+            case .raised: return 8
+            case .floating: return 24
+            }
+        }
+
+        var opacity: Double {
+            switch self {
+            case .flat: return 0
+            case .raised: return 0.06
+            case .floating: return 0.14
+            }
+        }
+
+        var offsetY: CGFloat {
+            switch self {
+            case .flat: return 0
+            case .raised: return 2
+            case .floating: return 8
+            }
+        }
+    }
+
+    /// Движение интерфейса. Пружины вместо кривых: их можно перехватить
+    /// на полпути, и они не «доигрывают» вопреки новому действию.
+    enum Motion {
+        /// Отклик на нажатие — самый короткий, чувствуется как касание.
+        static let press = Animation.spring(response: 0.3, dampingFraction: 1.0)
+        /// Наведение мыши — простое затухание, без физики.
+        static let hover = Animation.easeOut(duration: 0.12)
+        /// Появление и уход боковых панелей.
+        static let panel = Animation.spring(response: 0.35, dampingFraction: 1.0)
+        /// Смена экрана целиком.
+        static let screen = Animation.spring(response: 0.4, dampingFraction: 1.0)
+
+        /// При включённом «Уменьшении движения» любое перемещение
+        /// заменяется коротким затуханием.
+        static func adapting(_ animation: Animation, reduceMotion: Bool) -> Animation {
+            reduceMotion ? .easeInOut(duration: 0.12) : animation
+        }
     }
 }
 
@@ -59,6 +116,15 @@ extension View {
                 RoundedRectangle(cornerRadius: Theme.radiusSmall, style: .continuous)
                     .stroke(selected ? Theme.accent.opacity(0.45) : Theme.border, lineWidth: 1)
             }
+    }
+
+    /// Поднимает слой над содержимым: тень как высота, не как декор.
+    func elevation(_ level: Theme.Elevation) -> some View {
+        shadow(
+            color: .black.opacity(level.opacity),
+            radius: level.radius,
+            x: 0,
+            y: level.offsetY)
     }
 }
 
