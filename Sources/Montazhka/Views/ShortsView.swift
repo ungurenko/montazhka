@@ -731,7 +731,7 @@ private struct ShortsTransportBar: View {
 
             Spacer()
 
-            Text(TimeFormat.short(controller.sourceDuration))
+            Text(TimeFormat.short(controller.previewDuration))
                 .font(.system(size: Theme.TypeScale.time, weight: .medium, design: .monospaced))
                 .foregroundStyle(Theme.textSecondary)
                 .frame(width: 72, alignment: .trailing)

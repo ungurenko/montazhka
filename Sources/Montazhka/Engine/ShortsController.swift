@@ -154,6 +154,15 @@ final class ShortsController {
         candidate.timeMap(trimmingPauses: trimPauses)
     }
 
+    /// Что сейчас в плеере: ролик, а не весь исходник. Пока ничего не выбрано —
+    /// длительность файла, как в заголовке экрана.
+    var previewDuration: Double {
+        guard let previewingID,
+            let candidate = candidates.first(where: { $0.id == previewingID })
+        else { return sourceDuration }
+        return timeMap(for: candidate).outputDuration
+    }
+
     private func updateSubtitleSettings(_ update: (inout ShortsSubtitleSettings) -> Void) {
         var next = subtitleSettings
         update(&next)
