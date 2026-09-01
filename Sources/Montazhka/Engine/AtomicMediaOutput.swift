@@ -38,10 +38,27 @@ struct AtomicMediaOutput {
             try fileManager.moveItem(at: temporaryURL, to: destinationURL)
         }
         committed = true
+        removeLeftovers()
     }
 
     func discard() {
         guard !committed else { return }
         try? fileManager.removeItem(at: temporaryURL)
+        removeLeftovers()
+    }
+
+    /// AVAssetWriter с оптимизацией под стриминг переписывает файл через свою
+    /// копию рядом — «имя.mp4.sb-…» — и не всегда её убирает. Как только
+    /// временный файл уезжает на место, копию уже никто не найдёт, поэтому
+    /// сносим всё, что выросло из нашего имени. UUID в имени делает совпадение
+    /// однозначным: чужие файлы под него не попадут.
+    private func removeLeftovers() {
+        let directory = temporaryURL.deletingLastPathComponent()
+        let prefix = temporaryURL.lastPathComponent
+        let names =
+            (try? fileManager.contentsOfDirectory(atPath: directory.path)) ?? []
+        for name in names where name != prefix && name.hasPrefix(prefix) {
+            try? fileManager.removeItem(at: directory.appendingPathComponent(name))
+        }
     }
 }

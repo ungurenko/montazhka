@@ -54,6 +54,49 @@ struct AtomicMediaOutputTests {
     }
 
     @Test
+    func commitRemovesShadowFileLeftByTheVideoWriter() throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let destination = directory.appendingPathComponent("video.mp4")
+
+        var output = AtomicMediaOutput(destinationURL: destination)
+        try Data("complete".utf8).write(to: output.temporaryURL)
+        // AVAssetWriter с оптимизацией под стриминг кладёт рядом свою копию
+        // и не всегда её убирает; после переноса файла её уже никто не найдёт.
+        let shadow = directory.appendingPathComponent(
+            output.temporaryURL.lastPathComponent + ".sb-8f6271af-OSXzYQ")
+        try Data("shadow".utf8).write(to: shadow)
+
+        try output.commit()
+
+        #expect(
+            (try FileManager.default.contentsOfDirectory(atPath: directory.path).sorted())
+                == (["video.mp4"]))
+    }
+
+    @Test
+    func discardRemovesShadowFileTogetherWithTheTemporaryOne() throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let destination = directory.appendingPathComponent("video.mp4")
+        try Data("old".utf8).write(to: destination)
+
+        let output = AtomicMediaOutput(destinationURL: destination)
+        try Data("partial".utf8).write(to: output.temporaryURL)
+        let shadow = directory.appendingPathComponent(
+            output.temporaryURL.lastPathComponent + ".sb-8f6271af-7EaLDv")
+        try Data("shadow".utf8).write(to: shadow)
+
+        output.discard()
+
+        #expect(
+            (try FileManager.default.contentsOfDirectory(atPath: directory.path).sorted())
+                == (["video.mp4"]))
+    }
+
+    @Test
     func transcoderFailureDoesNotTouchExistingDestination() async throws {
         let directory = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
