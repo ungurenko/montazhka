@@ -174,8 +174,11 @@ enum ShortsSubtitleCueBuilder {
             let segment: Int
         }
 
+        // Сначала отсекаем всё за пределами ролика: превью строит фразы на
+        // каждом кадре, а транскрипт часового видео — это тысячи слов.
         let placed: [Placed] =
             words
+            .filter { $0.end > timeMap.sourceStart && $0.start < timeMap.sourceEnd }
             .sorted { left, right in
                 if left.start != right.start { return left.start < right.start }
                 return left.end < right.end
