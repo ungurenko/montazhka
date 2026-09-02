@@ -358,35 +358,35 @@ private struct TransportBar: View {
 
             Spacer()
 
-            IconButton(icon: "backward.frame.fill", help: "Кадр назад (←)") {
+            IconButton(icon: "backward.frame.fill", help: Shortcut.frameBack.hint) {
                 controller.stepFrames(-1)
             }
             PlayPauseControl(controller: controller)
                 .disabled(controller.previewState != .ready)
-            IconButton(icon: "forward.frame.fill", help: "Кадр вперёд (→)") {
+            IconButton(icon: "forward.frame.fill", help: Shortcut.frameForward.hint) {
                 controller.stepFrames(1)
             }
 
             Divider().frame(height: 22)
 
-            IconButton(icon: "scissors", help: "Разрезать в позиции ползунка (S)") {
+            IconButton(icon: "scissors", help: Shortcut.split.hint) {
                 controller.splitAtPlayhead()
             }
-            IconButton(icon: "inset.filled.leadinghalf.rectangle", help: "Начало выделения (I)") {
+            IconButton(icon: "inset.filled.leadinghalf.rectangle", help: Shortcut.markIn.hint) {
                 controller.markSelectionStart()
             }
-            IconButton(icon: "inset.filled.trailinghalf.rectangle", help: "Конец выделения (O)") {
+            IconButton(icon: "inset.filled.trailinghalf.rectangle", help: Shortcut.markOut.hint) {
                 controller.markSelectionEnd()
             }
             IconButton(icon: "selection.pin.in.out", help: "Прослушать выделение") {
                 controller.previewSelection()
             }
             .disabled(controller.timelineSelection == nil)
-            IconButton(icon: "scissors.badge.ellipsis", help: "Вырезать выделение (X)") {
+            IconButton(icon: "scissors.badge.ellipsis", help: Shortcut.cutSelection.hint) {
                 controller.cutSelection()
             }
             .disabled(controller.timelineSelection == nil)
-            IconButton(icon: "trash", help: "Удалить выбранный клип (Delete)") {
+            IconButton(icon: "trash", help: Shortcut.deleteClip.hint) {
                 controller.deleteSelectedClip()
             }
             .disabled(controller.selectedClipID == nil)
@@ -422,7 +422,7 @@ private struct PlayPauseControl: View {
     var body: some View {
         IconButton(
             icon: controller.isPlaying ? "pause.fill" : "play.fill",
-            help: "Плей/пауза (пробел)",
+            help: Shortcut.playPause.hint,
             size: .transportPrimary,
             prominence: .filled
         ) {

@@ -21,18 +21,22 @@ struct PausePanel: View {
                             resultsBlock
                                 .id("results")
                         } else if controller.hasPauseResult && !controller.isDetecting {
-                            EmptyStateView(
-                                systemImage: "waveform",
+                            // Плашка, а не пустой экран: панель узкая и невысокая,
+                            // и это сообщение о результате поиска, а не пустая вкладка.
+                            StatusBanner(
+                                kind: .info,
                                 title: "Пауз не нашлось",
-                                message:
+                                hint:
                                     "Речь идёт без заметных остановок. Подними чувствительность "
-                                    + "или уменьши минимальную паузу и поищи ещё раз.",
-                                action: EmptyStateView.Action(
-                                    title: "Искать снова",
-                                    accessibilityIdentifier: "pauses.retry",
-                                    perform: { controller.detectPauses() })
+                                    + "или уменьши минимальную паузу.",
+                                actions: [
+                                    StatusBanner.Action(
+                                        title: "Искать снова",
+                                        accessibilityIdentifier: "pauses.retry",
+                                        perform: { controller.detectPauses() })
+                                ]
                             )
-                            .frame(maxWidth: .infinity)
+                            .id("results")
                         }
                     }
                     .padding(.horizontal, Theme.Spacing.medium)
@@ -40,6 +44,13 @@ struct PausePanel: View {
                 }
                 .onChange(of: controller.candidates.count) { _, count in
                     if count > 0 {
+                        withAnimation { proxy.scrollTo("results", anchor: .top) }
+                    }
+                }
+                // К сообщению «пауз не нашлось» тоже подкручиваем: иначе итог
+                // поиска остаётся ниже края панели, и кажется, что ничего не было.
+                .onChange(of: controller.hasPauseResult) { _, finished in
+                    if finished && controller.candidates.isEmpty {
                         withAnimation { proxy.scrollTo("results", anchor: .top) }
                     }
                 }

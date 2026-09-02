@@ -40,39 +40,35 @@ struct MontazhkaApp: App {
                     .disabled(editor?.canRedo != true)
             }
             CommandMenu("Монтаж") {
-                Button("Плей/пауза") { editor?.togglePlay() }
-                    .keyboardShortcut(.space, modifiers: [])
-                    .disabled(editor?.project.clips.isEmpty != false)
-                Button("Кадр назад") { editor?.stepFrames(-1) }
-                    .keyboardShortcut(.leftArrow, modifiers: [])
-                    .disabled(editor?.project.clips.isEmpty != false)
-                Button("Кадр вперёд") { editor?.stepFrames(1) }
-                    .keyboardShortcut(.rightArrow, modifiers: [])
-                    .disabled(editor?.project.clips.isEmpty != false)
-                Button("Секунда назад") { editor?.stepFrames(-30) }
-                    .keyboardShortcut(.leftArrow, modifiers: .shift)
-                    .disabled(editor?.project.clips.isEmpty != false)
-                Button("Секунда вперёд") { editor?.stepFrames(30) }
-                    .keyboardShortcut(.rightArrow, modifiers: .shift)
-                    .disabled(editor?.project.clips.isEmpty != false)
+                menuItem(.playPause) { editor?.togglePlay() }
+                menuItem(.frameBack) { editor?.stepFrames(-1) }
+                menuItem(.frameForward) { editor?.stepFrames(1) }
+                menuItem(.secondBack) { editor?.stepFrames(-30) }
+                menuItem(.secondForward) { editor?.stepFrames(30) }
                 Divider()
-                Button("Разрезать") { editor?.splitAtPlayhead() }
-                    .keyboardShortcut("s", modifiers: [])
-                    .disabled(editor?.project.clips.isEmpty != false)
-                Button("Начало выделения") { editor?.markSelectionStart() }
-                    .keyboardShortcut("i", modifiers: [])
-                    .disabled(editor?.project.clips.isEmpty != false)
-                Button("Конец выделения") { editor?.markSelectionEnd() }
-                    .keyboardShortcut("o", modifiers: [])
-                    .disabled(editor?.project.clips.isEmpty != false)
-                Button("Вырезать выделение") { editor?.cutSelection() }
-                    .keyboardShortcut("x", modifiers: [])
-                    .disabled(editor?.timelineSelection == nil)
-                Button("Удалить выбранный клип") { editor?.deleteSelectedClip() }
-                    .keyboardShortcut(.delete, modifiers: [])
-                    .disabled(editor?.selectedClipID == nil)
+                menuItem(.split) { editor?.splitAtPlayhead() }
+                menuItem(.markIn) { editor?.markSelectionStart() }
+                menuItem(.markOut) { editor?.markSelectionEnd() }
+                menuItem(.cutSelection, isEnabled: editor?.timelineSelection != nil) {
+                    editor?.cutSelection()
+                }
+                menuItem(.deleteClip, isEnabled: editor?.selectedClipID != nil) {
+                    editor?.deleteSelectedClip()
+                }
             }
         }
+    }
+
+    /// Пункт меню с клавишей из общего списка: название и клавиша берутся
+    /// оттуда же, откуда подсказки на кнопках панели воспроизведения.
+    private func menuItem(
+        _ shortcut: Shortcut,
+        isEnabled: Bool? = nil,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(shortcut.title, action: action)
+            .keyboardShortcut(shortcut)
+            .disabled(isEnabled ?? (editor?.project.clips.isEmpty != false))
     }
 }
 

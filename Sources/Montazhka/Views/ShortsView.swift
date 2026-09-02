@@ -595,6 +595,9 @@ struct ShortsView: View {
 
     // MARK: - Клавиатура
 
+    /// Пробел ловим сами, а не пунктом меню: перехватчик пропускает событие
+    /// дальше, когда курсор стоит в текстовом поле, — иначе пробел нельзя было
+    /// бы набрать в поле ключа OpenRouter.
     private func installKeyMonitor() {
         removeKeyMonitor()
         let controller = self.controller
