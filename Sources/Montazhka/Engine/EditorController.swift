@@ -16,27 +16,27 @@ func uniqueMediaSources(in clips: [Clip]) -> [MediaReference] {
 enum VoiceEnhanceStatus: Equatable {
     case idle
     case rendering(done: Int, total: Int)
-    case failed(String)
+    case failed(UserFacingError)
 }
 
 enum ProjectSaveStatus: Equatable {
     case idle
     case saving
     case saved
-    case failed(String)
+    case failed(UserFacingError)
 }
 
 enum PreviewState: Equatable {
     case empty
     case preparing
     case ready
-    case failed(String)
+    case failed(UserFacingError)
 }
 
 enum ClipImportState: Equatable {
     case idle
     case importing
-    case failed(String)
+    case failed(UserFacingError)
 }
 
 private struct ClipLoadResult: Sendable {
@@ -361,7 +361,11 @@ final class EditorController: ExportPreparing {
                 let warning = self.renderWarnings.map(\.message).joined(separator: "\n")
                 self.player.replaceCurrentItem(with: nil)
                 self.previewState = .failed(
-                    warning.isEmpty ? "Не удалось прочитать видео из проекта." : warning
+                    UserFacingError(
+                        "Не получилось прочитать видео из проекта.",
+                        hint: warning.isEmpty
+                            ? "Проверь, что исходные файлы на месте."
+                            : warning)
                 )
                 return
             }
@@ -551,7 +555,7 @@ final class EditorController: ExportPreparing {
                         } catch {
                             return ClipLoadResult(
                                 index: i, url: url, duration: nil,
-                                error: error.localizedDescription)
+                                error: UserFacingError.make(error, context: .clipImport).what)
                         }
                     }
                 }
@@ -575,7 +579,10 @@ final class EditorController: ExportPreparing {
             self.clipImportState =
                 failures.isEmpty
                 ? .idle
-                : .failed("Не удалось добавить видео:\n" + failures.joined(separator: "\n"))
+                : .failed(
+                    UserFacingError(
+                        "Не получилось добавить видео.",
+                        hint: failures.joined(separator: "\n")))
             self.clipImportTask = nil
         }
     }
@@ -815,7 +822,10 @@ final class EditorController: ExportPreparing {
                 // без звуковой дорожки — оставляем оригинал
             } catch {
                 guard enhanceGeneration.isCurrent(generation) else { return nil }
-                voiceStatus = .failed("Не удалось обработать звук. Предпросмотр и экспорт — с исходным звуком.")
+                voiceStatus = .failed(
+                    UserFacingError(
+                        "Не получилось обработать звук.",
+                        hint: "Просмотр и экспорт пойдут с исходным звуком."))
                 enhancedAudioURLs = [:]
                 return nil
             }
@@ -905,7 +915,7 @@ final class EditorController: ExportPreparing {
                 if self.smartEditGeneration.isCurrent(generation) { self.setSmartEditStatus(.idle) }
             } catch {
                 guard self.smartEditGeneration.isCurrent(generation) else { return }
-                self.setSmartEditStatus(.failed(error.localizedDescription))
+                self.setSmartEditStatus(.failed(UserFacingError.make(error, context: .smartEdit)))
             }
         }
     }
@@ -960,7 +970,7 @@ final class EditorController: ExportPreparing {
     func previewSmartEditJoin(_ candidate: SmartEditCandidate) {
         let expectedSnapshot = SmartEditSnapshot(clips: project.clips).id
         guard smartEditSnapshotID == expectedSnapshot else {
-            setSmartEditStatus(.failed(SmartEditError.staleAnalysis.localizedDescription))
+            setSmartEditStatus(.failed(UserFacingError.make(SmartEditError.staleAnalysis, context: .smartEdit)))
             return
         }
         var previewProject = project
@@ -1003,7 +1013,7 @@ final class EditorController: ExportPreparing {
     func applySmartEdits() {
         let expectedSnapshot = SmartEditSnapshot(clips: project.clips).id
         guard smartEditSnapshotID == expectedSnapshot else {
-            setSmartEditStatus(.failed(SmartEditError.staleAnalysis.localizedDescription))
+            setSmartEditStatus(.failed(UserFacingError.make(SmartEditError.staleAnalysis, context: .smartEdit)))
             return
         }
         let ranges = SmartEditRanges.merged(

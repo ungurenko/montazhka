@@ -100,7 +100,7 @@ final class AppModel {
     var editor: EditorController?
     var shorts: ShortsController?
     var recents: [ProjectMeta] = []
-    var storeErrorMessage: String?
+    var storeErrorMessage: UserFacingError?
     private(set) var isProjectOperationInProgress = false
     private var recentsTask: Task<Void, Never>?
     private var recentsGeneration = 0
@@ -133,7 +133,9 @@ final class AppModel {
         Task { [weak self] in
             guard let self else { return }
             do { agentIntegration = try await AgentIntegrationInstaller.install() } catch {
-                agentIntegration = AgentIntegrationStatus(installed: false, message: error.localizedDescription)
+                agentIntegration = AgentIntegrationStatus(
+                    installed: false,
+                    message: UserFacingError.make(error, context: .project).message)
             }
             isAgentIntegrationInProgress = false
         }
@@ -148,7 +150,7 @@ final class AppModel {
                     to: fixtureURL)
                 self?.newProject(with: [fixtureURL])
             } catch {
-                self?.storeErrorMessage = error.localizedDescription
+                self?.storeErrorMessage = UserFacingError.make(error, context: .project)
             }
         }
     }
@@ -162,7 +164,7 @@ final class AppModel {
                     to: fixtureURL)
                 self?.startShorts(url: fixtureURL, seedUITestCandidate: true)
             } catch {
-                self?.storeErrorMessage = error.localizedDescription
+                self?.storeErrorMessage = UserFacingError.make(error, context: .project)
             }
         }
     }
@@ -199,16 +201,16 @@ final class AppModel {
                 } else {
                     let count = listing.issues.count
                     let names = listing.issues.prefix(3).map(\.fileName).joined(separator: ", ")
-                    storeErrorMessage =
-                        "Не удалось открыть \(count) \(count == 1 ? "проект" : "проекта"): \(names). Остальные проекты доступны."
+                    storeErrorMessage = UserFacingError(
+                        "Не удалось открыть \(count) \(count == 1 ? "проект" : "проекта"): \(names).",
+                        hint: "Остальные проекты доступны — эти файлы, похоже, повреждены.")
                 }
                 if openLatestAfterLoad, editor == nil, let latest = recents.first {
                     openProject(id: latest.id)
                 }
             } catch {
                 guard !Task.isCancelled, generation == recentsGeneration else { return }
-                Logger.persistence.error("Не удалось получить список проектов: \(error.localizedDescription)")
-                storeErrorMessage = error.localizedDescription
+                storeErrorMessage = UserFacingError.make(error, context: .project)
             }
         }
     }
@@ -342,8 +344,8 @@ final class AppModel {
 
     private func failProjectOperation(_ generation: Int, error: Error, context: String) {
         guard isCurrentProjectOperation(generation) else { return }
-        Logger.persistence.error("\(context): \(error.localizedDescription)")
-        storeErrorMessage = error.localizedDescription
+        Logger.persistence.error("\(context, privacy: .public)")
+        storeErrorMessage = UserFacingError.make(error, context: .project)
         finishProjectOperation(generation)
     }
 
@@ -395,10 +397,10 @@ struct RootView: View {
             }
         }
         .animation(.easeInOut(duration: 0.2), value: rootKey)
-        .alert("Ошибка проекта", isPresented: storeErrorBinding) {
+        .alert(app.storeErrorMessage?.what ?? "Ошибка проекта", isPresented: storeErrorBinding) {
             Button("Понятно", role: .cancel) {}
         } message: {
-            Text(app.storeErrorMessage ?? "")
+            Text(app.storeErrorMessage?.hint ?? "")
         }
     }
 

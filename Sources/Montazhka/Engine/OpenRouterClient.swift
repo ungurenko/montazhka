@@ -22,7 +22,7 @@ enum OpenRouterError: LocalizedError, Equatable {
         case .providerUnavailable: return "Провайдер модели временно недоступен. Попробуй ещё раз."
         case .timeout: return "OpenRouter не ответил за две минуты. Попробуй ещё раз."
         case .damagedResponse: return "ИИ вернул повреждённый ответ. Попробуй ещё раз."
-        case .network(let message): return "Не удалось связаться с OpenRouter: \(message)"
+        case .network: return "Не получилось связаться с OpenRouter."
         }
     }
 }
@@ -353,7 +353,7 @@ actor OpenRouterClient {
                 throw OpenRouterError.timeout
             } catch {
                 Logger.network.error("OpenRouter: транспортный запрос завершился ошибкой.")
-                throw OpenRouterError.network(error.localizedDescription)
+                throw OpenRouterError.network(String(reflecting: error))
             }
         }
         throw OpenRouterError.providerUnavailable

@@ -82,16 +82,11 @@ struct ShortsView: View {
                     presentationSize: playerVideoSize)
             }
             if let error = controller.prepareError ?? controller.previewError {
-                VStack(spacing: Theme.Spacing.small) {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .font(.system(size: 28))
-                        .foregroundStyle(.orange)
-                    Text(error)
-                        .font(.system(size: 13))
-                        .multilineTextAlignment(.center)
-                }
-                .foregroundStyle(.white)
-                .padding(24)
+                EmptyStateView(
+                    systemImage: "exclamationmark.triangle.fill",
+                    title: error.what,
+                    message: error.hint,
+                    appearance: .onMedia)
             } else if controller.candidates.isEmpty && !controller.status.isWorking {
                 EmptyStateView(
                     systemImage: "sparkles.rectangle.stack",
@@ -225,8 +220,8 @@ struct ShortsView: View {
             || controller.sourceDuration < ShortsLimits.minSourceDuration || !SmartEditPlatform.isSupported
     }
 
-    private func errorLabel(_ message: String, hint: String? = nil) -> some View {
-        StatusBanner(kind: .error, title: message, hint: hint)
+    private func errorLabel(_ error: UserFacingError) -> some View {
+        StatusBanner(error: error)
     }
 
     // MARK: - Прогресс анализа

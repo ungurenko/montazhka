@@ -56,8 +56,8 @@ struct EditorView: View {
             Button("Повторить") { Task { await controller.saveNow() } }
             Button("Закрыть", role: .cancel) { controller.dismissSaveError() }
         } message: {
-            if case let .failed(message) = controller.saveStatus {
-                Text(message)
+            if case let .failed(error) = controller.saveStatus {
+                Text(error.message)
             }
         }
         .onAppear {
@@ -288,25 +288,20 @@ struct EditorView: View {
         switch controller.clipImportState {
         case .importing:
             playerProgress("Добавляю видео…")
-        case .failed(let message) where controller.project.clips.isEmpty:
-            playerError(title: "Видео не добавилось", message: message)
+        case .failed(let error) where controller.project.clips.isEmpty:
+            playerError(error)
         default:
             switch controller.previewState {
             case .preparing:
                 playerProgress("Подготавливаю проект…")
-            case .failed(let message):
-                playerError(title: "Не удалось подготовить проект", message: message)
+            case .failed(let error):
+                playerError(error, retry: { controller.rebuildAndSeek(to: controller.currentTime) })
             case .empty, .ready:
-                if case .failed(let message) = controller.clipImportState {
+                if case .failed(let error) = controller.clipImportState {
                     VStack {
                         Spacer()
-                        Label(message, systemImage: "exclamationmark.triangle.fill")
-                            .font(.system(size: 12))
-                            .foregroundStyle(.white)
-                            .padding(Theme.Spacing.small)
-                            .background(Color.orange.opacity(0.92))
-                            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                            .padding(12)
+                        StatusBanner(kind: .warning, error: error)
+                            .padding(Theme.Spacing.snug)
                     }
                 }
             }
@@ -324,25 +319,15 @@ struct EditorView: View {
         .foregroundStyle(.white.opacity(0.9))
     }
 
-    private func playerError(title: String, message: String) -> some View {
-        VStack(spacing: Theme.Spacing.small) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: 28))
-                .foregroundStyle(.orange)
-            Text(title)
-                .font(.system(size: Theme.TypeScale.sectionTitle, weight: .semibold))
-            Text(message)
-                .font(.system(size: 12))
-                .foregroundStyle(.white.opacity(0.7))
-                .multilineTextAlignment(.center)
-                .lineLimit(4)
-            if case .failed = controller.previewState {
-                Button("Повторить") { controller.rebuildAndSeek(to: controller.currentTime) }
-                    .buttonStyle(.borderedProminent)
-            }
-        }
-        .foregroundStyle(.white)
-        .padding(24)
+    private func playerError(_ error: UserFacingError, retry: (() -> Void)? = nil) -> some View {
+        EmptyStateView(
+            systemImage: "exclamationmark.triangle.fill",
+            title: error.what,
+            message: error.hint,
+            appearance: .onMedia,
+            action: retry.map { perform in
+                EmptyStateView.Action(title: "Повторить", perform: perform)
+            })
     }
 
     private func handleDrop(_ providers: [NSItemProvider]) -> Bool {

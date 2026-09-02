@@ -42,6 +42,18 @@ struct StatusBanner: View {
     var hint: String?
     var actions: [Action] = []
 
+    init(kind: Kind, title: String, hint: String? = nil, actions: [Action] = []) {
+        self.kind = kind
+        self.title = title
+        self.hint = hint
+        self.actions = actions
+    }
+
+    /// Ошибка уже разделена на «что случилось» и «что делать» — берём как есть.
+    init(kind: Kind = .error, error: UserFacingError, actions: [Action] = []) {
+        self.init(kind: kind, title: error.what, hint: error.hint, actions: actions)
+    }
+
     var body: some View {
         HStack(alignment: .top, spacing: Theme.Spacing.small) {
             Image(systemName: kind.systemImage)

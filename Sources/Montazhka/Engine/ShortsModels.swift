@@ -151,7 +151,7 @@ enum ShortsStatus: Equatable {
     case ranking
     case verifying
     case ready
-    case failed(String)
+    case failed(UserFacingError)
 
     var allowsAnalysisStart: Bool {
         switch self {
@@ -175,9 +175,17 @@ enum ShortsError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .fileUnavailable: return "Файл недоступен. Проверь, что видео на месте."
+        case .fileUnavailable: return "Файл недоступен."
         case .tooShort: return "Видео короче 20 секунд — нарезать нечего."
         case .emptyTranscript: return "Не удалось найти русскую речь в этом видео."
+        }
+    }
+
+    var recoverySuggestion: String? {
+        switch self {
+        case .fileUnavailable: return "Проверь, что видео на месте и не переименовано."
+        case .tooShort: return "Выбери запись подлиннее — от 20 секунд."
+        case .emptyTranscript: return "Нарезка работает только с русской речью в кадре."
         }
     }
 }
@@ -186,7 +194,7 @@ enum ShortsExportState: Equatable {
     case idle
     case exporting(done: Int, total: Int, progress: Double)
     case done(URL)
-    case failed(message: String, completed: Int, total: Int, folder: URL)
+    case failed(message: UserFacingError, completed: Int, total: Int, folder: URL)
 }
 
 enum ShortsAnalysisWarning: Equatable, Sendable {

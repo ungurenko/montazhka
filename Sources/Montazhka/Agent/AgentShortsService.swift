@@ -144,7 +144,7 @@ extension AgentService {
         case .ranking: "Отбор моментов"
         case .verifying: "Проверка моментов"
         case .ready: "Анализ готов"
-        case .failed(let message): message
+        case .failed(let error): error.message
         }
     }
 }

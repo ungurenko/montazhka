@@ -228,7 +228,7 @@ extension AgentService {
         case .reviewing: "Проверка исправлений"
         case .preparingCuts: "Подготовка резов"
         case .ready: "Умный монтаж готов"
-        case .failed(let message): message
+        case .failed(let error): error.message
         }
     }
 }

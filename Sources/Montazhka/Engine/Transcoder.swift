@@ -10,8 +10,24 @@ enum TranscodeError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .noVideoTrack: "В проекте нет видеодорожки."
-        case .readerFailed(let error): error?.localizedDescription ?? "не удалось прочитать видео"
-        case .writerFailed(let error): error?.localizedDescription ?? "не удалось записать файл"
+        case .readerFailed: "Не получилось прочитать исходное видео."
+        case .writerFailed: "Не получилось записать готовый файл."
+        }
+    }
+
+    var recoverySuggestion: String? {
+        switch self {
+        case .noVideoTrack: "Добавь хотя бы один клип и попробуй ещё раз."
+        case .readerFailed: "Проверь, что исходные файлы на месте и открываются."
+        case .writerFailed: "Проверь свободное место на диске и права на папку."
+        }
+    }
+
+    /// Системная причина — только для лога, в интерфейс она не попадает.
+    var underlying: Error? {
+        switch self {
+        case .noVideoTrack: nil
+        case .readerFailed(let error), .writerFailed(let error): error
         }
     }
 }

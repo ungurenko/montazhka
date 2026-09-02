@@ -249,11 +249,9 @@ struct SmartEditPanel: View {
 
     @ViewBuilder
     private var results: some View {
-        if case .failed(let message) = controller.smartEditStatus {
+        if case .failed(let error) = controller.smartEditStatus {
             StatusBanner(
-                kind: .error,
-                title: message,
-                hint: "Проверь подключение к модели и запусти анализ ещё раз.",
+                error: error,
                 actions: [
                     StatusBanner.Action(
                         title: "Повторить анализ",

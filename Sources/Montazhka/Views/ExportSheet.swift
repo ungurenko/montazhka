@@ -157,18 +157,21 @@ struct ExportSheet: View {
         }
     }
 
-    private func failedView(_ message: String) -> some View {
+    private func failedView(_ error: UserFacingError) -> some View {
         VStack(spacing: 16) {
             Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: 40))
-                .foregroundStyle(Theme.pauseHighlight)
-            Text("Что-то пошло не так")
-                .font(.system(size: Theme.TypeScale.screenTitle, weight: .bold))
+                .font(.system(size: IconScale.hero - 4))
+                .foregroundStyle(Theme.warning)
+            Text(error.what)
+                .typeStyle(.screenTitle)
                 .foregroundStyle(Theme.textPrimary)
-            Text(message)
-                .font(.system(size: 13))
-                .foregroundStyle(Theme.textSecondary)
                 .multilineTextAlignment(.center)
+            if let hint = error.hint {
+                Text(hint)
+                    .typeStyle(.body)
+                    .foregroundStyle(Theme.textSecondary)
+                    .multilineTextAlignment(.center)
+            }
             HStack(spacing: 12) {
                 Button("Закрыть") { dismiss() }
                     .buttonStyle(.bordered)

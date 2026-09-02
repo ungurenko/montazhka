@@ -52,8 +52,8 @@ final class ShortsController {
     private(set) var source: MediaReference
     private(set) var sourceDuration: Double = 0
     private(set) var displaySize = CGSize(width: 1920, height: 1080)
-    private(set) var prepareError: String?
-    private(set) var previewError: String?
+    private(set) var prepareError: UserFacingError?
+    private(set) var previewError: UserFacingError?
 
     var count: ShortsCount {
         didSet { count.save(in: preferences) }
@@ -250,12 +250,16 @@ final class ShortsController {
             guard let self else { return }
             guard let duration = try? await asset.load(.duration).seconds, duration.isFinite else {
                 guard self.prepareOperation.isCurrent(token) else { return }
-                self.prepareError = "Не удалось прочитать файл."
+                self.prepareError = UserFacingError(
+                    "Не получилось открыть это видео.",
+                    hint: "Проверь, что файл на месте, и попробуй MP4 или MOV.")
                 return
             }
             guard let videoTrack = try? await asset.loadTracks(withMediaType: .video).first else {
                 guard self.prepareOperation.isCurrent(token) else { return }
-                self.prepareError = "В файле нет видеодорожки."
+                self.prepareError = UserFacingError(
+                    "В файле нет видеодорожки.",
+                    hint: "Похоже, это только звук — выбери видеофайл.")
                 return
             }
             guard self.prepareOperation.isCurrent(token) else { return }
@@ -269,7 +273,7 @@ final class ShortsController {
             guard self.prepareOperation.isCurrent(token) else { return }
             self.sourceDuration = duration
             if duration < ShortsLimits.minSourceDuration {
-                self.prepareError = ShortsError.tooShort.localizedDescription
+                self.prepareError = UserFacingError.make(ShortsError.tooShort, context: .shorts)
             }
         }
     }
@@ -332,7 +336,7 @@ final class ShortsController {
                 if self.analysisOperation.isCurrent(token) { self.setStatus(.idle) }
             } catch {
                 guard self.analysisOperation.isCurrent(token) else { return }
-                self.setStatus(.failed(error.localizedDescription))
+                self.setStatus(.failed(UserFacingError.make(error, context: .shorts)))
             }
         }
     }
@@ -414,8 +418,7 @@ final class ShortsController {
                 return
             } catch {
                 guard self.previewOperation.isCurrent(token) else { return }
-                self.previewError =
-                    "Не получилось подготовить просмотр: \(error.localizedDescription)"
+                self.previewError = UserFacingError.make(error, context: .preview)
                 return
             }
             guard self.previewOperation.isCurrent(token) else { return }
@@ -605,7 +608,7 @@ final class ShortsController {
                 }
                 self.setExportState(
                     .failed(
-                        message: "Не получилось сохранить ролики: \(error.localizedDescription)",
+                        message: UserFacingError.make(error, context: .export),
                         completed: done,
                         total: total,
                         folder: folder))
@@ -620,7 +623,7 @@ final class ShortsController {
             let currentExportFolder
         {
             cancelledState = .failed(
-                message: "Экспорт остановлен.",
+                message: UserFacingError("Экспорт остановлен.", hint: "Уже сохранённые ролики на месте."),
                 completed: done,
                 total: total,
                 folder: currentExportFolder)

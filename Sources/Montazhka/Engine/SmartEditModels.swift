@@ -145,7 +145,7 @@ enum SmartEditStatus: Equatable {
     case reviewing
     case preparingCuts
     case ready
-    case failed(String)
+    case failed(UserFacingError)
 
     var allowsAnalysisStart: Bool {
         switch self {

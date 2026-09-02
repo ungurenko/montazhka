@@ -150,7 +150,7 @@ final class ExportModel {
         case preparing
         case exporting
         case done(URL)
-        case failed(String)
+        case failed(UserFacingError)
     }
 
     private(set) var state: State = .idle
@@ -263,7 +263,7 @@ final class ExportModel {
             } catch {
                 guard self.operationGeneration.isCurrent(generation) else { return }
                 Logger.export.error("Экспорт не удался: \(error.localizedDescription)")
-                self.setState(.failed("Не получилось сохранить видео: \(error.localizedDescription)"))
+                self.setState(.failed(UserFacingError.make(error, context: .export)))
             }
             if self.operationGeneration.isCurrent(generation) {
                 self.operationTask = nil

@@ -24,8 +24,8 @@ enum SpeechTranscriptionError: LocalizedError {
             return "Не удалось загрузить модель распознавания. Проверь интернет и попробуй ещё раз."
         case .damagedModel:
             return "Модель распознавания повреждена. Удали её в настройках и загрузи заново."
-        case .recognitionFailed(let message):
-            return "Не удалось распознать речь: \(message)"
+        case .recognitionFailed:
+            return "Не получилось распознать речь."
         }
     }
 }
@@ -75,7 +75,7 @@ actor ParakeetTranscriber {
             } catch is CancellationError {
                 throw CancellationError()
             } catch {
-                throw SpeechTranscriptionError.recognitionFailed(error.localizedDescription)
+                throw SpeechTranscriptionError.recognitionFailed(String(reflecting: error))
             }
         #endif
     }

@@ -49,7 +49,7 @@ final class ProjectSaveCoordinator {
             status = .saved
         } catch {
             Logger.persistence.error("Не удалось сохранить проект при завершении: \(error.localizedDescription)")
-            status = .failed(error.localizedDescription)
+            status = .failed(UserFacingError.make(error, context: .project))
         }
     }
 
@@ -73,7 +73,7 @@ final class ProjectSaveCoordinator {
         } catch {
             guard generation.isCurrent(current) else { return }
             Logger.persistence.error("Не удалось сохранить проект: \(error.localizedDescription)")
-            status = .failed(error.localizedDescription)
+            status = .failed(UserFacingError.make(error, context: .project))
         }
     }
 }

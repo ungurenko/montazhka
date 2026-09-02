@@ -53,7 +53,7 @@ enum ActivitySelfTest {
         check(
             SmartEditStatus.idle.activitySnapshot == nil
                 && SmartEditStatus.ready.activitySnapshot == nil
-                && SmartEditStatus.failed("нет").activitySnapshot == nil,
+                && SmartEditStatus.failed(UserFacingError("нет")).activitySnapshot == nil,
             "завершённые состояния не считаются работой")
         check(
             SmartEditStatus.transcribing(done: 1, total: 4, progress: nil)
@@ -182,7 +182,8 @@ enum ActivitySelfTest {
         sounds.removeAll()
         let failed = makeAnnouncer()
         failed.announce(
-            ActivityCompletion(kind: .export, outcome: .failure("Ошибка"), duration: 60, finishedAt: Date()))
+            ActivityCompletion(
+                kind: .export, outcome: .failure(UserFacingError("Ошибка")), duration: 60, finishedAt: Date()))
         check(sounds == ["Basso"], "у ошибки свой звук")
 
         badges.removeAll()

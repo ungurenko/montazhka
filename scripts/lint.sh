@@ -4,6 +4,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 ./scripts/verify-config.sh
+./scripts/check-error-texts.sh
 .tools/actionlint .github/workflows/*.yml
 swift format lint --strict --recursive Sources Tests Package.swift
 

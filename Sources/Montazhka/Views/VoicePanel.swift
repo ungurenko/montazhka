@@ -81,10 +81,8 @@ struct VoicePanel: View {
                     .font(.system(size: 12))
                     .foregroundStyle(Theme.textSecondary)
             }
-        case .failed(let message):
-            Label(message, systemImage: "exclamationmark.triangle.fill")
-                .font(.system(size: 12))
-                .foregroundStyle(.orange)
+        case .failed(let error):
+            StatusBanner(kind: .warning, error: error)
         }
     }
 }

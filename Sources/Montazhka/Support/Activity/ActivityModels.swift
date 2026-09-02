@@ -94,7 +94,7 @@ struct Activity: Identifiable, Equatable, Sendable {
 /// Чем закончилась работа.
 enum ActivityOutcome: Equatable, Sendable {
     case success(String)
-    case failure(String)
+    case failure(UserFacingError)
     case cancelled
 }
 

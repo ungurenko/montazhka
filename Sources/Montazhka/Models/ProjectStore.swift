@@ -1,5 +1,8 @@
 import Foundation
 
+/// Ассоциированное значение — техническая причина для лога.
+/// В интерфейс она не попадает: там показывают `errorDescription`
+/// и `recoverySuggestion`.
 enum ProjectStoreError: LocalizedError {
     case prepareDirectory(String)
     case encode(String)
@@ -8,14 +11,29 @@ enum ProjectStoreError: LocalizedError {
     case decode(String)
     case delete(String)
 
+    /// Системная причина живёт в ассоциированном значении и уходит в лог,
+    /// а пользователю показывают только понятную половину.
     var errorDescription: String? {
         switch self {
-        case .prepareDirectory(let value): return "Не удалось подготовить папку проектов: \(value)"
-        case .encode(let value): return "Не удалось подготовить проект к сохранению: \(value)"
-        case .write(let value): return "Не удалось сохранить проект: \(value)"
-        case .read(let value): return "Не удалось прочитать проект: \(value)"
-        case .decode(let value): return "Файл проекта повреждён или создан новой версией: \(value)"
-        case .delete(let value): return "Не удалось удалить проект: \(value)"
+        case .prepareDirectory: return "Не получилось подготовить папку проектов."
+        case .encode: return "Не получилось подготовить проект к сохранению."
+        case .write: return "Не получилось сохранить проект."
+        case .read: return "Не получилось прочитать проект."
+        case .decode: return "Файл проекта повреждён или создан более новой версией."
+        case .delete: return "Не получилось удалить проект."
+        }
+    }
+
+    var recoverySuggestion: String? {
+        switch self {
+        case .prepareDirectory, .write:
+            return "Проверь свободное место на диске и права на папку с проектами."
+        case .encode, .decode:
+            return "Проект открыть не выйдет, но остальные останутся на месте."
+        case .read:
+            return "Попробуй открыть его ещё раз или выбери другой проект."
+        case .delete:
+            return "Попробуй ещё раз или удали файл проекта вручную."
         }
     }
 }
@@ -94,7 +112,7 @@ final class ProjectStore: ProjectRepository, Sendable {
             try FileManager.default.createDirectory(at: modelsDir, withIntermediateDirectories: true)
             try FileManager.default.createDirectory(at: shortsAnalysisDir, withIntermediateDirectories: true)
         } catch {
-            throw ProjectStoreError.prepareDirectory(error.localizedDescription)
+            throw ProjectStoreError.prepareDirectory(String(reflecting: error))
         }
     }
 
@@ -107,9 +125,9 @@ final class ProjectStore: ProjectRepository, Sendable {
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
         let data: Data
-        do { data = try encoder.encode(p) } catch { throw ProjectStoreError.encode(error.localizedDescription) }
+        do { data = try encoder.encode(p) } catch { throw ProjectStoreError.encode(String(reflecting: error)) }
         do { try data.write(to: fileURL(for: p.id), options: .atomic) } catch {
-            throw ProjectStoreError.write(error.localizedDescription)
+            throw ProjectStoreError.write(String(reflecting: error))
         }
         writeSidecarMeta(for: p)
     }
@@ -137,18 +155,18 @@ final class ProjectStore: ProjectRepository, Sendable {
     private func loadOnQueue(id: UUID) throws -> Project {
         let data: Data
         do { data = try Data(contentsOf: fileURL(for: id)) } catch {
-            throw ProjectStoreError.read(error.localizedDescription)
+            throw ProjectStoreError.read(String(reflecting: error))
         }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         do { return try decoder.decode(Project.self, from: data) } catch {
-            throw ProjectStoreError.decode(error.localizedDescription)
+            throw ProjectStoreError.decode(String(reflecting: error))
         }
     }
 
     private func deleteOnQueue(id: UUID) throws {
         do { try FileManager.default.trashItem(at: fileURL(for: id), resultingItemURL: nil) } catch {
-            throw ProjectStoreError.delete(error.localizedDescription)
+            throw ProjectStoreError.delete(String(reflecting: error))
         }
         // Метаданные карточки — best-effort: при отсутствии файла не мешаем удалению.
         try? FileManager.default.trashItem(at: metaURL(for: id), resultingItemURL: nil)
@@ -191,13 +209,13 @@ final class ProjectStore: ProjectRepository, Sendable {
         do {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         } catch {
-            throw ProjectStoreError.prepareDirectory(error.localizedDescription)
+            throw ProjectStoreError.prepareDirectory(String(reflecting: error))
         }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         let files: [URL]
         do { files = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) } catch
-        { throw ProjectStoreError.read(error.localizedDescription) }
+        { throw ProjectStoreError.read(String(reflecting: error)) }
         var projects: [ProjectMeta] = []
         var issues: [ProjectListIssue] = []
         for url in files where url.pathExtension == "json" && !isSidecarMeta(url) {
@@ -227,7 +245,7 @@ final class ProjectStore: ProjectRepository, Sendable {
                     issues.append(
                         ProjectListIssue(
                             fileName: url.lastPathComponent,
-                            message: error.localizedDescription))
+                            message: String(reflecting: error)))
                 }
             }
         }

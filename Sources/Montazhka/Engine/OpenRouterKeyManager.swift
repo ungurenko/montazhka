@@ -22,7 +22,7 @@ final class OpenRouterKeyManager {
             do {
                 result = try await store.load() == nil ? .missing : .saved
             } catch {
-                result = .failed(error.localizedDescription)
+                result = .failed(UserFacingError.make(error, context: .ai).message)
             }
             guard !Task.isCancelled else { return }
             self?.status = result
@@ -41,7 +41,7 @@ final class OpenRouterKeyManager {
             try await store.save(trimmed)
             status = .saved
         } catch {
-            status = .failed(error.localizedDescription)
+            status = .failed(UserFacingError.make(error, context: .ai).message)
         }
     }
 
@@ -55,7 +55,7 @@ final class OpenRouterKeyManager {
             try await OpenRouterClient().validateKey(key)
             status = .saved
         } catch {
-            status = .failed(error.localizedDescription)
+            status = .failed(UserFacingError.make(error, context: .ai).message)
         }
     }
 
@@ -65,7 +65,7 @@ final class OpenRouterKeyManager {
             status = .missing
             return true
         } catch {
-            status = .failed(error.localizedDescription)
+            status = .failed(UserFacingError.make(error, context: .ai).message)
             return false
         }
     }
