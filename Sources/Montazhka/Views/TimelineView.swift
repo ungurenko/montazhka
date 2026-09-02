@@ -133,11 +133,11 @@ struct TimelineView: View {
     private func header(duration: Double) -> some View {
         HStack(spacing: Theme.Spacing.small) {
             Text("Лента")
-                .font(.system(size: Theme.TypeScale.body, weight: .semibold))
+                .typeStyle(.bodyEmphasis)
                 .foregroundStyle(Theme.textSecondary)
             if !controller.candidates.isEmpty {
                 Label("\(controller.candidates.filter(\.enabled).count) пауз к вырезке", systemImage: "scissors")
-                    .font(.system(size: 12))
+                    .typeStyle(.helper)
                     .foregroundStyle(Theme.pauseHighlight)
             }
             if !controller.smartEditCandidates.isEmpty {
@@ -145,12 +145,12 @@ struct TimelineView: View {
                     "\(controller.smartEditCandidates.filter(\.enabled).count) умных правок",
                     systemImage: "wand.and.sparkles"
                 )
-                .font(.system(size: 12))
+                .typeStyle(.helper)
                 .foregroundStyle(.orange)
             }
             if let selection = controller.timelineSelection {
                 Label("\(TimeFormat.short(selection.duration)) выделено", systemImage: "selection.pin.in.out")
-                    .font(.system(size: 12))
+                    .typeStyle(.helper)
                     .foregroundStyle(Theme.accent)
             }
             Spacer()
@@ -216,7 +216,7 @@ struct TimelineView: View {
             ZStack(alignment: .topLeading) {
                 if layout.items.isEmpty {
                     Text("Здесь появятся клипы")
-                        .font(.system(size: Theme.TypeScale.body))
+                        .typeStyle(.body)
                         .foregroundStyle(Theme.textSecondary)
                         .frame(width: width, height: clipHeight)
                 } else {

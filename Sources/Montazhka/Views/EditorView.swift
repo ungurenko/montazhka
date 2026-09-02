@@ -38,7 +38,7 @@ struct EditorView: View {
         }
         .background(Theme.background)
         .animation(
-            reduceMotion ? .linear(duration: 0.12) : .easeInOut(duration: 0.2),
+            Theme.Motion.adapting(Theme.Motion.panel, reduceMotion: reduceMotion),
             value: controller.activeInspector
         )
         .sheet(isPresented: $showExport) {
@@ -314,7 +314,7 @@ struct EditorView: View {
                 .controlSize(.regular)
                 .tint(.white)
             Text(text)
-                .font(.system(size: Theme.TypeScale.body, weight: .medium))
+                .typeStyle(.bodyEmphasis)
         }
         .foregroundStyle(.white.opacity(0.9))
     }
@@ -394,7 +394,7 @@ private struct TransportBar: View {
             Spacer()
 
             Text(TimeFormat.short(controller.duration))
-                .font(.system(size: Theme.TypeScale.time, weight: .medium, design: .monospaced))
+                .typeStyle(.time)
                 .foregroundStyle(Theme.textSecondary)
                 .frame(width: 84, alignment: .trailing)
         }
@@ -409,7 +409,7 @@ private struct PlaybackTimeLabel: View {
 
     var body: some View {
         Text(TimeFormat.short(controller.currentTime))
-            .font(.system(size: Theme.TypeScale.time, weight: .semibold, design: .monospaced))
+            .typeStyle(.timeEmphasis)
             .foregroundStyle(Theme.textPrimary)
             .frame(width: 84, alignment: .leading)
     }

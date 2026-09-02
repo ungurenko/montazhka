@@ -135,7 +135,7 @@ struct ShortsView: View {
         VStack(alignment: .leading, spacing: Theme.Spacing.medium) {
             VStack(alignment: .leading, spacing: Theme.Spacing.small) {
                 Text("Сколько роликов найти")
-                    .font(.system(size: 12, weight: .medium))
+                    .typeStyle(.helperEmphasis)
                     .foregroundStyle(Theme.textPrimary)
                 Picker("Сколько роликов", selection: $controller.count) {
                     ForEach(ShortsCount.allCases) { count in
@@ -152,7 +152,7 @@ struct ShortsView: View {
             AIReasoningPicker(connection: controller.aiConnection)
             if controller.aiConnection.reasoningOptions.count > 1 {
                 Text("Глубина «размышлений» модели. Выше уровень — вдумчивее отбор, но дольше и дороже анализ.")
-                    .font(.system(size: Theme.TypeScale.helper))
+                    .typeStyle(.helper)
                     .foregroundStyle(Theme.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -169,7 +169,7 @@ struct ShortsView: View {
 
             if !SmartEditPlatform.isSupported {
                 Label("Нарезка доступна на Mac с Apple Silicon.", systemImage: "cpu")
-                    .font(.system(size: Theme.TypeScale.helper, weight: .medium))
+                    .typeStyle(.helperEmphasis)
                     .foregroundStyle(Theme.danger)
             }
 
@@ -184,7 +184,7 @@ struct ShortsView: View {
                     "Не нашёл моментов, из которых получается сильный ролик.",
                     systemImage: "checkmark.seal.fill"
                 )
-                .font(.system(size: 12, weight: .medium))
+                .typeStyle(.helperEmphasis)
                 .foregroundStyle(Theme.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
             }
@@ -193,7 +193,7 @@ struct ShortsView: View {
                 controller.analyze()
             } label: {
                 Label(analyzeButtonTitle, systemImage: "sparkles")
-                    .font(.system(size: Theme.TypeScale.body, weight: .semibold))
+                    .typeStyle(.bodyEmphasis)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 8)
             }
@@ -204,7 +204,7 @@ struct ShortsView: View {
 
             if controller.aiConnection.provider == .openRouter {
                 Link("Получить ключ OpenRouter", destination: URL(string: "https://openrouter.ai/settings/keys")!)
-                    .font(.system(size: Theme.TypeScale.helper, weight: .medium))
+                    .typeStyle(.helperEmphasis)
             }
         }
     }
@@ -244,11 +244,11 @@ struct ShortsView: View {
                 Text(
                     "\(controller.candidates.count) \(Plurals.candidates(controller.candidates.count)) · выбрано \(controller.selectedCount)"
                 )
-                .font(.system(size: Theme.TypeScale.helper, weight: .semibold))
+                .typeStyle(.helperEmphasis)
                 Spacer()
                 Button("Искать заново") { controller.analyze() }
                     .buttonStyle(.link)
-                    .font(.system(size: Theme.TypeScale.helper))
+                    .typeStyle(.helper)
                     .disabled(controller.openRouterKeyStatus != .saved)
             }
             ForEach(controller.candidates) { candidate in
@@ -261,13 +261,13 @@ struct ShortsView: View {
         VStack(alignment: .leading, spacing: 8) {
             ForEach(Array(controller.analysisWarnings.enumerated()), id: \.offset) { _, warning in
                 Label(warning.message, systemImage: "exclamationmark.triangle.fill")
-                    .font(.system(size: Theme.TypeScale.helper))
+                    .typeStyle(.helper)
                     .foregroundStyle(.orange)
                     .fixedSize(horizontal: false, vertical: true)
             }
             Button("Повторить анализ") { controller.analyze() }
                 .buttonStyle(.link)
-                .font(.system(size: Theme.TypeScale.helper, weight: .medium))
+                .typeStyle(.helperEmphasis)
                 .disabled(controller.openRouterKeyStatus != .saved)
         }
         .padding(Theme.Spacing.small)
@@ -287,17 +287,17 @@ struct ShortsView: View {
             ) {
                 VStack(alignment: .leading, spacing: Theme.Spacing.compact) {
                     Text("\(candidate.rank). \(candidate.title)")
-                        .font(.system(size: 12, weight: .semibold))
+                        .typeStyle(.helperEmphasis)
                         .lineLimit(2)
                     if !candidate.hook.isEmpty {
                         Text("«\(candidate.hook)…»")
-                            .font(.system(size: Theme.TypeScale.helper, weight: .medium))
+                            .typeStyle(.helperEmphasis)
                             .italic()
                             .foregroundStyle(Theme.accent)
                             .lineLimit(1)
                     }
                     Text(candidate.excerpt)
-                        .font(.system(size: Theme.TypeScale.helper))
+                        .typeStyle(.helper)
                         .foregroundStyle(Theme.textSecondary)
                         .lineLimit(3)
                 }
@@ -312,7 +312,7 @@ struct ShortsView: View {
                     .clipShape(Capsule())
                 if !candidate.pattern.isEmpty {
                     Text(candidate.pattern)
-                        .font(.system(size: Theme.TypeScale.helper, weight: .medium))
+                        .typeStyle(.helperEmphasis)
                         .foregroundStyle(Theme.accent)
                         .padding(.horizontal, 6)
                         .padding(.vertical, 2)
@@ -325,7 +325,7 @@ struct ShortsView: View {
                     controller.preview(candidate)
                 } label: {
                     Label("Просмотр", systemImage: "play.circle")
-                        .font(.system(size: Theme.TypeScale.helper, weight: .medium))
+                        .typeStyle(.helperEmphasis)
                 }
                 .buttonStyle(.link)
             }
@@ -333,7 +333,7 @@ struct ShortsView: View {
             DisclosureGroup("Почему выбран") {
                 VStack(alignment: .leading, spacing: Theme.Spacing.compact) {
                     Text(candidate.reason)
-                        .font(.system(size: Theme.TypeScale.helper))
+                        .typeStyle(.helper)
                         .foregroundStyle(Theme.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
                     Text(
@@ -346,7 +346,7 @@ struct ShortsView: View {
                 }
                 .padding(.top, Theme.Spacing.compact)
             }
-            .font(.system(size: Theme.TypeScale.helper, weight: .medium))
+            .typeStyle(.helperEmphasis)
             .foregroundStyle(Theme.textSecondary)
         }
         .padding(Theme.Spacing.small)
@@ -374,7 +374,7 @@ struct ShortsView: View {
                     errorLabel(message)
                     if completed > 0 {
                         Text("Сохранено \(completed) из \(total)")
-                            .font(.system(size: Theme.TypeScale.helper, weight: .semibold))
+                            .typeStyle(.helperEmphasis)
                             .foregroundStyle(Theme.textPrimary)
                     }
                     HStack {
@@ -385,7 +385,7 @@ struct ShortsView: View {
                             controller.retryRemainingExport()
                         }
                         .buttonStyle(.link)
-                        .font(.system(size: Theme.TypeScale.helper))
+                        .typeStyle(.helper)
                     }
                 }
             case .exporting:
@@ -395,7 +395,7 @@ struct ShortsView: View {
             case .done(let folder):
                 VStack(alignment: .leading, spacing: 8) {
                     Label("Ролики сохранены", systemImage: "checkmark.circle.fill")
-                        .font(.system(size: 12, weight: .semibold))
+                        .typeStyle(.helperEmphasis)
                         .foregroundStyle(.green)
                     HStack {
                         Button("Показать в Finder") { controller.revealFolder(folder) }
@@ -403,7 +403,7 @@ struct ShortsView: View {
                             .controlSize(.small)
                         Button("Сохранить ещё раз") { controller.chooseFolderAndExport() }
                             .buttonStyle(.link)
-                            .font(.system(size: Theme.TypeScale.helper))
+                            .typeStyle(.helper)
                     }
                 }
             }
@@ -417,7 +417,7 @@ struct ShortsView: View {
     private var exportControls: some View {
         HStack(spacing: Theme.Spacing.small) {
             Text("Выбрано: \(controller.selectedCount)")
-                .font(.system(size: Theme.TypeScale.helper, weight: .medium))
+                .typeStyle(.helperEmphasis)
                 .foregroundStyle(Theme.textSecondary)
 
             Spacer()
@@ -448,15 +448,15 @@ struct ShortsView: View {
                 HStack(spacing: Theme.Spacing.small) {
                     VStack(alignment: .leading, spacing: Theme.Spacing.compact) {
                         Text("Оформление")
-                            .font(.system(size: Theme.TypeScale.body, weight: .semibold))
+                            .typeStyle(.bodyEmphasis)
                             .foregroundStyle(Theme.textPrimary)
                         Text("\(controller.frameMode.title) · \(controller.quality.title)")
-                            .font(.system(size: Theme.TypeScale.helper))
+                            .typeStyle(.helper)
                             .foregroundStyle(Theme.textSecondary)
                     }
                     Spacer()
                     Image(systemName: showExportOptions ? "chevron.down" : "chevron.right")
-                        .font(.system(size: Theme.TypeScale.helper, weight: .semibold))
+                        .typeStyle(.helperEmphasis)
                         .foregroundStyle(Theme.textSecondary)
                 }
                 .contentShape(Rectangle())
@@ -479,9 +479,9 @@ struct ShortsView: View {
             Toggle(isOn: $controller.trimPauses) {
                 VStack(alignment: .leading, spacing: Theme.Spacing.compact) {
                     Text("Убрать паузы")
-                        .font(.system(size: Theme.TypeScale.body, weight: .medium))
+                        .typeStyle(.bodyEmphasis)
                     Text("Вырезает вдохи и молчание внутри ролика")
-                        .font(.system(size: Theme.TypeScale.helper))
+                        .typeStyle(.helper)
                         .foregroundStyle(Theme.textSecondary)
                 }
             }
@@ -491,9 +491,9 @@ struct ShortsView: View {
             Toggle(isOn: $controller.subtitlesEnabled) {
                 VStack(alignment: .leading, spacing: Theme.Spacing.compact) {
                     Text("Автоматические субтитры")
-                        .font(.system(size: Theme.TypeScale.body, weight: .medium))
+                        .typeStyle(.bodyEmphasis)
                     Text("В просмотре и сохранённых роликах")
-                        .font(.system(size: Theme.TypeScale.helper))
+                        .typeStyle(.helper)
                         .foregroundStyle(Theme.textSecondary)
                 }
             }
@@ -503,7 +503,7 @@ struct ShortsView: View {
             if controller.subtitlesEnabled {
                 HStack(spacing: 8) {
                     Text("Стиль")
-                        .font(.system(size: Theme.TypeScale.helper, weight: .medium))
+                        .typeStyle(.helperEmphasis)
                         .foregroundStyle(Theme.textSecondary)
                     Picker("Стиль субтитров", selection: $controller.subtitleStyle) {
                         ForEach(ShortsSubtitleStyle.allCases) { style in
@@ -517,7 +517,7 @@ struct ShortsView: View {
 
                 HStack(spacing: 8) {
                     Text("Размер")
-                        .font(.system(size: Theme.TypeScale.helper, weight: .medium))
+                        .typeStyle(.helperEmphasis)
                         .foregroundStyle(Theme.textSecondary)
                     Picker("Размер субтитров", selection: $controller.subtitleSize) {
                         ForEach(ShortsSubtitleSize.allCases) { size in
@@ -533,9 +533,9 @@ struct ShortsView: View {
                 Toggle(isOn: $controller.subtitleHighlight) {
                     VStack(alignment: .leading, spacing: Theme.Spacing.compact) {
                         Text("Подсвечивать слова")
-                            .font(.system(size: Theme.TypeScale.body, weight: .medium))
+                            .typeStyle(.bodyEmphasis)
                         Text("Звучащее слово меняет цвет")
-                            .font(.system(size: Theme.TypeScale.helper))
+                            .typeStyle(.helper)
                             .foregroundStyle(Theme.textSecondary)
                     }
                 }
@@ -545,7 +545,7 @@ struct ShortsView: View {
 
             VStack(alignment: .leading, spacing: Theme.Spacing.small) {
                 Text("Формат кадра")
-                    .font(.system(size: Theme.TypeScale.helper, weight: .medium))
+                    .typeStyle(.helperEmphasis)
                     .foregroundStyle(Theme.textSecondary)
                 Picker("Формат кадра", selection: $controller.frameMode) {
                     ForEach(ShortsFrameMode.allCases) { mode in
@@ -556,7 +556,7 @@ struct ShortsView: View {
                 .frame(maxWidth: .infinity)
                 .accessibilityIdentifier("shorts.frameMode")
                 Text(controller.frameMode.subtitle)
-                    .font(.system(size: Theme.TypeScale.helper))
+                    .typeStyle(.helper)
                     .foregroundStyle(Theme.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -564,7 +564,7 @@ struct ShortsView: View {
             if controller.frameMode == .verticalFit {
                 HStack(spacing: 8) {
                     Text("Фон")
-                        .font(.system(size: Theme.TypeScale.helper, weight: .medium))
+                        .typeStyle(.helperEmphasis)
                         .foregroundStyle(Theme.textSecondary)
                     Picker("Цвет фона", selection: $controller.canvasColor) {
                         ForEach(ShortsCanvasColor.allCases) { color in
@@ -580,7 +580,7 @@ struct ShortsView: View {
 
             HStack(spacing: Theme.Spacing.small) {
                 Text("Качество")
-                    .font(.system(size: Theme.TypeScale.helper, weight: .medium))
+                    .typeStyle(.helperEmphasis)
                     .foregroundStyle(Theme.textSecondary)
                 Picker("Качество", selection: $controller.quality) {
                     ForEach(ExportQuality.allCases) { quality in
@@ -626,7 +626,7 @@ private struct ShortsTransportBar: View {
     var body: some View {
         HStack(spacing: Theme.Spacing.medium) {
             Text(TimeFormat.short(controller.currentTime))
-                .font(.system(size: Theme.TypeScale.time, weight: .medium, design: .monospaced))
+                .typeStyle(.time)
                 .foregroundStyle(Theme.textPrimary)
                 .frame(width: 72, alignment: .leading)
                 .accessibilityLabel("Текущая позиция")
@@ -652,7 +652,7 @@ private struct ShortsTransportBar: View {
             Spacer()
 
             Text(TimeFormat.short(controller.previewDuration))
-                .font(.system(size: Theme.TypeScale.time, weight: .medium, design: .monospaced))
+                .typeStyle(.time)
                 .foregroundStyle(Theme.textSecondary)
                 .frame(width: 72, alignment: .trailing)
         }

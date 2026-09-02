@@ -14,12 +14,12 @@ struct StartView: View {
 
                 VStack(alignment: .leading, spacing: Theme.Spacing.medium) {
                     Text("Недавние проекты")
-                        .font(.system(size: Theme.TypeScale.sectionTitle, weight: .semibold))
+                        .typeStyle(.sectionTitle)
                         .foregroundStyle(Theme.textPrimary)
 
                     if app.recents.isEmpty {
                         Label("Здесь появятся проекты, с которыми ты работал", systemImage: "clock")
-                            .font(.system(size: Theme.TypeScale.body))
+                            .typeStyle(.body)
                             .foregroundStyle(Theme.textSecondary)
                             .padding(Theme.Spacing.medium)
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -40,7 +40,7 @@ struct StartView: View {
                     HStack(spacing: Theme.Spacing.small) {
                         ProgressView().controlSize(.small)
                         Text("Открываю проект…")
-                            .font(.system(size: Theme.TypeScale.helper))
+                            .typeStyle(.helper)
                             .foregroundStyle(Theme.textSecondary)
                     }
                 }
@@ -66,7 +66,7 @@ struct StartView: View {
                     .font(.system(size: 30, weight: .bold, design: .rounded))
                     .foregroundStyle(Theme.textPrimary)
                 Text("Простой монтаж: добавь клипы, вырежи паузы, сохрани")
-                    .font(.system(size: Theme.TypeScale.body))
+                    .typeStyle(.body)
                     .foregroundStyle(Theme.textSecondary)
             }
         }
@@ -110,10 +110,10 @@ struct StartView: View {
                 .clipShape(RoundedRectangle(cornerRadius: Theme.radiusSmall, style: .continuous))
             VStack(alignment: .leading, spacing: Theme.Spacing.compact) {
                 Text("AI-агенты")
-                    .font(.system(size: Theme.TypeScale.body, weight: .semibold))
+                    .typeStyle(.bodyEmphasis)
                     .foregroundStyle(Theme.textPrimary)
                 Text(app.agentIntegration.message)
-                    .font(.system(size: Theme.TypeScale.helper))
+                    .typeStyle(.helper)
                     .foregroundStyle(Theme.textSecondary)
             }
             Spacer()
@@ -149,16 +149,16 @@ private struct StartActionCard: View {
 
                 VStack(alignment: .leading, spacing: Theme.Spacing.compact) {
                     Text(title)
-                        .font(.system(size: Theme.TypeScale.sectionTitle, weight: .semibold))
+                        .typeStyle(.sectionTitle)
                         .foregroundStyle(Theme.textPrimary)
                     Text(subtitle)
-                        .font(.system(size: Theme.TypeScale.helper))
+                        .typeStyle(.helper)
                         .foregroundStyle(Theme.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: Theme.Spacing.small)
                 Image(systemName: "chevron.right")
-                    .font(.system(size: 12, weight: .semibold))
+                    .typeStyle(.helperEmphasis)
                     .foregroundStyle(Theme.textSecondary)
             }
             .padding(Theme.Spacing.medium)
@@ -191,16 +191,16 @@ private struct RecentCard: View {
                     Image(systemName: "film")
                         .foregroundStyle(Theme.accent)
                     Text(meta.name)
-                        .font(.system(size: Theme.TypeScale.body, weight: .semibold))
+                        .typeStyle(.bodyEmphasis)
                         .foregroundStyle(Theme.textPrimary)
                         .lineLimit(1)
                     Spacer()
                 }
                 Text("\(TimeFormat.spoken(meta.duration)) · \(clipsLabel(meta.clipCount))")
-                    .font(.system(size: Theme.TypeScale.helper))
+                    .typeStyle(.helper)
                     .foregroundStyle(Theme.textSecondary)
                 Text(TimeFormat.date(meta.updatedAt))
-                    .font(.system(size: Theme.TypeScale.helper))
+                    .typeStyle(.helper)
                     .foregroundStyle(Theme.textSecondary)
             }
             .padding(16)

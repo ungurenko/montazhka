@@ -33,12 +33,12 @@ struct VoicePanel: View {
             Toggle("Улучшить голос", isOn: $settings.enabled)
                 .toggleStyle(.switch)
                 .tint(Theme.accent)
-                .font(.system(size: Theme.TypeScale.body, weight: .semibold))
+                .typeStyle(.bodyEmphasis)
                 .foregroundStyle(Theme.textPrimary)
             Text(
                 "Выравнивает громкость, приглушает шум и делает речь разборчивее. Результат слышно в предпросмотре."
             )
-            .font(.system(size: Theme.TypeScale.helper))
+            .typeStyle(.helper)
             .foregroundStyle(Theme.textSecondary)
         }
     }
@@ -78,7 +78,7 @@ struct VoicePanel: View {
             HStack(spacing: 8) {
                 ProgressView().controlSize(.small)
                 Text(total > 1 ? "Обрабатываю звук… (\(done) из \(total))" : "Обрабатываю звук…")
-                    .font(.system(size: 12))
+                    .typeStyle(.helper)
                     .foregroundStyle(Theme.textSecondary)
             }
         case .failed(let error):

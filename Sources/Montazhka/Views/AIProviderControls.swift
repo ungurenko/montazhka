@@ -35,7 +35,7 @@ struct AIProviderControls: View {
                         .buttonStyle(.link)
                 }
             }
-            .font(.system(size: 10.5))
+            .typeStyle(.micro)
             .foregroundStyle(Theme.textSecondary)
         }
     }
@@ -72,7 +72,7 @@ struct CLIAgentPrivacyNotice: View {
             "Агент получает только текст расшифровки с таймкодами. Звук, видео и пути файлов остаются на Mac. Текст обрабатывается через аккаунт, подключённый в \(provider.title).",
             systemImage: "lock.shield.fill"
         )
-        .font(.system(size: 10.5))
+        .typeStyle(.micro)
         .foregroundStyle(Theme.textSecondary)
         .fixedSize(horizontal: false, vertical: true)
         .padding(10)

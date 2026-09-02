@@ -34,7 +34,7 @@ struct OpenRouterKeyControls: View {
         case .saved where !replacingKey:
             HStack(spacing: 10) {
                 Label("Ключ сохранён", systemImage: "checkmark.circle.fill")
-                    .font(.system(size: 11, weight: .medium))
+                    .typeStyle(.microEmphasis)
                     .foregroundStyle(.green)
                 Spacer()
                 Menu {
@@ -46,7 +46,7 @@ struct OpenRouterKeyControls: View {
                     }
                 } label: {
                     Label("Настроить", systemImage: "ellipsis.circle")
-                        .font(.system(size: 10.5, weight: .medium))
+                        .typeStyle(.microEmphasis)
                 }
                 .menuStyle(.borderlessButton)
                 .fixedSize()
@@ -79,10 +79,10 @@ struct OpenRouterKeyControls: View {
                 switch controller.openRouterKeyStatus {
                 case .checking:
                     Label("Проверяю ключ…", systemImage: "arrow.triangle.2.circlepath")
-                        .font(.system(size: 11)).foregroundStyle(Theme.textSecondary)
+                        .typeStyle(.micro).foregroundStyle(Theme.textSecondary)
                 case .failed(let message):
                     Label(message, systemImage: "exclamationmark.triangle.fill")
-                        .font(.system(size: 11)).foregroundStyle(Theme.danger)
+                        .typeStyle(.micro).foregroundStyle(Theme.danger)
                 default:
                     EmptyView()
                 }
@@ -95,7 +95,7 @@ struct OpenRouterKeyControls: View {
             "Ключ хранится обычным локальным файлом с доступом только твоему пользователю macOS. В OpenRouter уходит текст расшифровки; звук, видео и пути файлов остаются на Mac.",
             systemImage: "lock.shield.fill"
         )
-        .font(.system(size: 10.5))
+        .typeStyle(.micro)
         .foregroundStyle(Theme.textSecondary)
         .fixedSize(horizontal: false, vertical: true)
         .padding(10)

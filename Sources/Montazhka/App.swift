@@ -374,6 +374,7 @@ final class AppModel {
 
 struct RootView: View {
     @Environment(AppModel.self) private var app
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     /// Числовой ключ режима — для плавной анимации смены экранов.
     private var rootKey: Int {
@@ -396,7 +397,7 @@ struct RootView: View {
                     .transition(.opacity)
             }
         }
-        .animation(.easeInOut(duration: 0.2), value: rootKey)
+        .animation(Theme.Motion.adapting(Theme.Motion.screen, reduceMotion: reduceMotion), value: rootKey)
         .alert(app.storeErrorMessage?.what ?? "Ошибка проекта", isPresented: storeErrorBinding) {
             Button("Понятно", role: .cancel) {}
         } message: {

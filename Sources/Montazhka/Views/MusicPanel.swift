@@ -39,12 +39,12 @@ struct MusicPanel: View {
             Toggle("Добавить музыку", isOn: $settings.enabled)
                 .toggleStyle(.switch)
                 .tint(Theme.accent)
-                .font(.system(size: Theme.TypeScale.body, weight: .semibold))
+                .typeStyle(.bodyEmphasis)
                 .foregroundStyle(Theme.textPrimary)
             Text(
                 "Музыка играет под голосом, повторяется по кругу и плавно затихает в конце."
             )
-            .font(.system(size: Theme.TypeScale.helper))
+            .typeStyle(.helper)
             .foregroundStyle(Theme.textSecondary)
         }
     }
@@ -52,12 +52,12 @@ struct MusicPanel: View {
     private var tracksBlock: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Мелодия")
-                .font(.system(size: Theme.TypeScale.body, weight: .semibold))
+                .typeStyle(.bodyEmphasis)
                 .foregroundStyle(Theme.textPrimary)
 
             if MusicLibrary.tracks.isEmpty && settings.customPath == nil {
                 Text("Встроенных мелодий нет — выбери свой аудиофайл.")
-                    .font(.system(size: Theme.TypeScale.helper))
+                    .typeStyle(.helper)
                     .foregroundStyle(Theme.textSecondary)
             }
 
@@ -92,7 +92,7 @@ struct MusicPanel: View {
                 }
             } label: {
                 Label("Выбрать свой файл…", systemImage: "folder")
-                    .font(.system(size: 12))
+                    .typeStyle(.helper)
             }
             .buttonStyle(.bordered)
         }
@@ -112,18 +112,18 @@ struct MusicPanel: View {
         VStack(alignment: .leading, spacing: Theme.Spacing.small) {
             Toggle("Не мешать голосу", isOn: $settings.eqEnabled)
                 .toggleStyle(.checkbox)
-                .font(.system(size: Theme.TypeScale.body, weight: .semibold))
+                .typeStyle(.bodyEmphasis)
                 .foregroundStyle(Theme.textPrimary)
             Text(
                 "Освобождает место для речи, чтобы голос звучал разборчивее."
             )
-            .font(.system(size: Theme.TypeScale.helper))
+            .typeStyle(.helper)
             .foregroundStyle(Theme.textSecondary)
             if controller.musicProcessing {
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.small)
                     Text("Обрабатываю музыку…")
-                        .font(.system(size: 12))
+                        .typeStyle(.helper)
                         .foregroundStyle(Theme.textSecondary)
                 }
             }
@@ -135,11 +135,11 @@ struct MusicPanel: View {
         if settings.enabled {
             if let path = settings.customPath, !FileManager.default.fileExists(atPath: path) {
                 Label("Файл музыки не найден — видео будет без музыки.", systemImage: "exclamationmark.triangle.fill")
-                    .font(.system(size: 12))
+                    .typeStyle(.helper)
                     .foregroundStyle(.orange)
             } else if settings.customPath == nil, settings.trackID == nil {
                 Label("Выбери мелодию из списка или свой файл.", systemImage: "info.circle")
-                    .font(.system(size: 12))
+                    .typeStyle(.helper)
                     .foregroundStyle(Theme.textSecondary)
             }
         }

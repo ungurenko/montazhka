@@ -92,10 +92,10 @@ struct SmartEditPanel: View {
             VStack(alignment: .leading, spacing: Theme.Spacing.small) {
                 VStack(alignment: .leading, spacing: Theme.Spacing.compact) {
                     Text(stage.title)
-                        .font(.system(size: Theme.TypeScale.body, weight: .semibold))
+                        .typeStyle(.bodyEmphasis)
                         .foregroundStyle(stageTitleColor(stage))
                     Text(stageSubtitle(stage))
-                        .font(.system(size: Theme.TypeScale.helper))
+                        .typeStyle(.helper)
                         .foregroundStyle(Theme.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -121,7 +121,7 @@ struct SmartEditPanel: View {
                 .frame(width: 22, height: 22)
         } else {
             Text("\(stage.rawValue)")
-                .font(.system(size: Theme.TypeScale.helper, weight: .semibold))
+                .typeStyle(.helperEmphasis)
                 .foregroundStyle(activeStage == stage ? .white : Theme.textSecondary)
                 .frame(width: 22, height: 22)
                 .background(activeStage == stage ? Theme.accent : Theme.background)
@@ -139,7 +139,7 @@ struct SmartEditPanel: View {
                 .frame(maxWidth: .infinity)
             if controller.aiConnection.reasoningOptions.count > 1 {
                 Text("Глубина «размышлений» модели. Выше уровень — вдумчивее склейки, но дольше анализ.")
-                    .font(.system(size: Theme.TypeScale.helper))
+                    .typeStyle(.helper)
                     .foregroundStyle(Theme.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -156,13 +156,13 @@ struct SmartEditPanel: View {
 
             if !SmartEditPlatform.isSupported {
                 Label("Умный монтаж доступен на Mac с Apple Silicon.", systemImage: "cpu")
-                    .font(.system(size: Theme.TypeScale.helper, weight: .medium))
+                    .typeStyle(.helperEmphasis)
                     .foregroundStyle(Theme.danger)
             }
 
             if controller.aiConnection.provider == .openRouter {
                 Link("Получить ключ OpenRouter", destination: URL(string: "https://openrouter.ai/settings/keys")!)
-                    .font(.system(size: Theme.TypeScale.helper, weight: .medium))
+                    .typeStyle(.helperEmphasis)
             }
         }
     }
@@ -176,7 +176,7 @@ struct SmartEditPanel: View {
                 controller.analyzeSmartEdits()
             } label: {
                 Label(analysisButtonTitle, systemImage: "sparkles")
-                    .font(.system(size: Theme.TypeScale.body, weight: .semibold))
+                    .typeStyle(.bodyEmphasis)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 8)
             }
@@ -270,14 +270,14 @@ struct SmartEditPanel: View {
                     Text(
                         "\(controller.smartEditCandidates.count) предложений · экономия \(TimeFormat.spoken(selectedDuration))"
                     )
-                    .font(.system(size: Theme.TypeScale.helper, weight: .semibold))
+                    .typeStyle(.helperEmphasis)
                     Spacer()
                     if !obvious.isEmpty {
                         Button(obvious.allSatisfy(\.enabled) ? "Снять явные" : "Выбрать явные") {
                             controller.setAllObviousSmartEdits(enabled: !obvious.allSatisfy(\.enabled))
                         }
                         .buttonStyle(.link)
-                        .font(.system(size: Theme.TypeScale.helper))
+                        .typeStyle(.helper)
                     }
                 }
                 if !obvious.isEmpty { candidateGroup("Явные исправления", candidates: obvious) }
@@ -288,7 +288,7 @@ struct SmartEditPanel: View {
 
     private func candidateGroup(_ title: String, candidates: [SmartEditCandidate]) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(title).font(.system(size: 12, weight: .semibold))
+            Text(title).typeStyle(.helperEmphasis)
             ForEach(candidates) { candidate in candidateRow(candidate) }
         }
     }
@@ -303,15 +303,15 @@ struct SmartEditPanel: View {
             ) {
                 VStack(alignment: .leading, spacing: Theme.Spacing.compact) {
                     Text(candidate.originalText)
-                        .font(.system(size: Theme.TypeScale.helper, weight: .medium))
+                        .typeStyle(.helperEmphasis)
                         .lineLimit(3)
                     Text("\(candidate.kind.title) · \(String(format: "%.1f", candidate.duration)) сек")
-                        .font(.system(size: Theme.TypeScale.helper))
+                        .typeStyle(.helper)
                         .foregroundStyle(Theme.textSecondary)
                 }
             }
             Text(candidate.reason)
-                .font(.system(size: Theme.TypeScale.helper))
+                .typeStyle(.helper)
                 .foregroundStyle(Theme.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
             HStack {
@@ -319,7 +319,7 @@ struct SmartEditPanel: View {
                 Button("Склейка") { controller.previewSmartEditJoin(candidate) }
             }
             .buttonStyle(.link)
-            .font(.system(size: Theme.TypeScale.helper, weight: .medium))
+            .typeStyle(.helperEmphasis)
         }
         .padding(9)
         .background(Theme.clipBackground.opacity(0.55))

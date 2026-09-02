@@ -13,7 +13,7 @@ struct SettingSlider: View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
                 Text(title)
-                    .font(.system(size: Theme.TypeScale.body, weight: .medium))
+                    .typeStyle(.bodyEmphasis)
                     .foregroundStyle(Theme.textPrimary)
                 Spacer()
                 Text(display(value))
@@ -24,7 +24,7 @@ struct SettingSlider: View {
                 .controlSize(.small)
                 .tint(Theme.accent)
             Text(explain)
-                .font(.system(size: Theme.TypeScale.helper))
+                .typeStyle(.helper)
                 .foregroundStyle(Theme.textSecondary)
         }
     }

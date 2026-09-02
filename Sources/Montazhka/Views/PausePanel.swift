@@ -96,7 +96,7 @@ struct PausePanel: View {
                     Text("Найти паузы")
                 }
             }
-            .font(.system(size: Theme.TypeScale.body, weight: .semibold))
+            .typeStyle(.bodyEmphasis)
             .frame(maxWidth: .infinity)
             .padding(.vertical, 9)
         }
@@ -114,18 +114,18 @@ struct PausePanel: View {
 
             HStack {
                 Text("Найдено: \(controller.candidates.count)")
-                    .font(.system(size: Theme.TypeScale.body, weight: .semibold))
+                    .typeStyle(.bodyEmphasis)
                     .foregroundStyle(Theme.textPrimary)
                 Spacer()
                 Button(enabled.count == controller.candidates.count ? "Снять все" : "Выбрать все") {
                     controller.setAllCandidates(enabled: enabled.count != controller.candidates.count)
                 }
                 .buttonStyle(.plain)
-                .font(.system(size: 12))
+                .typeStyle(.helper)
                 .foregroundStyle(Theme.accent)
             }
             Text("Видео станет короче на \(TimeFormat.spoken(saved))")
-                .font(.system(size: 12))
+                .typeStyle(.helper)
                 .foregroundStyle(Theme.textSecondary)
 
             VStack(spacing: Theme.Spacing.small) {
@@ -144,7 +144,7 @@ struct PausePanel: View {
                 controller.cutEnabledCandidates()
             } label: {
                 Label("Вырезать выбранные (\(count))", systemImage: "scissors")
-                    .font(.system(size: Theme.TypeScale.body, weight: .semibold))
+                    .typeStyle(.bodyEmphasis)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 9)
             }
@@ -156,7 +156,7 @@ struct PausePanel: View {
                 controller.candidates = []
             }
             .buttonStyle(.plain)
-            .font(.system(size: 12))
+            .typeStyle(.helper)
             .foregroundStyle(Theme.textSecondary)
         }
         .padding(.horizontal, 16)

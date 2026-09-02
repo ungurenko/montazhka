@@ -22,6 +22,9 @@ enum TypeStyle {
     case time
     /// Таймкод текущей позиции — тот же моноширинный, но заметнее.
     case timeEmphasis
+    /// Самый мелкий текст: служебные подписи в плотных панелях.
+    case micro
+    case microEmphasis
 
     var font: Font {
         switch self {
@@ -33,6 +36,8 @@ enum TypeStyle {
         case .helperEmphasis: return .system(size: 12, weight: .semibold)
         case .time: return .system(size: 13, weight: .medium, design: .monospaced)
         case .timeEmphasis: return .system(size: 13, weight: .semibold, design: .monospaced)
+        case .micro: return .system(size: 11, weight: .regular)
+        case .microEmphasis: return .system(size: 11, weight: .medium)
         }
     }
 
@@ -44,6 +49,7 @@ enum TypeStyle {
         case .body, .bodyEmphasis: return 0
         case .helper, .helperEmphasis: return 0.05
         case .time, .timeEmphasis: return 0
+        case .micro, .microEmphasis: return 0.08
         }
     }
 }

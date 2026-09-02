@@ -36,10 +36,10 @@ struct ExportSheet: View {
         VStack(alignment: .leading, spacing: Theme.Spacing.medium) {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Сохранить видео")
-                    .font(.system(size: Theme.TypeScale.screenTitle, weight: .bold))
+                    .typeStyle(.screenTitle)
                     .foregroundStyle(Theme.textPrimary)
                 Text("Итог: \(TimeFormat.spoken(controller.duration)) · формат MP4")
-                    .font(.system(size: Theme.TypeScale.body))
+                    .typeStyle(.body)
                     .foregroundStyle(Theme.textSecondary)
             }
 
@@ -90,7 +90,7 @@ struct ExportSheet: View {
         Group {
             if let audioWarning = export.audioWarning {
                 Label(audioWarning, systemImage: "exclamationmark.triangle.fill")
-                    .font(.system(size: 12))
+                    .typeStyle(.helper)
                     .foregroundStyle(.orange)
                     .multilineTextAlignment(.center)
             }
@@ -102,13 +102,13 @@ struct ExportSheet: View {
     private var preparingView: some View {
         VStack(spacing: 16) {
             Text("Подготавливаю видео…")
-                .font(.system(size: Theme.TypeScale.sectionTitle, weight: .semibold))
+                .typeStyle(.sectionTitle)
                 .foregroundStyle(Theme.textPrimary)
             ProgressView()
                 .controlSize(.large)
                 .tint(Theme.accent)
             Text("Собираю дорожки и обрабатываю звук")
-                .font(.system(size: 13))
+                .typeStyle(.body)
                 .foregroundStyle(Theme.textSecondary)
             Button("Отменить") { export.cancel() }
                 .buttonStyle(.bordered)
@@ -119,13 +119,13 @@ struct ExportSheet: View {
     private var progressView: some View {
         VStack(spacing: 16) {
             Text("Сохраняю видео…")
-                .font(.system(size: Theme.TypeScale.sectionTitle, weight: .semibold))
+                .typeStyle(.sectionTitle)
                 .foregroundStyle(Theme.textPrimary)
             ProgressView(value: export.progress)
                 .progressViewStyle(.linear)
                 .tint(Theme.accent)
             Text("\(Int(export.progress * 100))%")
-                .font(.system(size: 13, design: .monospaced))
+                .typeStyle(.time)
                 .foregroundStyle(Theme.textSecondary)
             audioWarningLine
             Button("Отменить") { export.cancel() }
@@ -137,13 +137,13 @@ struct ExportSheet: View {
     private func doneView(_ url: URL) -> some View {
         VStack(spacing: 16) {
             Image(systemName: "checkmark.circle.fill")
-                .font(.system(size: 44))
+                .font(.system(size: IconScale.hero))
                 .foregroundStyle(.green)
             Text("Готово!")
-                .font(.system(size: Theme.TypeScale.screenTitle, weight: .bold))
+                .typeStyle(.screenTitle)
                 .foregroundStyle(Theme.textPrimary)
             Text(url.lastPathComponent)
-                .font(.system(size: 13))
+                .typeStyle(.body)
                 .foregroundStyle(Theme.textSecondary)
                 .lineLimit(1)
             audioWarningLine
