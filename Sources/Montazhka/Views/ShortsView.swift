@@ -231,49 +231,10 @@ struct ShortsView: View {
 
     // MARK: - Прогресс анализа
 
+    @ViewBuilder
     private var progressSection: some View {
-        VStack(alignment: .leading, spacing: Theme.Spacing.small) {
-            ProgressView(value: progressValue)
-                .progressViewStyle(.linear)
-                .tint(Theme.accent)
-            Text(statusTitle)
-                .font(.system(size: Theme.TypeScale.helper))
-                .foregroundStyle(Theme.textSecondary)
-                .fixedSize(horizontal: false, vertical: true)
-            Button("Отменить анализ") { controller.cancelAnalysis() }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-        }
-        .padding(12)
-        .background(Theme.accent.opacity(0.07))
-        .clipShape(RoundedRectangle(cornerRadius: Theme.radiusSmall, style: .continuous))
-    }
-
-    private var progressValue: Double? {
-        switch controller.status {
-        case .preparingModel(let value): return value.map { $0 * 0.12 }
-        case .transcribing(let value): return 0.12 + 0.38 * (value ?? 0)
-        case .mapping(let done, let total):
-            guard total > 0 else { return nil }
-            return 0.50 + 0.20 * Double(done) / Double(total)
-        case .searching(let done, let total):
-            guard total > 0 else { return nil }
-            return 0.70 + 0.18 * Double(done) / Double(total)
-        case .ranking: return 0.90
-        case .verifying: return 0.96
-        default: return nil
-        }
-    }
-
-    private var statusTitle: String {
-        switch controller.status {
-        case .preparingModel: return "Готовлю локальную модель — в первый раз загружается около 460 МБ"
-        case .transcribing: return "Расшифровываю речь"
-        case .mapping(let done, let total): return "Составляю карту видео: окно \(done + 1) из \(total)"
-        case .searching(let done, let total): return "Ищу сильные моменты: окно \(done + 1) из \(total)"
-        case .ranking: return "Отбираю и ранжирую лучшие моменты"
-        case .verifying: return "Проверяю выбранные моменты тестом холодного зрителя"
-        default: return ""
+        if let activity = controller.activity.activity(.shortsAnalysis) {
+            ActivityBlock(activity: activity) { controller.cancelAnalysis() }
         }
     }
 
@@ -432,20 +393,9 @@ struct ShortsView: View {
                         .font(.system(size: Theme.TypeScale.helper))
                     }
                 }
-            case .exporting(let done, let total, let progress):
-                VStack(alignment: .leading, spacing: 8) {
-                    ProgressView(value: (Double(done) + progress) / Double(max(1, total)))
-                        .progressViewStyle(.linear)
-                        .tint(Theme.accent)
-                    HStack {
-                        Text("Сохраняю ролик \(min(done + 1, total)) из \(total)…")
-                            .font(.system(size: Theme.TypeScale.helper))
-                            .foregroundStyle(Theme.textSecondary)
-                        Spacer()
-                        Button("Отменить") { controller.cancelExport() }
-                            .buttonStyle(.link)
-                            .font(.system(size: Theme.TypeScale.helper))
-                    }
+            case .exporting:
+                if let activity = controller.activity.activity(.shortsExport) {
+                    ActivityBlock(activity: activity) { controller.cancelExport() }
                 }
             case .done(let folder):
                 VStack(alignment: .leading, spacing: 8) {

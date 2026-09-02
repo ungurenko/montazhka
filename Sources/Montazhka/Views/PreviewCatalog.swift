@@ -54,6 +54,7 @@
         static var previews: some View {
             StartView()
                 .environment(AppModel(store: PreviewFixtures.repository("start")))
+                .environment(ActivityCenter.shared)
                 .frame(width: 1080, height: 660)
                 .preferredColorScheme(.light)
         }
@@ -65,6 +66,7 @@
             let (app, controller) = PreviewFixtures.editor()
             return EditorView(controller: controller)
                 .environment(app)
+                .environment(ActivityCenter.shared)
                 .frame(width: 1180, height: 720)
                 .preferredColorScheme(.light)
         }
@@ -85,6 +87,7 @@
                 let (app, controller) = PreviewFixtures.editor(section)
                 EditorView(controller: controller)
                     .environment(app)
+                    .environment(ActivityCenter.shared)
                     .frame(width: 1280, height: 720)
                     .preferredColorScheme(.light)
                     .previewDisplayName("Панель: \(section.rawValue)")
@@ -108,6 +111,7 @@
             let (app, controller) = PreviewFixtures.shorts()
             ShortsView(controller: controller)
                 .environment(app)
+                .environment(ActivityCenter.shared)
                 .frame(width: 1280, height: 720)
                 .preferredColorScheme(.light)
                 .previewDisplayName("Shorts")

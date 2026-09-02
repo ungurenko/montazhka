@@ -34,6 +34,7 @@ enum ActivitySelfTest {
         checkStageMemory(check)
         checkLifecycle(check)
         checkApproximateWording(check)
+        checkAnnouncer(check)
 
         return failures
     }
@@ -137,6 +138,69 @@ enum ActivitySelfTest {
             "итог последней работы сохраняется для значка в Доке")
         center.acknowledge()
         check(center.lastCompletion == nil, "увиденный итог сбрасывается")
+    }
+
+    /// Правила Дока и звука: не мешать, когда пользователь и так всё видит.
+    @MainActor
+    private static func checkAnnouncer(_ check: (Bool, String) -> Void) {
+        var badges: [String?] = []
+        var sounds: [String] = []
+        var appActive = true
+
+        func makeAnnouncer() -> ActivityAnnouncer {
+            ActivityAnnouncer(
+                isAppActive: { appActive },
+                showBadge: { badges.append($0) },
+                playSound: { sounds.append($0) },
+                bounceIcon: {})
+        }
+
+        let whileWatching = makeAnnouncer()
+        whileWatching.announce(
+            ActivityCompletion(kind: .export, outcome: .success("Готово"), duration: 60, finishedAt: Date()))
+        check(sounds.isEmpty, "при открытом окне звук не играет")
+        check(badges.last == "✓", "значок готовности появляется всегда")
+
+        appActive = false
+        let whileAway = makeAnnouncer()
+        whileAway.announce(
+            ActivityCompletion(kind: .export, outcome: .success("Готово"), duration: 60, finishedAt: Date()))
+        check(sounds == ["Glass"], "в другом приложении звук о готовности играет")
+
+        sounds.removeAll()
+        let shortWork = makeAnnouncer()
+        shortWork.announce(
+            ActivityCompletion(kind: .export, outcome: .success("Готово"), duration: 2, finishedAt: Date()))
+        check(sounds.isEmpty, "короткая работа не звенит")
+
+        sounds.removeAll()
+        let cancelled = makeAnnouncer()
+        cancelled.announce(
+            ActivityCompletion(kind: .export, outcome: .cancelled, duration: 60, finishedAt: Date()))
+        check(sounds.isEmpty, "отмену пользователь сделал сам — звука нет")
+
+        sounds.removeAll()
+        let failed = makeAnnouncer()
+        failed.announce(
+            ActivityCompletion(kind: .export, outcome: .failure("Ошибка"), duration: 60, finishedAt: Date()))
+        check(sounds == ["Basso"], "у ошибки свой звук")
+
+        badges.removeAll()
+        let quiet = makeAnnouncer()
+        quiet.announce(
+            ActivityCompletion(kind: .previewPrepare, outcome: .success("Готово"), duration: 60, finishedAt: Date()))
+        check(badges.last == nil, "служебная работа не оставляет значка")
+
+        badges.removeAll()
+        let progress = makeAnnouncer()
+        let sample = Activity(
+            kind: .export, title: "Сохранение видео", stages: ActivityStagePlan.export,
+            stageIndex: 1, caption: "Записываю файл", progress: .fraction(0.42),
+            isCancellable: true, startedAt: Date(), stageStartedAt: Date(),
+            estimatedRemaining: nil, typicalStageDuration: nil)
+        progress.render(primary: sample)
+        progress.render(primary: sample)
+        check(badges == ["42 %"], "иконка в Доке не перерисовывается зря")
     }
 
     private static func checkApproximateWording(_ check: (Bool, String) -> Void) {

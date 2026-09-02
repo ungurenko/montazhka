@@ -169,22 +169,8 @@ struct SmartEditPanel: View {
 
     @ViewBuilder
     private var activeStageContent: some View {
-        if isWorking {
-            VStack(alignment: .leading, spacing: Theme.Spacing.small) {
-                ProgressView(value: progressValue)
-                    .progressViewStyle(.linear)
-                    .tint(Theme.accent)
-                Text(statusTitle)
-                    .font(.system(size: Theme.TypeScale.helper))
-                    .foregroundStyle(Theme.textSecondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                Button("Отменить анализ") { controller.cancelSmartEdit() }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-            }
-            .padding(12)
-            .background(Theme.accent.opacity(0.07))
-            .clipShape(RoundedRectangle(cornerRadius: Theme.radiusSmall, style: .continuous))
+        if isWorking, let activity = controller.activity.activity(.smartEdit) {
+            ActivityBlock(activity: activity) { controller.cancelSmartEdit() }
         } else if activeStage == .editing && controller.smartEditStatus.allowsAnalysisStart {
             Button {
                 controller.analyzeSmartEdits()
@@ -258,30 +244,6 @@ struct SmartEditPanel: View {
         switch controller.smartEditStatus {
         case .preparingModel, .transcribing, .proposing, .reviewing, .preparingCuts: return true
         default: return false
-        }
-    }
-
-    private var progressValue: Double? {
-        switch controller.smartEditStatus {
-        case .preparingModel(let value): return value.map { $0 * 0.25 }
-        case .transcribing(let done, let total, let value):
-            guard total > 0 else { return nil }
-            return 0.25 + 0.35 * ((Double(done) + (value ?? 0)) / Double(total))
-        case .proposing: return 0.68
-        case .reviewing: return 0.82
-        case .preparingCuts: return 0.94
-        default: return nil
-        }
-    }
-
-    private var statusTitle: String {
-        switch controller.smartEditStatus {
-        case .preparingModel: return "Готовлю локальную модель — в первый раз загружается около 460 МБ"
-        case .transcribing(let done, let total, _): return "Расшифровываю речь: \(done) из \(total)"
-        case .proposing: return "Монтажёр ищет оговорки и дубли"
-        case .reviewing: return "Редактор проверяет смысл и естественность"
-        case .preparingCuts: return "Ищу тихие границы для склеек"
-        default: return ""
         }
     }
 

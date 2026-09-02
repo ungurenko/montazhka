@@ -18,6 +18,8 @@ struct TopBar<Title: View, Actions: View>: View {
     @ViewBuilder let title: () -> Title
     @ViewBuilder let actions: () -> Actions
 
+    @Environment(ActivityCenter.self) private var activity
+
     var body: some View {
         HStack(spacing: Theme.Spacing.snug) {
             if let back {
@@ -32,6 +34,13 @@ struct TopBar<Title: View, Actions: View>: View {
             title()
 
             Spacer(minLength: Theme.Spacing.snug)
+
+            // Идущая работа видна отсюда всегда — даже когда панель,
+            // которая её начала, закрыта.
+            if let current = activity.primary {
+                ActivityChip(activity: current) { activity.cancel(current.kind) }
+                    .transition(.opacity)
+            }
 
             actions()
         }

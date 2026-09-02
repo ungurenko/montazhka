@@ -23,6 +23,7 @@ struct MontazhkaApp: App {
         Window("Монтажка", id: "main") {
             RootView()
                 .environment(app)
+                .environment(ActivityCenter.shared)
                 .frame(minWidth: 1080, minHeight: 660)
                 .preferredColorScheme(.light)
                 .background(Theme.background)
@@ -81,6 +82,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.appearance = NSAppearance(named: .aqua)
         // Запуск из терминала (swift run) не выводит окно вперёд — активируем сами.
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    /// Пользователь вернулся в окно — значок о готовой работе он уже увидел.
+    func applicationDidBecomeActive(_ notification: Notification) {
+        ActivityCenter.shared.acknowledge()
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }

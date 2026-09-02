@@ -21,12 +21,15 @@ final class ActivityCenter {
     @ObservationIgnored private var estimators: [ActivityKind: RemainingTimeEstimator] = [:]
     @ObservationIgnored private let stageMemory: StageDurationMemory
     @ObservationIgnored private let clock: () -> Date
+    @ObservationIgnored private let announcer: ActivityAnnouncer
 
     init(
         stageMemory: StageDurationMemory = StageDurationMemory(),
+        announcer: ActivityAnnouncer = ActivityAnnouncer(),
         clock: @escaping () -> Date = { Date() }
     ) {
         self.stageMemory = stageMemory
+        self.announcer = announcer
         self.clock = clock
     }
 
@@ -69,6 +72,7 @@ final class ActivityCenter {
         estimators[kind] = RemainingTimeEstimator()
         cancelHandlers[kind] = cancel
         if lastCompletion?.kind == kind { lastCompletion = nil }
+        announcer.render(primary: primary)
     }
 
     /// Главный вход для контроллеров: снимок статуса или `nil`, если работа
@@ -100,6 +104,7 @@ final class ActivityCenter {
         }
 
         activities[index] = activity
+        announcer.render(primary: primary)
     }
 
     /// Завершает работу и запоминает исход для значка в Доке и звука.
@@ -115,11 +120,19 @@ final class ActivityCenter {
         activities.remove(at: index)
         estimators[kind] = nil
         cancelHandlers[kind] = nil
-        lastCompletion = ActivityCompletion(
+        let completion = ActivityCompletion(
             kind: kind,
             outcome: outcome,
             duration: now.timeIntervalSince(activity.startedAt),
             finishedAt: now)
+        lastCompletion = completion
+        // Пока идёт что-то ещё, значок в Доке продолжает показывать ход работы,
+        // а не итог только что закончившейся.
+        if let next = primary {
+            announcer.render(primary: next)
+        } else {
+            announcer.announce(completion)
+        }
     }
 
     /// Просит работу остановиться. Сам факт остановки придёт через `finish`.
@@ -130,6 +143,7 @@ final class ActivityCenter {
     /// Пользователь увидел итог — значок в Доке больше не нужен.
     func acknowledge() {
         lastCompletion = nil
+        announcer.acknowledge()
     }
 
     private func rememberStageDuration(of activity: Activity, endingAt now: Date) {
