@@ -100,6 +100,7 @@ final class ShortsController {
     var quality: ExportQuality = .high
 
     private(set) var status: ShortsStatus = .idle
+    @ObservationIgnored let activity: ActivityCenter
     var candidates: [ShortCandidate] = []
     private(set) var transcriptWords: [TranscriptWord] = []
     private(set) var analysisWarnings: [ShortsAnalysisWarning] = []
@@ -177,8 +178,10 @@ final class ShortsController {
         store: any ProjectRepository,
         openRouterKeyStore: any OpenRouterKeyStoring = OpenRouterKeyStore(),
         previewBuilder: any ShortsPreviewBuilding = DefaultShortsPreviewBuilder(),
-        preferences: any PreferenceStoring = UserDefaultsPreferenceStore.standard
+        preferences: any PreferenceStoring = UserDefaultsPreferenceStore.standard,
+        activity: ActivityCenter = .shared
     ) {
+        self.activity = activity
         let source = MediaReference(url: sourceURL)
         self.source = source
         self.preferences = preferences
@@ -302,7 +305,13 @@ final class ShortsController {
         candidates = []
         transcriptWords = []
         analysisWarnings = []
-        status = .preparingModel(progress: nil)
+        activity.begin(
+            .shortsAnalysis,
+            title: "Поиск моментов для shorts",
+            stages: ActivityStagePlan.shorts,
+            isCancellable: true,
+            cancel: { [weak self] in self?.cancelAnalysis() })
+        setStatus(.preparingModel(progress: nil))
         analysisOperation.start { [weak self] token in
             guard let self else { return }
             do {
@@ -318,12 +327,12 @@ final class ShortsController {
                 self.transcriptWords = result.transcript
                 self.candidates = result.candidates
                 self.analysisWarnings = result.warnings
-                self.status = .ready
+                self.setStatus(.ready)
             } catch is CancellationError {
-                if self.analysisOperation.isCurrent(token) { self.status = .idle }
+                if self.analysisOperation.isCurrent(token) { self.setStatus(.idle) }
             } catch {
                 guard self.analysisOperation.isCurrent(token) else { return }
-                self.status = .failed(error.localizedDescription)
+                self.setStatus(.failed(error.localizedDescription))
             }
         }
     }
@@ -333,12 +342,43 @@ final class ShortsController {
         candidates = []
         transcriptWords = []
         analysisWarnings = []
-        status = .idle
+        setStatus(.idle)
     }
 
     private func receiveStatus(_ status: ShortsStatus, token: LatestOperation.Token) {
         guard analysisOperation.isCurrent(token) else { return }
+        setStatus(status)
+    }
+
+    /// Единственная точка присвоения статуса анализа — и она же сообщает
+    /// центру активности, чтобы ход работы был виден вне этой панели.
+    private func setStatus(_ status: ShortsStatus) {
         self.status = status
+        switch status {
+        case .ready:
+            activity.finish(.shortsAnalysis, outcome: .success("Моменты найдены"))
+        case .failed(let message):
+            activity.finish(.shortsAnalysis, outcome: .failure(message))
+        case .idle:
+            activity.finish(.shortsAnalysis, outcome: .cancelled)
+        default:
+            activity.apply(.shortsAnalysis, snapshot: status.activitySnapshot)
+        }
+    }
+
+    /// То же для пакетного экспорта роликов.
+    private func setExportState(_ state: ShortsExportState) {
+        exportState = state
+        switch state {
+        case .done:
+            activity.finish(.shortsExport, outcome: .success("Ролики сохранены"))
+        case .failed(let message, _, _, _):
+            activity.finish(.shortsExport, outcome: .failure(message))
+        case .idle:
+            activity.finish(.shortsExport, outcome: .cancelled)
+        case .exporting:
+            activity.apply(.shortsExport, snapshot: state.activitySnapshot)
+        }
     }
 
     func toggleCandidate(_ id: UUID) {
@@ -515,7 +555,13 @@ final class ShortsController {
         let subtitleMode = self.subtitleMode
         let trimPauses = self.trimPauses
         currentExportFolder = folder
-        exportState = .exporting(done: completed, total: total, progress: 0)
+        activity.begin(
+            .shortsExport,
+            title: "Сохранение роликов",
+            stages: ActivityStagePlan.shortsExport,
+            isCancellable: true,
+            cancel: { [weak self] in self?.cancelExport() })
+        setExportState(.exporting(done: completed, total: total, progress: 0))
         exportOperation.start { [weak self] token in
             guard let self else { return }
             do {
@@ -537,17 +583,16 @@ final class ShortsController {
                                     case .exporting(let currentDone, _, _) = self.exportState,
                                     currentDone == done
                                 else { return }
-                                self.exportState = .exporting(
-                                    done: done, total: total,
-                                    progress: fraction)
+                                self.setExportState(
+                                    .exporting(done: done, total: total, progress: fraction))
                             }
                         })
                     guard exportOperation.isCurrent(token) else { return }
                     self.remainingExportItems = Array(items.dropFirst(offset + 1))
-                    self.exportState = .exporting(done: done + 1, total: total, progress: 0)
+                    self.setExportState(.exporting(done: done + 1, total: total, progress: 0))
                 }
                 self.remainingExportItems = []
-                self.exportState = .done(folder)
+                self.setExportState(.done(folder))
             } catch {
                 // Отмена доходит только из cancelExport/перезапуска/shutdown — каждый
                 // уже выставил состояние сам; устаревшему запуску писать нельзя.
@@ -558,11 +603,12 @@ final class ShortsController {
                 } else {
                     done = completed
                 }
-                self.exportState = .failed(
-                    message: "Не получилось сохранить ролики: \(error.localizedDescription)",
-                    completed: done,
-                    total: total,
-                    folder: folder)
+                self.setExportState(
+                    .failed(
+                        message: "Не получилось сохранить ролики: \(error.localizedDescription)",
+                        completed: done,
+                        total: total,
+                        folder: folder))
             }
         }
     }
@@ -582,7 +628,7 @@ final class ShortsController {
             cancelledState = .idle
         }
         exportOperation.cancel()
-        exportState = cancelledState
+        setExportState(cancelledState)
     }
 
     func revealFolder(_ url: URL) {

@@ -66,6 +66,7 @@ enum SelfTest {
     }
 
     private static func runAll() async {
+        failures += await ActivitySelfTest.run()
         failures += await ShortsSubtitleSelfTest.run()
         await testAudioPipeline()
         await testVoiceEnhance()

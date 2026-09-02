@@ -165,6 +165,22 @@ enum TimeFormat {
         return rest == 0 ? "\(m) мин" : "\(m) мин \(rest) сек"
     }
 
+    /// Оставшееся время округлённо: точность до секунды тут только мешает,
+    /// потому что оценка всё равно приблизительная.
+    static func approximate(_ seconds: Double) -> String {
+        let s = max(0, seconds)
+        if s < 10 { return "меньше 10 секунд" }
+        if s < 60 { return "около \(Int((s / 5).rounded()) * 5) секунд" }
+        if s < 600 {
+            let halves = Int((s / 30).rounded())
+            let minutes = halves / 2
+            let rest = halves % 2 == 1 ? 30 : 0
+            if minutes == 0 { return "около 30 секунд" }
+            return rest == 0 ? "около \(minutes) мин" : "около \(minutes),5 мин"
+        }
+        return "около \(Int((s / 60).rounded())) мин"
+    }
+
     static func date(_ date: Date) -> String {
         dateFormatter.string(from: date)
     }

@@ -158,11 +158,45 @@ final class ExportModel {
     private(set) var audioWarning: String?
 
     @ObservationIgnored private let videoExporter: any VideoExporting
+    @ObservationIgnored private let activity: ActivityCenter
     @ObservationIgnored private var operationTask: Task<Void, Never>?
     @ObservationIgnored private var operationGeneration = Generation()
 
-    init(videoExporter: any VideoExporting = TranscodingVideoExporter()) {
+    init(
+        videoExporter: any VideoExporting = TranscodingVideoExporter(),
+        activity: ActivityCenter = .shared
+    ) {
         self.videoExporter = videoExporter
+        self.activity = activity
+    }
+
+    /// Единственная точка смены состояния: центр активности узнаёт о ходе
+    /// экспорта отсюда, поэтому прогресс виден в Доке даже со свёрнутым окном.
+    private func setState(_ new: State, progress: Double? = nil) {
+        state = new
+        if let progress { self.progress = progress }
+        switch new {
+        case .preparing:
+            activity.apply(
+                .export,
+                snapshot: ActivitySnapshot(
+                    stageIndex: 0,
+                    caption: "Собираю дорожки и обрабатываю звук",
+                    progress: .indeterminate))
+        case .exporting:
+            activity.apply(
+                .export,
+                snapshot: ActivitySnapshot(
+                    stageIndex: 1,
+                    caption: "Записываю файл",
+                    progress: .fraction(self.progress)))
+        case .done:
+            activity.finish(.export, outcome: .success("Видео сохранено"))
+        case .failed(let message):
+            activity.finish(.export, outcome: .failure(message))
+        case .idle:
+            activity.finish(.export, outcome: .cancelled)
+        }
     }
 
     func chooseDestination(projectName: String) -> URL? {
@@ -182,9 +216,15 @@ final class ExportModel {
     ) -> Bool {
         guard operationTask == nil else { return false }
         let generation = operationGeneration.advance()
-        state = .preparing
         progress = 0
         audioWarning = nil
+        activity.begin(
+            .export,
+            title: "Сохранение видео",
+            stages: ActivityStagePlan.export,
+            isCancellable: true,
+            cancel: { [weak self] in self?.cancel() })
+        setState(.preparing)
         let onProgress: @Sendable (Double) -> Void = { [weak self] value in
             Task { @MainActor in
                 guard let self,
@@ -192,6 +232,12 @@ final class ExportModel {
                     self.state == .exporting
                 else { return }
                 self.progress = value
+                self.activity.apply(
+                    .export,
+                    snapshot: ActivitySnapshot(
+                        stageIndex: 1,
+                        caption: "Записываю файл",
+                        progress: .fraction(value)))
             }
         }
         operationTask = Task { [weak self] in
@@ -201,7 +247,7 @@ final class ExportModel {
                 try Task.checkCancellation()
                 guard self.operationGeneration.isCurrent(generation) else { return }
                 self.audioWarning = prepared.warning
-                self.state = .exporting
+                self.setState(.exporting)
                 try await self.videoExporter.export(
                     prepared,
                     quality: quality,
@@ -210,16 +256,14 @@ final class ExportModel {
                 )
                 try Task.checkCancellation()
                 guard self.operationGeneration.isCurrent(generation) else { return }
-                self.progress = 1
-                self.state = .done(url)
+                self.setState(.done(url), progress: 1)
             } catch is CancellationError {
                 guard self.operationGeneration.isCurrent(generation) else { return }
-                self.state = .idle
-                self.progress = 0
+                self.setState(.idle, progress: 0)
             } catch {
                 guard self.operationGeneration.isCurrent(generation) else { return }
                 Logger.export.error("Экспорт не удался: \(error.localizedDescription)")
-                self.state = .failed("Не получилось сохранить видео: \(error.localizedDescription)")
+                self.setState(.failed("Не получилось сохранить видео: \(error.localizedDescription)"))
             }
             if self.operationGeneration.isCurrent(generation) {
                 self.operationTask = nil
@@ -232,8 +276,7 @@ final class ExportModel {
         _ = operationGeneration.advance()
         operationTask?.cancel()
         operationTask = nil
-        state = .idle
-        progress = 0
+        setState(.idle, progress: 0)
         audioWarning = nil
     }
 

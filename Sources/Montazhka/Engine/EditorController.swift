@@ -96,6 +96,7 @@ final class EditorController: ExportPreparing {
     private(set) var clipImportState: ClipImportState = .idle
     var smartEditCandidates: [SmartEditCandidate] = []
     private(set) var smartEditStatus: SmartEditStatus = .idle
+    @ObservationIgnored let activity: ActivityCenter
     var openRouterKeyStatus: OpenRouterKeyStatus { aiConnection.openRouterKeyStatus }
 
     let player = AVPlayer()
@@ -163,8 +164,10 @@ final class EditorController: ExportPreparing {
         project: Project,
         store: any ProjectRepository,
         openRouterKeyStore: any OpenRouterKeyStoring = OpenRouterKeyStore(),
-        preferences: any PreferenceStoring = UserDefaultsPreferenceStore.standard
+        preferences: any PreferenceStoring = UserDefaultsPreferenceStore.standard,
+        activity: ActivityCenter = .shared
     ) {
+        self.activity = activity
         self.project = project
         self.projectEditor = ProjectEditor(project: project)
         self.repository = store
@@ -877,7 +880,13 @@ final class EditorController: ExportPreparing {
         let threshold = project.detection.thresholdDB
         smartEditCandidates = []
         smartEditSnapshotID = nil
-        smartEditStatus = .preparingModel(progress: nil)
+        activity.begin(
+            .smartEdit,
+            title: "Умный монтаж речи",
+            stages: ActivityStagePlan.smartEdit,
+            isCancellable: true,
+            cancel: { [weak self] in self?.cancelSmartEdit() })
+        setSmartEditStatus(.preparingModel(progress: nil))
         smartEditTask = Task { [weak self] in
             guard let self else { return }
             do {
@@ -891,12 +900,12 @@ final class EditorController: ExportPreparing {
                 guard self.smartEditGeneration.isCurrent(generation) else { return }
                 self.smartEditSnapshotID = result.snapshot.id
                 self.smartEditCandidates = result.candidates
-                self.smartEditStatus = .ready
+                self.setSmartEditStatus(.ready)
             } catch is CancellationError {
-                if self.smartEditGeneration.isCurrent(generation) { self.smartEditStatus = .idle }
+                if self.smartEditGeneration.isCurrent(generation) { self.setSmartEditStatus(.idle) }
             } catch {
                 guard self.smartEditGeneration.isCurrent(generation) else { return }
-                self.smartEditStatus = .failed(error.localizedDescription)
+                self.setSmartEditStatus(.failed(error.localizedDescription))
             }
         }
     }
@@ -907,12 +916,28 @@ final class EditorController: ExportPreparing {
         smartEditTask = nil
         smartEditSnapshotID = nil
         smartEditCandidates = []
-        smartEditStatus = .idle
+        setSmartEditStatus(.idle)
     }
 
     private func receiveSmartEditStatus(_ status: SmartEditStatus, generation: Int) {
         guard smartEditGeneration.isCurrent(generation) else { return }
+        setSmartEditStatus(status)
+    }
+
+    /// Через эту воронку проходят все изменения статуса умного монтажа,
+    /// поэтому центр активности никогда не отстаёт от контроллера.
+    private func setSmartEditStatus(_ status: SmartEditStatus) {
         smartEditStatus = status
+        switch status {
+        case .ready:
+            activity.finish(.smartEdit, outcome: .success("Умный монтаж готов"))
+        case .failed(let message):
+            activity.finish(.smartEdit, outcome: .failure(message))
+        case .idle:
+            activity.finish(.smartEdit, outcome: .cancelled)
+        default:
+            activity.apply(.smartEdit, snapshot: status.activitySnapshot)
+        }
     }
 
     func toggleSmartEditCandidate(_ id: UUID) {
@@ -935,7 +960,7 @@ final class EditorController: ExportPreparing {
     func previewSmartEditJoin(_ candidate: SmartEditCandidate) {
         let expectedSnapshot = SmartEditSnapshot(clips: project.clips).id
         guard smartEditSnapshotID == expectedSnapshot else {
-            smartEditStatus = .failed(SmartEditError.staleAnalysis.localizedDescription)
+            setSmartEditStatus(.failed(SmartEditError.staleAnalysis.localizedDescription))
             return
         }
         var previewProject = project
@@ -978,7 +1003,7 @@ final class EditorController: ExportPreparing {
     func applySmartEdits() {
         let expectedSnapshot = SmartEditSnapshot(clips: project.clips).id
         guard smartEditSnapshotID == expectedSnapshot else {
-            smartEditStatus = .failed(SmartEditError.staleAnalysis.localizedDescription)
+            setSmartEditStatus(.failed(SmartEditError.staleAnalysis.localizedDescription))
             return
         }
         let ranges = SmartEditRanges.merged(
