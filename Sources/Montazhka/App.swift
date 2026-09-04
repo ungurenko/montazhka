@@ -98,8 +98,7 @@ final class AppModel {
     var recents: [ProjectMeta] = []
     var storeErrorMessage: UserFacingError?
     private(set) var isProjectOperationInProgress = false
-    private var recentsTask: Task<Void, Never>?
-    private var recentsGeneration = 0
+    @ObservationIgnored private let recentsOperation = LatestOperation()
     private var projectOperationTask: Task<Void, Never>?
     private var projectOperationGeneration = Generation()
     var agentIntegration = AgentIntegrationInstaller.status()
@@ -183,14 +182,11 @@ final class AppModel {
     }
 
     func refreshRecents(openLatestAfterLoad: Bool = false) {
-        recentsTask?.cancel()
-        recentsGeneration += 1
-        let generation = recentsGeneration
-        recentsTask = Task { [weak self] in
+        recentsOperation.start { [weak self] token in
             guard let self else { return }
             do {
                 let listing = try await store.listProjects()
-                guard !Task.isCancelled, generation == recentsGeneration else { return }
+                guard recentsOperation.isCurrent(token) else { return }
                 recents = listing.projects
                 if listing.issues.isEmpty {
                     storeErrorMessage = nil
@@ -205,7 +201,7 @@ final class AppModel {
                     openProject(id: latest.id)
                 }
             } catch {
-                guard !Task.isCancelled, generation == recentsGeneration else { return }
+                guard recentsOperation.isCurrent(token) else { return }
                 storeErrorMessage = UserFacingError.make(error, context: .project)
             }
         }
@@ -321,8 +317,7 @@ final class AppModel {
 
     private func beginProjectOperation() -> Int {
         projectOperationTask?.cancel()
-        recentsTask?.cancel()
-        recentsGeneration += 1
+        recentsOperation.cancel()
         storeErrorMessage = nil
         isProjectOperationInProgress = true
         return projectOperationGeneration.advance()
