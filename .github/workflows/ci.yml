@@ -10,20 +10,22 @@ permissions:
 
 jobs:
   verify:
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Select Xcode
         run: |
-          # MCP SDK 0.12 requires Swift 6.1 or newer.
-          if [ -d /Applications/Xcode_26.3.app ]; then
-            sudo xcode-select --switch /Applications/Xcode_26.3.app/Contents/Developer
+          # Та же версия, на которой идёт разработка: иначе часть проблем
+          # видна только здесь, а часть — только на машине разработчика.
+          if [ -d /Applications/Xcode_26.6.app ]; then
+            sudo xcode-select --switch /Applications/Xcode_26.6.app/Contents/Developer
           else
             ls -d /Applications/Xcode*.app
             sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer
           fi
+          xcodebuild -version
 
       - name: Install pinned tools
         run: ./scripts/bootstrap-tools.sh

@@ -17,7 +17,7 @@ permissions:
 
 jobs:
   release:
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 60
     env:
       MONTAZHKA_SIGNING_IDENTITY: ${{ secrets.DEVELOPER_ID_APPLICATION }}
@@ -29,7 +29,10 @@ jobs:
         run: echo "NOTARY_KEYCHAIN_PATH=$RUNNER_TEMP/montazhka-release.keychain-db" >> "$GITHUB_ENV"
 
       - name: Select Xcode
-        run: sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer
+        # На образе macos-26 Xcode по умолчанию — 26.6, тот же, что в CI.
+        run: |
+          sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer
+          xcodebuild -version
 
       - name: Install pinned tools
         run: ./scripts/bootstrap-tools.sh
