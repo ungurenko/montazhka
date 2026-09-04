@@ -29,7 +29,6 @@ enum Theme {
         static let snug: CGFloat = 12
         static let medium: CGFloat = 16
         static let large: CGFloat = 24
-        static let xlarge: CGFloat = 32
     }
 
     enum TypeScale {
@@ -48,8 +47,6 @@ enum Theme {
         static let trafficLightInset: CGFloat = 84
         /// Ширина правой панели-инспектора.
         static let inspectorWidth: CGFloat = 340
-        /// Высота шапки внутри панели-инспектора.
-        static let inspectorHeaderHeight: CGFloat = 52
     }
 
     /// Тень означает высоту слоя, а не украшение: чем выше слой над
