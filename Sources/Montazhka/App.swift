@@ -107,9 +107,7 @@ final class AppModel {
     init(store: (any ProjectRepository)? = nil) {
         let arguments = CommandLine.arguments
         let environment = ProcessInfo.processInfo.environment
-        let isUITesting =
-            arguments.contains("--ui-testing")
-            && environment["MONTAZHKA_UI_TEST_MODE"] == "1"
+        let isUITesting = UITestMode.isActive
         let resolvedStore = store ?? Self.defaultStore(isUITesting: isUITesting, environment: environment)
         self.store = resolvedStore
         refreshRecents(openLatestAfterLoad: CommandLine.arguments.contains("--open-latest"))

@@ -19,8 +19,7 @@ struct UserDefaultsPreferenceStore: PreferenceStoring, @unchecked Sendable {
     /// при запуске: проверки не должны читать и менять настройки пользователя
     /// и обязаны каждый раз начинать с одного и того же состояния.
     private static func settingsDefaults() -> UserDefaults {
-        guard CommandLine.arguments.contains("--ui-testing"),
-            ProcessInfo.processInfo.environment["MONTAZHKA_UI_TEST_MODE"] == "1",
+        guard UITestMode.isActive,
             let sandbox = UserDefaults(suiteName: uiTestSuiteName)
         else { return .standard }
         sandbox.removePersistentDomain(forName: uiTestSuiteName)
