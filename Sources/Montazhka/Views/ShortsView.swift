@@ -669,7 +669,34 @@ struct ShortsView: View {
             if controller.subtitlesEnabled {
                 subtitlePresets
 
-                DisclosureGroup(isExpanded: $subtitleSettingsExpanded) {
+                // Раскрывашка на кнопке, как «Оформление» выше: у SwiftUI-треугольника
+                // нажимается только сам значок, а не подпись рядом с ним.
+                Button {
+                    withAnimation(
+                        reduceMotion ? .linear(duration: 0.12) : .easeInOut(duration: 0.2)
+                    ) {
+                        subtitleSettingsExpanded.toggle()
+                    }
+                } label: {
+                    HStack(spacing: Theme.Spacing.small) {
+                        Text("Настроить")
+                            .typeStyle(.helperEmphasis)
+                            .foregroundStyle(Theme.textSecondary)
+                        Spacer()
+                        Image(
+                            systemName: subtitleSettingsExpanded ? "chevron.down" : "chevron.right"
+                        )
+                        .typeStyle(.helperEmphasis)
+                        .foregroundStyle(Theme.textSecondary)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Настроить")
+                .accessibilityIdentifier("shorts.subtitleSettings")
+                .accessibilityValue(subtitleSettingsExpanded ? "Развёрнуто" : "Свёрнуто")
+
+                if subtitleSettingsExpanded {
                     VStack(alignment: .leading, spacing: Theme.Spacing.snug) {
                         subtitleFontRow
                         subtitleSizeRow
@@ -691,12 +718,8 @@ struct ShortsView: View {
                         .accessibilityIdentifier("shorts.subtitleHighlight")
                     }
                     .padding(.top, Theme.Spacing.snug)
-                } label: {
-                    Text("Настроить")
-                        .typeStyle(.helperEmphasis)
-                        .foregroundStyle(Theme.textSecondary)
+                    .transition(.opacity)
                 }
-                .accessibilityIdentifier("shorts.subtitleSettings")
             }
 
             VStack(alignment: .leading, spacing: Theme.Spacing.small) {
