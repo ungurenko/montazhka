@@ -17,7 +17,10 @@ struct ShortsControllerTests {
         ReasoningChoice.effort(.high).save(
             key: ShortsController.reasoningKey,
             in: preferences)
-        ShortsSubtitleSettings(enabled: true, style: .boxed, size: .large, highlightActiveWord: true)
+        var savedAppearance = ShortsSubtitlePreset.plate.appearance
+        savedAppearance.size = .large
+        ShortsSubtitleSettings(
+            enabled: true, appearance: savedAppearance, highlightActiveWord: true)
             .save(in: preferences)
 
         let repository = ProjectStore(baseDirectory: root)
@@ -37,14 +40,16 @@ struct ShortsControllerTests {
         #expect(shorts.aiConnection.modelID == SmartEditModel.luna.rawValue)
         #expect(shorts.aiConnection.reasoningChoice == .effort(.high))
         #expect(shorts.subtitlesEnabled)
-        #expect(shorts.subtitleStyle == .boxed)
+        #expect(shorts.subtitleBackground == .plate)
         #expect(shorts.subtitleSize == .large)
         #expect(editor.aiConnection.modelID == SmartEditModel.luna.rawValue)
 
         shorts.count = .three
-        shorts.subtitleStyle = .accent
+        shorts.subtitlePreset = .accent
         #expect(ShortsCount.saved(in: preferences) == .three)
-        #expect(ShortsSubtitleSettings.saved(in: preferences).style == .accent)
+        #expect(
+            ShortsSubtitleSettings.saved(in: preferences).appearance
+                == ShortsSubtitlePreset.accent.appearance)
 
         await shorts.shutdown()
         await editor.shutdown()
@@ -92,7 +97,7 @@ struct ShortsControllerTests {
         builder.fail(item.id, with: ShortsVideoCompositionError.invalidVideoTrack)
         try await waitUntil { controller.previewError != nil }
 
-        #expect(controller.previewError?.contains("Не получилось подготовить просмотр") == true)
+        #expect(controller.previewError?.message.contains("Не удалось подготовить вертикальный кадр") == true)
         await controller.shutdown()
     }
 
@@ -201,12 +206,12 @@ private final class ControllerPreferenceStore: PreferenceStoring, @unchecked Sen
 
 @MainActor
 private final class ControlledShortsPreviewBuilder: ShortsPreviewBuilding {
-    private var continuations: [UUID: CheckedContinuation<AVPlayerItem, Error>] = [:]
+    private var continuations: [UUID: CheckedContinuation<ShortsPreviewItem, Error>] = [:]
     private(set) var requests: [UUID: ShortsPreviewRequest] = [:]
 
     var pendingIDs: Set<UUID> { Set(continuations.keys) }
 
-    func makeItem(for request: ShortsPreviewRequest) async throws -> AVPlayerItem {
+    func makeItem(for request: ShortsPreviewRequest) async throws -> ShortsPreviewItem {
         requests[request.candidateID] = request
         return try await withCheckedThrowingContinuation { continuation in
             continuations[request.candidateID] = continuation
@@ -214,7 +219,11 @@ private final class ControlledShortsPreviewBuilder: ShortsPreviewBuilding {
     }
 
     func complete(_ id: UUID, with url: URL) {
-        continuations.removeValue(forKey: id)?.resume(returning: AVPlayerItem(url: url))
+        continuations.removeValue(forKey: id)?
+            .resume(
+                returning: ShortsPreviewItem(
+                    item: AVPlayerItem(url: url),
+                    frameSize: CGSize(width: 1080, height: 1920)))
     }
 
     func fail(_ id: UUID, with error: any Error) {

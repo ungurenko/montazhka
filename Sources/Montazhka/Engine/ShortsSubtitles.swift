@@ -4,19 +4,122 @@ import CoreText
 import Foundation
 import QuartzCore
 
-/// Визуальный стиль автоматических субтитров.
-enum ShortsSubtitleStyle: String, CaseIterable, Identifiable, Sendable {
-    case classic
-    case accent
-    case boxed
+/// Шрифт субтитров. Четыре подобранных гарнитуры: все есть в macOS, все знают
+/// кириллицу и читаются на экране телефона. Если гарнитуры в системе не
+/// оказалось, молча берём системную — лучше другой шрифт, чем пустые квадраты.
+enum ShortsSubtitleFont: String, CaseIterable, Identifiable, Sendable {
+    case system
+    case grotesque
+    case rounded
+    case serif
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
-        case .classic: return "Классика"
-        case .accent: return "Акцент"
-        case .boxed: return "Подложка"
+        case .system: return "Системный"
+        case .grotesque: return "Гротеск"
+        case .rounded: return "Округлый"
+        case .serif: return "С засечками"
+        }
+    }
+
+    /// Имя гарнитуры в системе. nil — системный шрифт, он есть всегда.
+    private var fontName: String? {
+        switch self {
+        case .system: return nil
+        case .grotesque: return "HelveticaNeue-Bold"
+        case .rounded: return "AvenirNext-Heavy"
+        case .serif: return "Georgia-Bold"
+        }
+    }
+
+    func font(ofSize size: CGFloat) -> NSFont {
+        guard let fontName, let font = NSFont(name: fontName, size: size) else {
+            return NSFont.systemFont(ofSize: size, weight: .bold)
+        }
+        return font
+    }
+}
+
+/// Палитра цветов субтитров. Набор, а не свободная пипетка: каждый цвет
+/// проверен на читаемость поверх видео.
+enum ShortsSubtitleColor: String, CaseIterable, Identifiable, Sendable {
+    case white
+    case black
+    case yellow
+    case lime
+    case coral
+    case sky
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .white: return "Белый"
+        case .black: return "Чёрный"
+        case .yellow: return "Жёлтый"
+        case .lime: return "Лаймовый"
+        case .coral: return "Коралловый"
+        case .sky: return "Голубой"
+        }
+    }
+
+    var nsColor: NSColor {
+        switch self {
+        case .white: return NSColor(calibratedWhite: 1, alpha: 1)
+        case .black: return NSColor(calibratedWhite: 0.1, alpha: 1)
+        case .yellow: return NSColor(calibratedRed: 1, green: 0.83, blue: 0.15, alpha: 1)
+        case .lime: return NSColor(calibratedRed: 0.66, green: 0.95, blue: 0.3, alpha: 1)
+        case .coral: return NSColor(calibratedRed: 1, green: 0.42, blue: 0.38, alpha: 1)
+        case .sky: return NSColor(calibratedRed: 0.35, green: 0.76, blue: 1, alpha: 1)
+        }
+    }
+}
+
+/// Что держит текст читаемым поверх любого кадра.
+enum ShortsSubtitleBackground: String, CaseIterable, Identifiable, Sendable {
+    case shadow
+    case plate
+    case outline
+    case none
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .shadow: return "Тень"
+        case .plate: return "Плашка"
+        case .outline: return "Обводка"
+        case .none: return "Без подложки"
+        }
+    }
+}
+
+/// На какой высоте кадра стоит строка субтитров.
+enum ShortsSubtitlePosition: String, CaseIterable, Identifiable, Sendable {
+    case low
+    case middle
+    case high
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .low: return "Ниже"
+        case .middle: return "Середина"
+        case .high: return "Выше"
+        }
+    }
+
+    /// Доля высоты кадра от нижнего края до нижней границы текста. В вертикальном
+    /// кадре нижнюю пятую занимает интерфейс TikTok и Reels, поэтому там всё
+    /// поднято выше.
+    func bottomRatio(isVertical: Bool) -> CGFloat {
+        switch self {
+        case .low: return isVertical ? 0.14 : 0.06
+        case .middle: return isVertical ? 0.24 : 0.14
+        case .high: return isVertical ? 0.40 : 0.28
         }
     }
 }
@@ -47,51 +150,155 @@ enum ShortsSubtitleSize: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
+/// Готовый образ субтитров: выбирается одним нажатием и заполняет все поля
+/// оформления разом.
+enum ShortsSubtitlePreset: String, CaseIterable, Identifiable, Sendable {
+    case classic
+    case accent
+    case plate
+    case outline
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .classic: return "Классика"
+        case .accent: return "Акцент"
+        case .plate: return "Плашка"
+        case .outline: return "Обводка"
+        }
+    }
+
+    var appearance: ShortsSubtitleAppearance {
+        switch self {
+        case .classic:
+            return ShortsSubtitleAppearance(
+                font: .system, size: .medium, textColor: .white,
+                highlightColor: .yellow, background: .shadow, position: .low)
+        case .accent:
+            return ShortsSubtitleAppearance(
+                font: .rounded, size: .large, textColor: .yellow,
+                highlightColor: .white, background: .shadow, position: .low)
+        case .plate:
+            return ShortsSubtitleAppearance(
+                font: .grotesque, size: .medium, textColor: .white,
+                highlightColor: .yellow, background: .plate, position: .low)
+        case .outline:
+            return ShortsSubtitleAppearance(
+                font: .system, size: .large, textColor: .white,
+                highlightColor: .lime, background: .outline, position: .low)
+        }
+    }
+}
+
+/// Всё, что нужно знать обоим рендерам о внешнем виде субтитров: и слою
+/// предпросмотра, и запеканию в MP4. Один источник правды — превью не может
+/// разойтись с готовым файлом.
+struct ShortsSubtitleAppearance: Equatable, Sendable {
+    var font: ShortsSubtitleFont
+    var size: ShortsSubtitleSize
+    var textColor: ShortsSubtitleColor
+    var highlightColor: ShortsSubtitleColor
+    var background: ShortsSubtitleBackground
+    var position: ShortsSubtitlePosition
+
+    static let `default` = ShortsSubtitlePreset.classic.appearance
+
+    /// Совпадает ли оформление с готовым образом. Отдельный флаг не нужен:
+    /// ручная правка любого поля сама выводит выбор в «Свой».
+    var preset: ShortsSubtitlePreset? {
+        ShortsSubtitlePreset.allCases.first { $0.appearance == self }
+    }
+
+    func baseFontSize(canvasSize: CGSize) -> CGFloat {
+        max(14, min(canvasSize.width, canvasSize.height) * size.scale)
+    }
+}
+
 /// Настройки, которые выбираются в интерфейсе shorts и сохраняются между запусками.
 struct ShortsSubtitleSettings: Equatable, Sendable {
     var enabled: Bool
-    var style: ShortsSubtitleStyle
-    var size: ShortsSubtitleSize
+    var appearance: ShortsSubtitleAppearance
     /// Подсветка звучащего слова — стандарт коротких роликов.
     var highlightActiveWord: Bool
 
     static let `default` = ShortsSubtitleSettings(
-        enabled: false, style: .classic, size: .medium, highlightActiveWord: true)
+        enabled: false, appearance: .default, highlightActiveWord: true)
 
     static func saved(
         in store: any PreferenceStoring = UserDefaultsPreferenceStore.standard
     ) -> ShortsSubtitleSettings {
-        let style =
-            ShortsSubtitleStyle(
-                rawValue: store.string(forKey: Keys.style) ?? "") ?? .classic
-        let size =
-            ShortsSubtitleSize(
-                rawValue: store.string(forKey: Keys.size) ?? "") ?? .medium
         let enabled = store.bool(forKey: Keys.enabled)
         // Строкой, а не флагом: отсутствие ключа надо отличать от «выключено»,
         // потому что подсветка включена по умолчанию.
         let highlight = store.string(forKey: Keys.highlight).map { $0 == "on" } ?? true
+        var appearance = migratedAppearance(in: store)
+        if let font = store.string(forKey: Keys.font).flatMap(ShortsSubtitleFont.init(rawValue:)) {
+            appearance.font = font
+        }
+        if let size = store.string(forKey: Keys.size).flatMap(ShortsSubtitleSize.init(rawValue:)) {
+            appearance.size = size
+        }
+        if let color = store.string(forKey: Keys.textColor)
+            .flatMap(ShortsSubtitleColor.init(rawValue:))
+        {
+            appearance.textColor = color
+        }
+        if let color = store.string(forKey: Keys.highlightColor)
+            .flatMap(ShortsSubtitleColor.init(rawValue:))
+        {
+            appearance.highlightColor = color
+        }
+        if let background = store.string(forKey: Keys.background)
+            .flatMap(ShortsSubtitleBackground.init(rawValue:))
+        {
+            appearance.background = background
+        }
+        if let position = store.string(forKey: Keys.position)
+            .flatMap(ShortsSubtitlePosition.init(rawValue:))
+        {
+            appearance.position = position
+        }
         return ShortsSubtitleSettings(
-            enabled: enabled, style: style, size: size, highlightActiveWord: highlight)
+            enabled: enabled, appearance: appearance, highlightActiveWord: highlight)
+    }
+
+    /// Три прежних стиля («Классика», «Акцент», «Подложка») переводим в образы,
+    /// чтобы у тех, кто уже настроил субтитры, ничего не сбросилось.
+    private static func migratedAppearance(in store: any PreferenceStoring) -> ShortsSubtitleAppearance {
+        switch store.string(forKey: Keys.legacyStyle) {
+        case "accent": return ShortsSubtitlePreset.accent.appearance
+        case "boxed": return ShortsSubtitlePreset.plate.appearance
+        default: return .default
+        }
     }
 
     func save(in store: any PreferenceStoring = UserDefaultsPreferenceStore.standard) {
         store.set(enabled, forKey: Keys.enabled)
-        store.set(style.rawValue, forKey: Keys.style)
-        store.set(size.rawValue, forKey: Keys.size)
         store.set(highlightActiveWord ? "on" : "off", forKey: Keys.highlight)
+        store.set(appearance.font.rawValue, forKey: Keys.font)
+        store.set(appearance.size.rawValue, forKey: Keys.size)
+        store.set(appearance.textColor.rawValue, forKey: Keys.textColor)
+        store.set(appearance.highlightColor.rawValue, forKey: Keys.highlightColor)
+        store.set(appearance.background.rawValue, forKey: Keys.background)
+        store.set(appearance.position.rawValue, forKey: Keys.position)
     }
 
     func mode(with words: [TranscriptWord]) -> ShortsSubtitleMode {
         guard enabled, !words.isEmpty else { return .off }
-        return .on(words: words, style: style, size: size, highlight: highlightActiveWord)
+        return .on(words: words, appearance: appearance, highlight: highlightActiveWord)
     }
 
     private enum Keys {
         static let enabled = "shorts.subtitlesEnabled"
-        static let style = "shorts.subtitleStyle"
-        static let size = "shorts.subtitleSize"
         static let highlight = "shorts.subtitleHighlight"
+        static let font = "shorts.subtitleFont"
+        static let size = "shorts.subtitleSize"
+        static let textColor = "shorts.subtitleTextColor"
+        static let highlightColor = "shorts.subtitleHighlightColor"
+        static let background = "shorts.subtitleBackground"
+        static let position = "shorts.subtitlePosition"
+        static let legacyStyle = "shorts.subtitleStyle"
     }
 }
 
@@ -101,8 +308,8 @@ struct ShortsSubtitleSettings: Equatable, Sendable {
 enum ShortsSubtitleMode: Equatable, Sendable {
     case off
     case on(
-        words: [TranscriptWord], style: ShortsSubtitleStyle,
-        size: ShortsSubtitleSize, highlight: Bool)
+        words: [TranscriptWord], appearance: ShortsSubtitleAppearance,
+        highlight: Bool)
 }
 
 /// Одно слово фразы. Время уже приведено к шкале готового ролика.
@@ -131,8 +338,7 @@ struct ShortsSubtitleCue: Equatable, Sendable {
 /// потому что AVVideoCompositionCoreAnimationTool предназначен для offline-рендера.
 struct ShortsSubtitleOverlay: Equatable, Sendable {
     let words: [String]
-    let style: ShortsSubtitleStyle
-    let size: ShortsSubtitleSize
+    let appearance: ShortsSubtitleAppearance
     /// Какое слово подсвечено. nil — подсветка выключена или звучит пауза.
     let activeWordIndex: Int?
 
@@ -145,13 +351,13 @@ enum ShortsSubtitleOverlayBuilder {
         timeMap: ShortsTimeMap,
         mode: ShortsSubtitleMode
     ) -> ShortsSubtitleOverlay? {
-        guard case let .on(words, style, size, highlight) = mode else { return nil }
+        guard case let .on(words, appearance, highlight) = mode else { return nil }
         let cues = ShortsSubtitleCueBuilder.make(words: words, timeMap: timeMap)
         guard let cue = cues.first(where: { time >= $0.start && time < $0.end }) else {
             return nil
         }
         return ShortsSubtitleOverlay(
-            words: cue.words.map(\.text), style: style, size: size,
+            words: cue.words.map(\.text), appearance: appearance,
             activeWordIndex: highlight ? cue.activeWordIndex(at: time) : nil)
     }
 }
@@ -160,7 +366,7 @@ enum ShortsSubtitleOverlayBuilder {
 /// Это отдельная чистая логика: её можно проверять без запуска AVFoundation.
 enum ShortsSubtitleCueBuilder {
     private static let maxWords = 4
-    private static let maxCharacters = 34
+    private static let maxCharacters = 30
     private static let maxDuration = 1.85
     private static let maxGap = 0.50
 
@@ -245,44 +451,57 @@ enum ShortsSubtitleCueBuilder {
 /// Геометрия подписи. Общая для запекания в MP4 и для слоя предпросмотра —
 /// иначе превью расходится с готовым файлом.
 enum ShortsSubtitleLayout {
-    static let widthRatio: CGFloat = 0.88
+    /// Безопасная зона: текст занимает не всю ширину кадра, поля остаются
+    /// пустыми — так подпись не липнет к краям ни в каком формате.
+    static let widthRatio: CGFloat = 0.86
     static let horizontalPaddingScale: CGFloat = 0.45
     static let verticalPaddingScale: CGFloat = 0.20
     static let lineHeightScale: CGFloat = 1.14
     static let cornerRadiusScale: CGFloat = 0.28
     static let shadowRadiusScale: CGFloat = 0.10
     static let shadowOffsetScale: CGFloat = 0.04
+    static let outlineWidthScale: CGFloat = 0.075
     /// Небольшой запас по горизонтали: ширина слова меряется системным
     /// шрифтовым API, а рисует текст CoreText — расхождение в пиксель-другой.
     static let highlightInsetScale: CGFloat = 0.04
+    /// Больше двух строк на экране телефона уже не читаются.
+    static let maxLines = 2
 
-    private static let bottomMarginScale: CGFloat = 1.25
-    private static let horizontalBottomMarginRatio: CGFloat = 0.085
-    /// В вертикальном кадре нижнюю пятую занимает интерфейс TikTok и Reels.
-    private static let verticalBottomMarginRatio: CGFloat = 0.18
+    private static let minimumBottomRatio: CGFloat = 0.06
 
-    static func bottomMargin(fontSize: CGFloat, canvasSize: CGSize) -> CGFloat {
-        let ratio =
-            canvasSize.height > canvasSize.width
-            ? verticalBottomMarginRatio
-            : horizontalBottomMarginRatio
-        return max(fontSize * bottomMarginScale, canvasSize.height * ratio)
+    static func bottomMargin(
+        appearance: ShortsSubtitleAppearance,
+        canvasSize: CGSize
+    ) -> CGFloat {
+        let isVertical = canvasSize.height > canvasSize.width
+        let ratio = max(
+            minimumBottomRatio, appearance.position.bottomRatio(isVertical: isVertical))
+        return canvasSize.height * ratio
     }
 
-    static func foregroundColor(for style: ShortsSubtitleStyle) -> NSColor {
-        switch style {
-        case .classic, .boxed: return .white
-        case .accent: return .systemYellow
+    /// Шрифт, при котором фраза укладывается в две строки. Уменьшаем ступенями:
+    /// мелкий текст лучше обрезанного.
+    static func fittingFont(
+        text: String,
+        appearance: ShortsSubtitleAppearance,
+        canvasSize: CGSize
+    ) -> NSFont {
+        let base = appearance.baseFontSize(canvasSize: canvasSize)
+        var size = base
+        for _ in 0...3 {
+            let font = appearance.font.font(ofSize: size)
+            let maxWidth = textWidth(fontSize: size, canvasSize: canvasSize)
+            let layout = ShortsSubtitleTextWrapper.wrap(text, font: font, maxWidth: maxWidth)
+            if layout.lineCount <= maxLines || size <= base * 0.7 { return font }
+            size *= 0.9
         }
+        return appearance.font.font(ofSize: size)
     }
 
-    /// Цвет звучащего слова. У жёлтого текста подсветка белая — контраст
-    /// с остальной фразой сохраняется в обе стороны.
-    static func highlightColor(for style: ShortsSubtitleStyle) -> NSColor {
-        switch style {
-        case .classic, .boxed: return .systemYellow
-        case .accent: return .white
-        }
+    /// Ширина, доступная самому тексту: безопасная зона минус боковые отступы
+    /// подложки.
+    static func textWidth(fontSize: CGFloat, canvasSize: CGSize) -> CGFloat {
+        max(1, canvasSize.width * widthRatio - fontSize * horizontalPaddingScale * 2)
     }
 }
 
@@ -291,8 +510,7 @@ enum ShortsSubtitleRenderer {
     static func applying(
         _ composition: AVMutableVideoComposition,
         cues: [ShortsSubtitleCue],
-        style: ShortsSubtitleStyle,
-        size: ShortsSubtitleSize,
+        appearance: ShortsSubtitleAppearance,
         highlight: Bool,
         duration: Double
     ) -> AVMutableVideoComposition {
@@ -319,8 +537,7 @@ enum ShortsSubtitleRenderer {
                 captionLayer(
                     for: cue,
                     renderSize: renderSize,
-                    style: style,
-                    size: size,
+                    appearance: appearance,
                     highlight: highlight,
                     duration: duration))
         }
@@ -334,23 +551,24 @@ enum ShortsSubtitleRenderer {
     private static func captionLayer(
         for cue: ShortsSubtitleCue,
         renderSize: CGSize,
-        style: ShortsSubtitleStyle,
-        size: ShortsSubtitleSize,
+        appearance: ShortsSubtitleAppearance,
         highlight: Bool,
         duration: Double
     ) -> CALayer {
-        let fontSize = max(18, min(renderSize.width, renderSize.height) * size.scale)
-        let font = NSFont.systemFont(ofSize: fontSize, weight: .bold)
+        let font = ShortsSubtitleLayout.fittingFont(
+            text: cue.text, appearance: appearance, canvasSize: renderSize)
+        let fontSize = font.pointSize
         let horizontalPadding = fontSize * ShortsSubtitleLayout.horizontalPaddingScale
         let verticalPadding = fontSize * ShortsSubtitleLayout.verticalPaddingScale
         let width = renderSize.width * ShortsSubtitleLayout.widthRatio
-        let maxTextWidth = max(1, width - horizontalPadding * 2)
+        let maxTextWidth = ShortsSubtitleLayout.textWidth(
+            fontSize: fontSize, canvasSize: renderSize)
         let textLayout = ShortsSubtitleTextWrapper.wrap(
             cue.text, font: font, maxWidth: maxTextWidth)
         let lineHeight = fontSize * ShortsSubtitleLayout.lineHeightScale
         let height = lineHeight * CGFloat(textLayout.lineCount) + verticalPadding * 2
         let bottomMargin = ShortsSubtitleLayout.bottomMargin(
-            fontSize: fontSize, canvasSize: renderSize)
+            appearance: appearance, canvasSize: renderSize)
 
         let container = CALayer()
         container.frame = CGRect(
@@ -369,18 +587,23 @@ enum ShortsSubtitleRenderer {
         textLayer.contents = makeTextImage(
             textLayout.text,
             font: font,
-            color: ShortsSubtitleLayout.foregroundColor(for: style),
+            color: appearance.textColor.nsColor,
+            outlineWidth: appearance.background == .outline
+                ? fontSize * ShortsSubtitleLayout.outlineWidthScale : 0,
             size: textLayer.bounds.size)
 
-        if style == .boxed {
+        switch appearance.background {
+        case .plate:
             container.backgroundColor = NSColor.black.withAlphaComponent(0.72).cgColor
             container.cornerRadius = fontSize * ShortsSubtitleLayout.cornerRadiusScale
-        } else {
+        case .shadow:
             textLayer.shadowColor = NSColor.black.cgColor
             textLayer.shadowOpacity = 0.95
             textLayer.shadowRadius = fontSize * ShortsSubtitleLayout.shadowRadiusScale
             textLayer.shadowOffset = CGSize(
                 width: 0, height: -fontSize * ShortsSubtitleLayout.shadowOffsetScale)
+        case .outline, .none:
+            break
         }
 
         container.addSublayer(textLayer)
@@ -393,7 +616,9 @@ enum ShortsSubtitleRenderer {
             let highlighted = makeTextImage(
                 textLayout.text,
                 font: font,
-                color: ShortsSubtitleLayout.highlightColor(for: style),
+                color: appearance.highlightColor.nsColor,
+                outlineWidth: appearance.background == .outline
+                    ? fontSize * ShortsSubtitleLayout.outlineWidthScale : 0,
                 size: textLayer.bounds.size)
         {
             let overlay = CALayer()
@@ -464,6 +689,7 @@ enum ShortsSubtitleRenderer {
         _ text: String,
         font: NSFont,
         color: NSColor,
+        outlineWidth: CGFloat,
         size: CGSize
     ) -> CGImage? {
         let scale: CGFloat = 2
@@ -485,13 +711,18 @@ enum ShortsSubtitleRenderer {
         let paragraphStyle = NSMutableParagraphStyle()
         paragraphStyle.alignment = .center
         paragraphStyle.lineBreakMode = .byWordWrapping
-        let attributedText = NSAttributedString(
-            string: text,
-            attributes: [
-                .font: scaledFont,
-                .foregroundColor: color.cgColor,
-                .paragraphStyle: paragraphStyle,
-            ])
+        var attributes: [NSAttributedString.Key: Any] = [
+            .font: scaledFont,
+            .foregroundColor: color.cgColor,
+            .paragraphStyle: paragraphStyle,
+        ]
+        if outlineWidth > 0 {
+            attributes[.strokeColor] = NSColor.black.cgColor
+            // Отрицательная ширина в CoreText означает «обвести и залить»:
+            // без минуса буквы остались бы пустыми внутри.
+            attributes[.strokeWidth] = -outlineWidth * scale
+        }
+        let attributedText = NSAttributedString(string: text, attributes: attributes)
         let framesetter = CTFramesetterCreateWithAttributedString(attributedText)
         let path = CGPath(
             rect: CGRect(x: 0, y: 0, width: CGFloat(width), height: CGFloat(height)),

@@ -89,10 +89,41 @@ struct OpenRouterClientTests {
                     "qwen/qwen3.7-flash",
                     "deepseek/deepseek-v4-flash-0731",
                     "openai/gpt-5.6-luna",
+                    "z-ai/glm-5.3-flash",
+                    "minimax/minimax-m3",
+                    "google/gemini-3.8-flash",
                 ]))
         #expect(!(SmartEditModel.qwen.usesStrictSchema))
         #expect(SmartEditModel.deepSeek.usesStrictSchema)
         #expect(SmartEditModel.luna.usesStrictSchema)
+        #expect(SmartEditModel.glm.usesStrictSchema)
+        #expect(SmartEditModel.miniMax.usesStrictSchema)
+        #expect(SmartEditModel.gemini.usesStrictSchema)
+    }
+
+    @Test
+    func testUsageAddsUpAcrossRequestsAndResets() async throws {
+        MockOpenRouterURLProtocol.configure(responses: [
+            .json(content: "это не json", usage: ["prompt_tokens": 100, "completion_tokens": 20, "cost": 0.001]),
+            .json(
+                content: """
+                    {"schema_version":1,"edits":[{"id":"e1","kind":"false_start","first_word_id":"w000001","last_word_id":"w000001","reason":"фальстарт","confidence":0.95}]}
+                    """,
+                usage: ["prompt_tokens": 30, "completion_tokens": 5, "cost": 0.0004]),
+        ])
+        let client = OpenRouterClient(session: makeMockSession())
+
+        _ = try await client.propose(
+            words: [.init(id: "w000001", text: "я я начну", start: 0, end: 1)],
+            model: .qwen, apiKey: "secret")
+
+        let usage = await client.collectedUsage()
+        #expect((usage.requests) == (2))
+        #expect((usage.totalTokens) == (155))
+        #expect((usage.cost.map { ($0 * 10000).rounded() }) == (14))
+
+        await client.resetUsage()
+        #expect((await client.collectedUsage()) == (AIUsage.empty))
     }
 
     @Test
@@ -334,8 +365,9 @@ private final class MockOpenRouterURLProtocol: URLProtocol {
         let body: Data
         let headers: [String: String]
 
-        static func json(content: String) -> Response {
-            let object: [String: Any] = ["choices": [["message": ["content": content]]]]
+        static func json(content: String, usage: [String: Any]? = nil) -> Response {
+            var object: [String: Any] = ["choices": [["message": ["content": content]]]]
+            if let usage { object["usage"] = usage }
             return Response(
                 status: 200,
                 body: try! JSONSerialization.data(withJSONObject: object),

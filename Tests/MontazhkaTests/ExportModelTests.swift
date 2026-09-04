@@ -110,7 +110,7 @@ struct ExportModelTests {
             Issue.record("Ожидалось состояние failed")
             return
         }
-        #expect(message.contains("Проверочная ошибка"))
+        #expect(message.message.contains("Проверочная ошибка"))
     }
 
     private func waitUntil(

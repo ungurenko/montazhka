@@ -51,8 +51,9 @@ enum ShortsSubtitleSelfTest {
                     sourceID: UUID(), text: "в готовом коротком ролике",
                     start: 2.0, end: 2.8, confidence: 1),
             ]
+            let appearance = ShortsSubtitlePreset.plate.appearance
             let mode = ShortsSubtitleMode.on(
-                words: words, style: .boxed, size: .large, highlight: true)
+                words: words, appearance: appearance, highlight: true)
             let timeMap = ShortsTimeMap.single(start: 1, end: 3)
             let cues = ShortsSubtitleCueBuilder.make(words: words, timeMap: timeMap)
             check(
@@ -90,10 +91,9 @@ enum ShortsSubtitleSelfTest {
                 at: 0.4, timeMap: timeMap, mode: mode)
             check(
                 previewOverlay?.text == "Проверяем автоматические субтитры"
-                    && previewOverlay?.style == .boxed
-                    && previewOverlay?.size == .large
+                    && previewOverlay?.appearance == appearance
                     && previewOverlay?.activeWordIndex == 0,
-                "preview получает активную фразу, стиль и подсвеченное слово")
+                "preview получает активную фразу, оформление и подсвеченное слово")
             let croppedPreview = try await ShortsExporter.previewComposition(
                 for: sourceAsset,
                 frameSettings: ShortsFrameSettings(mode: .verticalCrop))
@@ -103,20 +103,22 @@ enum ShortsSubtitleSelfTest {
                 "вертикальный preview сохраняет кроп без offline-слоя")
 
             var everyVariantHasLayer = true
-            for style in ShortsSubtitleStyle.allCases {
+            for preset in ShortsSubtitlePreset.allCases {
                 for size in ShortsSubtitleSize.allCases {
+                    var variantAppearance = preset.appearance
+                    variantAppearance.size = size
                     let variant = try await ShortsVideoCompositionBuilder.make(
                         asset: sourceAsset,
                         frameRequest: .original,
                         subtitleMode: .on(
-                            words: words, style: style, size: size, highlight: true),
+                            words: words, appearance: variantAppearance, highlight: true),
                         subtitleTimeMap: .single(start: 1, end: 3))
                     everyVariantHasLayer =
                         everyVariantHasLayer
                         && variant.videoComposition?.animationTool != nil
                 }
             }
-            check(everyVariantHasLayer, "все стили и размеры создают слой субтитров")
+            check(everyVariantHasLayer, "все образы и размеры создают слой субтитров")
 
             let candidate = ShortCandidate(
                 id: UUID(), rank: 1, title: "Проверка субтитров", reason: "", hook: "",

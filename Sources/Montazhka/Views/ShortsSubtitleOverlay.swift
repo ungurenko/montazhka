@@ -5,27 +5,35 @@ import SwiftUI
 /// поверхности отображения.
 struct ShortsSubtitleOverlayView: View {
     let subtitle: ShortsSubtitleOverlay
-    let presentationSize: CGSize
+    /// Размер кадра, который собирает видеокомпозиция просмотра. Именно он, а не
+    /// размер, о котором отчитывается видеослой: тот приходит с задержкой, и
+    /// подпись успевала расползтись на всю чёрную область.
+    let frameSize: CGSize?
 
     var body: some View {
         GeometryReader { proxy in
             let canvasSize = ShortsSubtitlePreviewLayout.canvasSize(
-                reportedVideoSize: presentationSize,
+                frameSize: frameSize,
                 containerSize: proxy.size)
-            let fontSize = max(
-                14, min(canvasSize.width, canvasSize.height) * subtitle.size.scale)
+            let font = ShortsSubtitleLayout.fittingFont(
+                text: subtitle.text,
+                appearance: subtitle.appearance,
+                canvasSize: canvasSize)
+            let fontSize = font.pointSize
             let text = Text(attributedText)
-                .font(.system(size: fontSize, weight: .bold))
+                .font(Font(font))
                 .multilineTextAlignment(.center)
-                .lineLimit(3)
+                .lineLimit(ShortsSubtitleLayout.maxLines)
                 .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: canvasSize.width * ShortsSubtitleLayout.widthRatio)
+                .frame(
+                    maxWidth: ShortsSubtitleLayout.textWidth(
+                        fontSize: fontSize, canvasSize: canvasSize))
                 .padding(.horizontal, fontSize * ShortsSubtitleLayout.horizontalPaddingScale)
                 .padding(.vertical, fontSize * ShortsSubtitleLayout.verticalPaddingScale)
 
             text
                 .background {
-                    if subtitle.style == .boxed {
+                    if subtitle.appearance.background == .plate {
                         RoundedRectangle(
                             cornerRadius: fontSize * ShortsSubtitleLayout.cornerRadiusScale
                         )
@@ -33,16 +41,18 @@ struct ShortsSubtitleOverlayView: View {
                     }
                 }
                 .shadow(
-                    color: subtitle.style == .boxed ? .clear : .black.opacity(0.95),
-                    radius: subtitle.style == .boxed
-                        ? 0 : fontSize * ShortsSubtitleLayout.shadowRadiusScale,
+                    color: subtitle.appearance.background == .shadow
+                        ? .black.opacity(0.95) : .clear,
+                    radius: subtitle.appearance.background == .shadow
+                        ? fontSize * ShortsSubtitleLayout.shadowRadiusScale : 0,
                     x: 0,
-                    y: -fontSize * ShortsSubtitleLayout.shadowOffsetScale
+                    y: subtitle.appearance.background == .shadow
+                        ? -fontSize * ShortsSubtitleLayout.shadowOffsetScale : 0
                 )
                 .padding(
                     .bottom,
                     ShortsSubtitleLayout.bottomMargin(
-                        fontSize: fontSize,
+                        appearance: subtitle.appearance,
                         canvasSize: canvasSize)
                 )
                 .frame(width: canvasSize.width, height: canvasSize.height, alignment: .bottom)
@@ -53,12 +63,18 @@ struct ShortsSubtitleOverlayView: View {
 
     /// Звучащее слово перекрашивается — так же, как в запечённых субтитрах.
     private var attributedText: AttributedString {
-        let base = Color(ShortsSubtitleLayout.foregroundColor(for: subtitle.style))
-        let highlighted = Color(ShortsSubtitleLayout.highlightColor(for: subtitle.style))
+        let base = Color(subtitle.appearance.textColor.nsColor)
+        let highlighted = Color(subtitle.appearance.highlightColor.nsColor)
         var result = AttributedString()
         for (index, word) in subtitle.words.enumerated() {
             var piece = AttributedString(word)
             piece.foregroundColor = index == subtitle.activeWordIndex ? highlighted : base
+            if subtitle.appearance.background == .outline {
+                piece.strokeColor = .black
+                // В атрибутах текста ширина обводки задаётся в процентах от
+                // размера шрифта, минус означает «обвести и залить».
+                piece.strokeWidth = -ShortsSubtitleLayout.outlineWidthScale * 100
+            }
             if index > 0 { result += AttributedString(" ") }
             result += piece
         }
@@ -67,12 +83,16 @@ struct ShortsSubtitleOverlayView: View {
 }
 
 enum ShortsSubtitlePreviewLayout {
-    static func canvasSize(reportedVideoSize: CGSize, containerSize: CGSize) -> CGSize {
-        guard reportedVideoSize.width > 0, reportedVideoSize.height > 0 else {
-            return containerSize
-        }
-        return CGSize(
-            width: min(reportedVideoSize.width, containerSize.width),
-            height: min(reportedVideoSize.height, containerSize.height))
+    /// Кадр вписан в область просмотра по своим пропорциям — ровно так же, как
+    /// его показывает `AVPlayerLayer` с `videoGravity = .resizeAspect`.
+    static func canvasSize(frameSize: CGSize?, containerSize: CGSize) -> CGSize {
+        guard let frameSize,
+            frameSize.width > 0, frameSize.height > 0,
+            containerSize.width > 0, containerSize.height > 0
+        else { return containerSize }
+        let scale = min(
+            containerSize.width / frameSize.width,
+            containerSize.height / frameSize.height)
+        return CGSize(width: frameSize.width * scale, height: frameSize.height * scale)
     }
 }

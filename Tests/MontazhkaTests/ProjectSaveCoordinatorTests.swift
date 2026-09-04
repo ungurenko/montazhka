@@ -62,7 +62,7 @@ struct ProjectSaveCoordinatorTests {
             Issue.record("Ожидался статус failed, получен \(coordinator.status)")
             return
         }
-        #expect(message.contains("диск недоступен"))
+        #expect(message.message.contains("диск недоступен"))
 
         coordinator.dismissError()
         #expect(coordinator.status == .idle)
@@ -101,7 +101,7 @@ struct ProjectSaveCoordinatorTests {
             Issue.record("Ожидался статус failed при ошибке записи перед завершением")
             return
         }
-        #expect(message.contains("диск недоступен"))
+        #expect(message.message.contains("диск недоступен"))
         // Синхронный путь тоже обязан дойти до репозитория.
         #expect(failingRepository.savedProjects.isEmpty)
     }

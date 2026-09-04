@@ -21,6 +21,10 @@ actor ShortsCutService {
         self.cache = cache
     }
 
+    func beginUsageTracking() async { await ai.beginUsageTracking() }
+
+    func collectedUsage() async -> AIUsage { await ai.collectedUsage() }
+
     func analyze(
         source: MediaReference,
         sourceDuration: Double,

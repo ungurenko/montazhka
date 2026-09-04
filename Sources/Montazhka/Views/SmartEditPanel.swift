@@ -247,16 +247,29 @@ struct SmartEditPanel: View {
         }
     }
 
+    /// Во что обошёлся последний запуск. Молчит, когда запросов не было.
+    @ViewBuilder
+    private var usageLine: some View {
+        if let usage = controller.smartEditUsage.summary {
+            Text("Расход: \(usage)")
+                .typeStyle(.helper)
+                .foregroundStyle(Theme.textSecondary)
+        }
+    }
+
     @ViewBuilder
     private var results: some View {
         if case .failed(let error) = controller.smartEditStatus {
-            StatusBanner(
-                error: error,
-                actions: [
-                    StatusBanner.Action(
-                        title: "Повторить анализ",
-                        perform: { controller.analyzeSmartEdits() })
-                ])
+            VStack(alignment: .leading, spacing: 8) {
+                StatusBanner(
+                    error: error,
+                    actions: [
+                        StatusBanner.Action(
+                            title: "Повторить анализ",
+                            perform: { controller.analyzeSmartEdits() })
+                    ])
+                usageLine
+            }
         } else if controller.smartEditStatus == .ready && controller.smartEditCandidates.isEmpty {
             StatusBanner(
                 kind: .success,
@@ -280,6 +293,7 @@ struct SmartEditPanel: View {
                         .typeStyle(.helper)
                     }
                 }
+                usageLine
                 if !obvious.isEmpty { candidateGroup("Явные исправления", candidates: obvious) }
                 if !semantic.isEmpty { candidateGroup("Смысловые повторы", candidates: semantic) }
             }

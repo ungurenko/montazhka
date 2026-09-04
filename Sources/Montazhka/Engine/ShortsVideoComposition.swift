@@ -68,13 +68,12 @@ enum ShortsVideoCompositionBuilder {
         switch subtitleMode {
         case .off:
             videoComposition = base
-        case let .on(words, style, size, highlight):
+        case let .on(words, appearance, highlight):
             let cues = ShortsSubtitleCueBuilder.make(words: words, timeMap: subtitleTimeMap)
             videoComposition = ShortsSubtitleRenderer.applying(
                 base,
                 cues: cues,
-                style: style,
-                size: size,
+                appearance: appearance,
                 highlight: highlight,
                 duration: subtitleTimeMap.outputDuration)
         }

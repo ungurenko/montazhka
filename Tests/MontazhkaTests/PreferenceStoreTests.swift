@@ -89,14 +89,29 @@ struct PreferenceStoreTests {
     }
 
     @Test
+    func testLegacySubtitleStyleBecomesMatchingPreset() {
+        let store = InMemoryPreferenceStore()
+        store.set("boxed", forKey: "shorts.subtitleStyle")
+        store.set(true, forKey: "shorts.subtitlesEnabled")
+
+        let restored = ShortsSubtitleSettings.saved(in: store)
+
+        #expect(restored.enabled)
+        #expect(restored.appearance == ShortsSubtitlePreset.plate.appearance)
+    }
+
+    @Test
     func testShortsSubtitleSettingsRoundTripUsesInjectedStore() {
         let store = InMemoryPreferenceStore()
         #expect(ShortsSubtitleSettings.saved(in: store) == .default)
 
+        var appearance = ShortsSubtitlePreset.outline.appearance
+        appearance.size = .large
+        appearance.textColor = .sky
+        appearance.position = .high
         let selected = ShortsSubtitleSettings(
             enabled: true,
-            style: .boxed,
-            size: .large,
+            appearance: appearance,
             highlightActiveWord: false)
         selected.save(in: store)
 

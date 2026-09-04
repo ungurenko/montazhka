@@ -20,12 +20,21 @@ private struct ShortsBatchExportItem: Sendable {
 
 @MainActor
 protocol ShortsPreviewBuilding {
-    func makeItem(for request: ShortsPreviewRequest) async throws -> AVPlayerItem
+    func makeItem(for request: ShortsPreviewRequest) async throws -> ShortsPreviewItem
+}
+
+/// Размер кадра, который отдаёт композиция просмотра. Слой субтитров считает
+/// свою раскладку от него, поэтому размер приходит вместе с элементом плеера,
+/// а не выспрашивается у видеослоя позже.
+@MainActor
+struct ShortsPreviewItem {
+    let item: AVPlayerItem
+    let frameSize: CGSize?
 }
 
 @MainActor
 struct DefaultShortsPreviewBuilder: ShortsPreviewBuilding {
-    func makeItem(for request: ShortsPreviewRequest) async throws -> AVPlayerItem {
+    func makeItem(for request: ShortsPreviewRequest) async throws -> ShortsPreviewItem {
         // Предпросмотр собирается ровно как экспорт: одна композиция, одна
         // шкала времени — увиденное совпадает с готовым файлом.
         let built = await CompositionBuilder.build(
@@ -33,14 +42,23 @@ struct DefaultShortsPreviewBuilder: ShortsPreviewBuilding {
         let asset = built.composition
         let item = AVPlayerItem(asset: asset)
         item.audioMix = built.audioMix
+        var frameSize: CGSize?
         if let videoComposition = try await ShortsExporter.previewComposition(
             for: asset,
             frameSettings: request.frameSettings
         ) {
             item.videoComposition = videoComposition
+            frameSize = videoComposition.renderSize
+        } else {
+            if let track = try await asset.loadTracks(withMediaType: .video).first {
+                let natural = try await track.load(.naturalSize)
+                let transform = try await track.load(.preferredTransform)
+                let displayed = natural.applying(transform)
+                frameSize = CGSize(width: abs(displayed.width), height: abs(displayed.height))
+            }
         }
         try Task.checkCancellation()
-        return item
+        return ShortsPreviewItem(item: item, frameSize: frameSize)
     }
 }
 
@@ -54,6 +72,10 @@ final class ShortsController {
     private(set) var displaySize = CGSize(width: 1920, height: 1080)
     private(set) var prepareError: UserFacingError?
     private(set) var previewError: UserFacingError?
+    /// Во что обошёлся последний поиск моментов.
+    private(set) var lastUsage: AIUsage = .empty
+    /// Размер кадра в просмотре: от него слой субтитров считает свою раскладку.
+    private(set) var previewFrameSize: CGSize?
 
     var count: ShortsCount {
         didSet { count.save(in: preferences) }
@@ -88,14 +110,43 @@ final class ShortsController {
         set { updateSubtitleSettings { $0.enabled = newValue } }
     }
 
-    var subtitleStyle: ShortsSubtitleStyle {
-        get { subtitleSettings.style }
-        set { updateSubtitleSettings { $0.style = newValue } }
+    /// Выбранный образ. nil — оформление собрано вручную.
+    var subtitlePreset: ShortsSubtitlePreset? {
+        get { subtitleSettings.appearance.preset }
+        set {
+            guard let newValue else { return }
+            updateSubtitleSettings { $0.appearance = newValue.appearance }
+        }
+    }
+
+    var subtitleFont: ShortsSubtitleFont {
+        get { subtitleSettings.appearance.font }
+        set { updateSubtitleSettings { $0.appearance.font = newValue } }
     }
 
     var subtitleSize: ShortsSubtitleSize {
-        get { subtitleSettings.size }
-        set { updateSubtitleSettings { $0.size = newValue } }
+        get { subtitleSettings.appearance.size }
+        set { updateSubtitleSettings { $0.appearance.size = newValue } }
+    }
+
+    var subtitleTextColor: ShortsSubtitleColor {
+        get { subtitleSettings.appearance.textColor }
+        set { updateSubtitleSettings { $0.appearance.textColor = newValue } }
+    }
+
+    var subtitleHighlightColor: ShortsSubtitleColor {
+        get { subtitleSettings.appearance.highlightColor }
+        set { updateSubtitleSettings { $0.appearance.highlightColor = newValue } }
+    }
+
+    var subtitleBackground: ShortsSubtitleBackground {
+        get { subtitleSettings.appearance.background }
+        set { updateSubtitleSettings { $0.appearance.background = newValue } }
+    }
+
+    var subtitlePosition: ShortsSubtitlePosition {
+        get { subtitleSettings.appearance.position }
+        set { updateSubtitleSettings { $0.appearance.position = newValue } }
     }
     var quality: ExportQuality = .high
 
@@ -309,6 +360,7 @@ final class ShortsController {
         candidates = []
         transcriptWords = []
         analysisWarnings = []
+        lastUsage = .empty
         activity.begin(
             .shortsAnalysis,
             title: "Поиск моментов для shorts",
@@ -318,6 +370,7 @@ final class ShortsController {
         setStatus(.preparingModel(progress: nil))
         analysisOperation.start { [weak self] token in
             guard let self else { return }
+            await self.service.beginUsageTracking()
             do {
                 let configuration = try await self.aiConnection.requestConfiguration()
                 let result = try await self.service.analyze(
@@ -331,14 +384,24 @@ final class ShortsController {
                 self.transcriptWords = result.transcript
                 self.candidates = result.candidates
                 self.analysisWarnings = result.warnings
+                await self.applyUsage(token: token)
                 self.setStatus(.ready)
             } catch is CancellationError {
                 if self.analysisOperation.isCurrent(token) { self.setStatus(.idle) }
             } catch {
                 guard self.analysisOperation.isCurrent(token) else { return }
+                await self.applyUsage(token: token)
                 self.setStatus(.failed(UserFacingError.make(error, context: .shorts)))
             }
         }
+    }
+
+    /// Расход считаем и после ошибки: потраченное на неудачной попытке всё равно
+    /// списано, и человек вправе это увидеть.
+    private func applyUsage(token: LatestOperation.Token) async {
+        let usage = await service.collectedUsage()
+        guard analysisOperation.isCurrent(token) else { return }
+        lastUsage = usage
     }
 
     func cancelAnalysis() {
@@ -397,6 +460,7 @@ final class ShortsController {
     func preview(_ candidate: ShortCandidate) {
         previewError = nil
         previewingID = candidate.id
+        previewFrameSize = nil
         cancelPreviewStop()
         seekOperation.cancel()
         player.pause()
@@ -410,9 +474,9 @@ final class ShortsController {
         )
         previewOperation.start { [weak self] token in
             guard let self else { return }
-            let item: AVPlayerItem
+            let preview: ShortsPreviewItem
             do {
-                item = try await self.previewBuilder.makeItem(for: request)
+                preview = try await self.previewBuilder.makeItem(for: request)
                 try Task.checkCancellation()
             } catch is CancellationError {
                 return
@@ -422,7 +486,8 @@ final class ShortsController {
                 return
             }
             guard self.previewOperation.isCurrent(token) else { return }
-            self.player.replaceCurrentItem(with: item)
+            self.previewFrameSize = preview.frameSize
+            self.player.replaceCurrentItem(with: preview.item)
             self.currentTime = 0
             self.player.play()
             self.isPlaying = true

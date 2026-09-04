@@ -20,12 +20,24 @@ struct ShortsVideoCompositionTests {
     }
 
     @Test
-    func subtitlePreviewUsesDisplayedVideoCanvas() {
-        let canvas = ShortsSubtitlePreviewLayout.canvasSize(
-            reportedVideoSize: CGSize(width: 270, height: 480),
+    func subtitlePreviewFitsFrameIntoViewingArea() {
+        // Вертикальный кадр в широкой области: подпись считается по узкой
+        // картинке, а не по всей чёрной подложке.
+        let vertical = ShortsSubtitlePreviewLayout.canvasSize(
+            frameSize: CGSize(width: 1080, height: 1920),
             containerSize: CGSize(width: 900, height: 600))
+        #expect(vertical == CGSize(width: 337.5, height: 600))
 
-        #expect(canvas == CGSize(width: 270, height: 480))
+        let horizontal = ShortsSubtitlePreviewLayout.canvasSize(
+            frameSize: CGSize(width: 1920, height: 1080),
+            containerSize: CGSize(width: 600, height: 900))
+        #expect(horizontal == CGSize(width: 600, height: 337.5))
+
+        // Размер кадра ещё не известен — занимаем всю область, как раньше.
+        let unknown = ShortsSubtitlePreviewLayout.canvasSize(
+            frameSize: nil,
+            containerSize: CGSize(width: 900, height: 600))
+        #expect(unknown == CGSize(width: 900, height: 600))
     }
 
     @Test

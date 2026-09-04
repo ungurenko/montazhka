@@ -5,12 +5,18 @@ enum SmartEditModel: String, CaseIterable, Codable, Sendable {
     case qwen = "qwen/qwen3.7-flash"
     case deepSeek = "deepseek/deepseek-v4-flash-0731"
     case luna = "openai/gpt-5.6-luna"
+    case glm = "z-ai/glm-5.3-flash"
+    case miniMax = "minimax/minimax-m3"
+    case gemini = "google/gemini-3.8-flash"
 
     var title: String {
         switch self {
         case .qwen: return "Qwen 3.7 Flash"
         case .deepSeek: return "DeepSeek V4 Flash"
         case .luna: return "GPT-5.6 Luna"
+        case .glm: return "GLM 5.3 Flash"
+        case .miniMax: return "MiniMax M3"
+        case .gemini: return "Gemini 3.8 Flash"
         }
     }
 

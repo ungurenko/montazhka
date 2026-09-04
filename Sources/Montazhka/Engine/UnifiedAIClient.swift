@@ -12,6 +12,10 @@ actor UnifiedAIClient: SmartEditAIServing, ShortsAIServing {
         self.cli = cli
     }
 
+    func beginUsageTracking() async { await openRouter.resetUsage() }
+
+    func collectedUsage() async -> AIUsage { await openRouter.collectedUsage() }
+
     func ensureModelAvailable(_ configuration: AIRequestConfiguration) async throws {
         switch configuration {
         case .openRouter(let model, _, let apiKey):

@@ -64,7 +64,7 @@ extension AgentService {
             try FileManager.default.createDirectory(at: outputDirectory, withIntermediateDirectories: true)
             let frame = ShortsFrameSettings(mode: .verticalCrop, canvasColor: .black)
             let subtitles = ShortsSubtitleMode.on(
-                words: analysis.transcript, style: .classic, size: .medium, highlight: true)
+                words: analysis.transcript, appearance: .default, highlight: true)
             var outputs: [String] = []
             for (index, candidate) in selected.enumerated() {
                 let output = ShortsExporter.fileURL(

@@ -11,8 +11,8 @@ struct ShortsView: View {
     @State private var keyInput = ""
     @State private var replacingKey = false
     @State private var keyMonitor: LocalEventMonitor?
-    @State private var playerVideoSize = CGSize.zero
     @State private var showExportOptions = false
+    @State private var subtitleSettingsExpanded = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -65,13 +65,7 @@ struct ShortsView: View {
             Button {
                 controller.togglePlay()
             } label: {
-                PlayerLayerView(player: controller.player) { size in
-                    guard
-                        abs(size.width - playerVideoSize.width) > 0.5
-                            || abs(size.height - playerVideoSize.height) > 0.5
-                    else { return }
-                    playerVideoSize = size
-                }
+                PlayerLayerView(player: controller.player)
             }
             .buttonStyle(.plain)
             .accessibilityLabel(controller.isPlaying ? "Поставить просмотр на паузу" : "Воспроизвести просмотр")
@@ -79,7 +73,7 @@ struct ShortsView: View {
             if let subtitle = controller.currentPreviewSubtitle {
                 ShortsSubtitleOverlayView(
                     subtitle: subtitle,
-                    presentationSize: playerVideoSize)
+                    frameSize: controller.previewFrameSize)
             }
             if let error = controller.prepareError ?? controller.previewError {
                 EmptyStateView(
@@ -177,6 +171,7 @@ struct ShortsView: View {
                 errorLabel(error)
             } else if case .failed(let message) = controller.status {
                 errorLabel(message)
+                usageLine
             } else if !controller.analysisWarnings.isEmpty {
                 analysisWarningBlock
             } else if controller.status == .ready && controller.candidates.isEmpty {
@@ -233,6 +228,175 @@ struct ShortsView: View {
         }
     }
 
+    // MARK: - Субтитры
+
+    private var subtitlePresets: some View {
+        HStack(spacing: Theme.Spacing.small) {
+            ForEach(ShortsSubtitlePreset.allCases) { preset in
+                Button {
+                    controller.subtitlePreset = preset
+                } label: {
+                    subtitlePresetCard(preset)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Образ субтитров: \(preset.title)")
+            }
+        }
+        .accessibilityIdentifier("shorts.subtitlePresets")
+    }
+
+    private func subtitlePresetCard(_ preset: ShortsSubtitlePreset) -> some View {
+        let appearance = preset.appearance
+        let isSelected = controller.subtitlePreset == preset
+        return VStack(spacing: Theme.Spacing.compact) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 6).fill(Color.black.opacity(0.85))
+                Text("Аа")
+                    .font(Font(appearance.font.font(ofSize: 15)))
+                    .foregroundStyle(Color(appearance.textColor.nsColor))
+                    .shadow(
+                        color: appearance.background == .shadow ? .black : .clear,
+                        radius: 1, x: 0, y: 1)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background {
+                        if appearance.background == .plate {
+                            RoundedRectangle(cornerRadius: 4).fill(Color.black.opacity(0.72))
+                        }
+                    }
+            }
+            .frame(height: 40)
+            Text(preset.title)
+                .typeStyle(.micro)
+                .foregroundStyle(isSelected ? Theme.accent : Theme.textSecondary)
+        }
+        .frame(maxWidth: .infinity)
+        .overlay {
+            RoundedRectangle(cornerRadius: 6)
+                .strokeBorder(isSelected ? Theme.accent : .clear, lineWidth: 2)
+                .padding(.bottom, 18)
+        }
+    }
+
+    private var subtitleFontRow: some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.small) {
+            Text("Шрифт")
+                .typeStyle(.helperEmphasis)
+                .foregroundStyle(Theme.textSecondary)
+            HStack(spacing: Theme.Spacing.small) {
+                ForEach(ShortsSubtitleFont.allCases) { font in
+                    Button {
+                        controller.subtitleFont = font
+                    } label: {
+                        Text("Аа")
+                            .font(Font(font.font(ofSize: 14)))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, Theme.Spacing.small)
+                            .background {
+                                RoundedRectangle(cornerRadius: 6)
+                                    .fill(
+                                        controller.subtitleFont == font
+                                            ? Theme.accent.opacity(0.16) : Color.gray.opacity(0.12))
+                            }
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Шрифт субтитров: \(font.title)")
+                }
+            }
+        }
+        .accessibilityIdentifier("shorts.subtitleFont")
+    }
+
+    private var subtitleSizeRow: some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.small) {
+            Text("Размер")
+                .typeStyle(.helperEmphasis)
+                .foregroundStyle(Theme.textSecondary)
+            Picker("Размер субтитров", selection: $controller.subtitleSize) {
+                ForEach(ShortsSubtitleSize.allCases) { size in
+                    Text(size.title).tag(size)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .accessibilityIdentifier("shorts.subtitleSize")
+        }
+    }
+
+    private func subtitleColorRow(
+        title: String,
+        selection: Binding<ShortsSubtitleColor>,
+        identifier: String
+    ) -> some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.small) {
+            Text(title)
+                .typeStyle(.helperEmphasis)
+                .foregroundStyle(Theme.textSecondary)
+            HStack(spacing: Theme.Spacing.small) {
+                ForEach(ShortsSubtitleColor.allCases) { color in
+                    Button {
+                        selection.wrappedValue = color
+                    } label: {
+                        Circle()
+                            .fill(Color(color.nsColor))
+                            .frame(width: 20, height: 20)
+                            .overlay {
+                                Circle().strokeBorder(
+                                    selection.wrappedValue == color
+                                        ? Theme.accent : Color.gray.opacity(0.35),
+                                    lineWidth: selection.wrappedValue == color ? 2.5 : 1)
+                            }
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("\(title): \(color.title)")
+                }
+            }
+        }
+        .accessibilityIdentifier(identifier)
+    }
+
+    private var subtitleBackgroundRow: some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.small) {
+            Text("Подложка")
+                .typeStyle(.helperEmphasis)
+                .foregroundStyle(Theme.textSecondary)
+            Picker("Подложка субтитров", selection: $controller.subtitleBackground) {
+                ForEach(ShortsSubtitleBackground.allCases) { background in
+                    Text(background.title).tag(background)
+                }
+            }
+            .labelsHidden()
+            .accessibilityIdentifier("shorts.subtitleBackground")
+        }
+    }
+
+    private var subtitlePositionRow: some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.small) {
+            Text("Положение")
+                .typeStyle(.helperEmphasis)
+                .foregroundStyle(Theme.textSecondary)
+            Picker("Положение субтитров", selection: $controller.subtitlePosition) {
+                ForEach(ShortsSubtitlePosition.allCases) { position in
+                    Text(position.title).tag(position)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .accessibilityIdentifier("shorts.subtitlePosition")
+        }
+    }
+
+    /// Во что обошёлся последний запуск. Молчит, когда запросов не было —
+    /// например, результат взяли из кэша.
+    @ViewBuilder
+    private var usageLine: some View {
+        if let usage = controller.lastUsage.summary {
+            Text("Расход: \(usage)")
+                .typeStyle(.helper)
+                .foregroundStyle(Theme.textSecondary)
+        }
+    }
+
     // MARK: - Результаты
 
     private var resultsSection: some View {
@@ -251,6 +415,7 @@ struct ShortsView: View {
                     .typeStyle(.helper)
                     .disabled(controller.openRouterKeyStatus != .saved)
             }
+            usageLine
             ForEach(controller.candidates) { candidate in
                 candidateCard(candidate)
             }
@@ -501,46 +666,36 @@ struct ShortsView: View {
             .accessibilityIdentifier("shorts.subtitles")
 
             if controller.subtitlesEnabled {
-                HStack(spacing: 8) {
-                    Text("Стиль")
+                subtitlePresets
+
+                DisclosureGroup(isExpanded: $subtitleSettingsExpanded) {
+                    VStack(alignment: .leading, spacing: Theme.Spacing.snug) {
+                        subtitleFontRow
+                        subtitleSizeRow
+                        subtitleColorRow(
+                            title: "Цвет текста",
+                            selection: $controller.subtitleTextColor,
+                            identifier: "shorts.subtitleTextColor")
+                        subtitleColorRow(
+                            title: "Активное слово",
+                            selection: $controller.subtitleHighlightColor,
+                            identifier: "shorts.subtitleHighlightColor")
+                        subtitleBackgroundRow
+                        subtitlePositionRow
+                        Toggle(isOn: $controller.subtitleHighlight) {
+                            Text("Подсвечивать звучащее слово")
+                                .typeStyle(.helper)
+                        }
+                        .toggleStyle(.switch)
+                        .accessibilityIdentifier("shorts.subtitleHighlight")
+                    }
+                    .padding(.top, Theme.Spacing.snug)
+                } label: {
+                    Text("Настроить")
                         .typeStyle(.helperEmphasis)
                         .foregroundStyle(Theme.textSecondary)
-                    Picker("Стиль субтитров", selection: $controller.subtitleStyle) {
-                        ForEach(ShortsSubtitleStyle.allCases) { style in
-                            Text(style.title).tag(style)
-                        }
-                    }
-                    .labelsHidden()
-                    .frame(maxWidth: .infinity)
-                    .accessibilityIdentifier("shorts.subtitleStyle")
                 }
-
-                HStack(spacing: 8) {
-                    Text("Размер")
-                        .typeStyle(.helperEmphasis)
-                        .foregroundStyle(Theme.textSecondary)
-                    Picker("Размер субтитров", selection: $controller.subtitleSize) {
-                        ForEach(ShortsSubtitleSize.allCases) { size in
-                            Text(size.title).tag(size)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                    .frame(maxWidth: .infinity)
-                    .accessibilityIdentifier("shorts.subtitleSize")
-                }
-
-                Toggle(isOn: $controller.subtitleHighlight) {
-                    VStack(alignment: .leading, spacing: Theme.Spacing.compact) {
-                        Text("Подсвечивать слова")
-                            .typeStyle(.bodyEmphasis)
-                        Text("Звучащее слово меняет цвет")
-                            .typeStyle(.helper)
-                            .foregroundStyle(Theme.textSecondary)
-                    }
-                }
-                .toggleStyle(.switch)
-                .accessibilityIdentifier("shorts.subtitleHighlight")
+                .accessibilityIdentifier("shorts.subtitleSettings")
             }
 
             VStack(alignment: .leading, spacing: Theme.Spacing.small) {

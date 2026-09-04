@@ -65,7 +65,7 @@ struct SmartEditDomainTests {
     @Test
     func testAnalysisCanRestartAfterFailureButNotWhileWorking() {
         #expect(SmartEditStatus.idle.allowsAnalysisStart)
-        #expect(SmartEditStatus.failed("Сеть недоступна").allowsAnalysisStart)
+        #expect(SmartEditStatus.failed(UserFacingError("Сеть недоступна")).allowsAnalysisStart)
         #expect(!(SmartEditStatus.proposing.allowsAnalysisStart))
         #expect(!(SmartEditStatus.ready.allowsAnalysisStart))
     }

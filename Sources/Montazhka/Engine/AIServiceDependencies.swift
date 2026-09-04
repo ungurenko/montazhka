@@ -15,7 +15,19 @@ protocol WaveformProviding: Sendable {
     func ensure(path: String) async -> [Float]?
 }
 
-protocol SmartEditAIServing: Sendable {
+/// Расход на запуск анализа. Считать его умеет только OpenRouter — у CLI-агентов
+/// таких данных нет, поэтому реализации по умолчанию молчат.
+protocol AIUsageReporting: Sendable {
+    func beginUsageTracking() async
+    func collectedUsage() async -> AIUsage
+}
+
+extension AIUsageReporting {
+    func beginUsageTracking() async {}
+    func collectedUsage() async -> AIUsage { .empty }
+}
+
+protocol SmartEditAIServing: AIUsageReporting {
     func ensureModelAvailable(_ configuration: AIRequestConfiguration) async throws
     func propose(
         words: [OpenRouterTranscriptWord], configuration: AIRequestConfiguration
@@ -26,7 +38,7 @@ protocol SmartEditAIServing: Sendable {
     ) async throws -> ReviewEnvelope
 }
 
-protocol ShortsAIServing: Sendable {
+protocol ShortsAIServing: AIUsageReporting {
     func ensureModelAvailable(_ configuration: AIRequestConfiguration) async throws
     func mapShortsWindow(
         words: [OpenRouterTranscriptWord], configuration: AIRequestConfiguration

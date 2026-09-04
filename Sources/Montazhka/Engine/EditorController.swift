@@ -96,6 +96,8 @@ final class EditorController: ExportPreparing {
     private(set) var clipImportState: ClipImportState = .idle
     var smartEditCandidates: [SmartEditCandidate] = []
     private(set) var smartEditStatus: SmartEditStatus = .idle
+    /// Во что обошёлся последний запуск умного монтажа.
+    private(set) var smartEditUsage: AIUsage = .empty
     @ObservationIgnored let activity: ActivityCenter
     var openRouterKeyStatus: OpenRouterKeyStatus { aiConnection.openRouterKeyStatus }
 
@@ -890,6 +892,7 @@ final class EditorController: ExportPreparing {
         let threshold = project.detection.thresholdDB
         smartEditCandidates = []
         smartEditSnapshotID = nil
+        smartEditUsage = .empty
         activity.begin(
             .smartEdit,
             title: "Умный монтаж речи",
@@ -899,6 +902,7 @@ final class EditorController: ExportPreparing {
         setSmartEditStatus(.preparingModel(progress: nil))
         smartEditTask = Task { [weak self] in
             guard let self else { return }
+            await self.smartEditService.beginUsageTracking()
             do {
                 let configuration = try await self.aiConnection.requestConfiguration()
                 let result = try await self.smartEditService.analyze(
@@ -910,14 +914,24 @@ final class EditorController: ExportPreparing {
                 guard self.smartEditGeneration.isCurrent(generation) else { return }
                 self.smartEditSnapshotID = result.snapshot.id
                 self.smartEditCandidates = result.candidates
+                await self.applySmartEditUsage(generation: generation)
                 self.setSmartEditStatus(.ready)
             } catch is CancellationError {
                 if self.smartEditGeneration.isCurrent(generation) { self.setSmartEditStatus(.idle) }
             } catch {
                 guard self.smartEditGeneration.isCurrent(generation) else { return }
+                await self.applySmartEditUsage(generation: generation)
                 self.setSmartEditStatus(.failed(UserFacingError.make(error, context: .smartEdit)))
             }
         }
+    }
+
+    /// Расход считаем и после ошибки: потраченное на неудачной попытке всё равно
+    /// списано, и человек вправе это увидеть.
+    private func applySmartEditUsage(generation: Int) async {
+        let usage = await smartEditService.collectedUsage()
+        guard smartEditGeneration.isCurrent(generation) else { return }
+        smartEditUsage = usage
     }
 
     func cancelSmartEdit() {

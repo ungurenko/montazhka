@@ -15,6 +15,10 @@ actor SmartEditService {
         self.waveforms = waveforms
     }
 
+    func beginUsageTracking() async { await ai.beginUsageTracking() }
+
+    func collectedUsage() async -> AIUsage { await ai.collectedUsage() }
+
     func analyze(
         clips: [Clip], projectThresholdDB: Double,
         configuration: AIRequestConfiguration,

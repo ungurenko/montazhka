@@ -221,7 +221,7 @@ struct TimelineEditingTests {
             Issue.record("Импорт должен завершиться понятной ошибкой")
             return
         }
-        #expect(message.contains("broken.mov"))
+        #expect(message.message.contains("broken.mov"))
         #expect(controller.project.clips.isEmpty)
         await controller.shutdown()
     }

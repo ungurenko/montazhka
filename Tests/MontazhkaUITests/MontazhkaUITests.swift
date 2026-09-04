@@ -113,8 +113,13 @@ final class MontazhkaUITests: XCTestCase {
         let subtitles = app.switches["shorts.subtitles"]
         XCTAssertTrue(subtitles.waitForExistence(timeout: 5))
         subtitles.click()
-        XCTAssertTrue(app.descendants(matching: .any)["shorts.subtitleStyle"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.descendants(matching: .any)["shorts.subtitleSize"].exists)
+        XCTAssertTrue(app.descendants(matching: .any)["shorts.subtitlePresets"].waitForExistence(timeout: 5))
+        // Тонкая настройка спрятана за «Настроить» — раскрываем и проверяем её.
+        let settings = app.disclosureTriangles.firstMatch
+        XCTAssertTrue(settings.waitForExistence(timeout: 5))
+        settings.click()
+        XCTAssertTrue(app.descendants(matching: .any)["shorts.subtitleSize"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.descendants(matching: .any)["shorts.subtitlePosition"].exists)
 
         let frameMode = app.descendants(matching: .any)["shorts.frameMode"]
         XCTAssertTrue(frameMode.exists)

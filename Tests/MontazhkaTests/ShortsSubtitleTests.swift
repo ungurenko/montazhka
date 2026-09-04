@@ -60,16 +60,73 @@ struct ShortsSubtitleTests {
     }
 
     @Test
+    func presetFillsAppearanceAndManualEditLeavesIt() {
+        var appearance = ShortsSubtitlePreset.plate.appearance
+
+        #expect(appearance.preset == .plate)
+        #expect(appearance.background == .plate)
+
+        appearance.textColor = .coral
+        #expect(appearance.preset == nil)
+
+        appearance = ShortsSubtitlePreset.outline.appearance
+        #expect(appearance.preset == .outline)
+    }
+
+    @Test
+    func missingFontFallsBackToSystemOne() {
+        for font in ShortsSubtitleFont.allCases {
+            let resolved = font.font(ofSize: 24)
+            #expect(resolved.pointSize == 24)
+            #expect(!resolved.fontName.isEmpty)
+        }
+    }
+
+    @Test
+    func longPhraseShrinksInsteadOfSpillingOverTwoLines() {
+        let canvas = CGSize(width: 1080, height: 1920)
+        let appearance = ShortsSubtitlePreset.classic.appearance
+        let phrase = "Совершенно невероятная длинная фраза"
+
+        let font = ShortsSubtitleLayout.fittingFont(
+            text: phrase, appearance: appearance, canvasSize: canvas)
+        let layout = ShortsSubtitleTextWrapper.wrap(
+            phrase,
+            font: font,
+            maxWidth: ShortsSubtitleLayout.textWidth(
+                fontSize: font.pointSize, canvasSize: canvas))
+
+        #expect(layout.lineCount <= ShortsSubtitleLayout.maxLines)
+        #expect(font.pointSize <= appearance.baseFontSize(canvasSize: canvas))
+    }
+
+    @Test
+    func positionRaisesTextInVerticalFrame() {
+        let vertical = CGSize(width: 1080, height: 1920)
+        var appearance = ShortsSubtitlePreset.classic.appearance
+
+        appearance.position = .low
+        let low = ShortsSubtitleLayout.bottomMargin(appearance: appearance, canvasSize: vertical)
+        appearance.position = .high
+        let high = ShortsSubtitleLayout.bottomMargin(appearance: appearance, canvasSize: vertical)
+
+        #expect(high > low)
+        // Даже нижнее положение не прижимает подпись к краю кадра.
+        #expect(low >= vertical.height * 0.06)
+    }
+
+    @Test
     func subtitleModeCarriesWordsOnlyWhenEnabled() {
         let words = [word("Текст", start: 0, end: 1, sourceID: UUID())]
 
         #expect(ShortsSubtitleSettings.default.mode(with: words) == .off)
 
+        let appearance = ShortsSubtitlePreset.accent.appearance
         let settings = ShortsSubtitleSettings(
-            enabled: true, style: .accent, size: .large, highlightActiveWord: true)
+            enabled: true, appearance: appearance, highlightActiveWord: true)
         #expect(
             settings.mode(with: words)
-                == .on(words: words, style: .accent, size: .large, highlight: true))
+                == .on(words: words, appearance: appearance, highlight: true))
         #expect(settings.mode(with: []) == .off)
     }
 

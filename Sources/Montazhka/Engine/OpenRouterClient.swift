@@ -90,6 +90,9 @@ actor OpenRouterClient {
     /// Каталог моделей на время жизни клиента (≈ сессия экрана), чтобы не
     /// качать его заново для проверки доступности и возможностей модели.
     private var catalogByID: [String: ModelItem]?
+    /// Расход, накопленный с последнего `resetUsage()` — то есть за один запуск
+    /// анализа, который складывается из нескольких запросов к модели.
+    private var usage = AIUsage.empty
 
     init(session: URLSession? = nil) {
         self.session = session ?? Self.makeDefaultSession()
@@ -103,6 +106,11 @@ actor OpenRouterClient {
         configuration.httpShouldSetCookies = false
         return URLSession(configuration: configuration)
     }
+
+    /// Начать счёт заново — вызывается перед запуском анализа.
+    func resetUsage() { usage = .empty }
+
+    func collectedUsage() -> AIUsage { usage }
 
     func validateKey(_ apiKey: String) async throws {
         var request = URLRequest(url: baseURL.appendingPathComponent("key"))
@@ -322,8 +330,13 @@ actor OpenRouterClient {
                 reasoning: reasoningEffort.map { ChatRequest.Reasoning(effort: $0) }
             ))
         let data = try await data(for: request, retry: true)
-        guard let content = try decoder.decode(ChatResponse.self, from: data).choices.first?.message.content,
-            !content.isEmpty
+        let response = try decoder.decode(ChatResponse.self, from: data)
+        usage += AIUsage(
+            requests: 1,
+            promptTokens: response.usage?.promptTokens ?? 0,
+            completionTokens: response.usage?.completionTokens ?? 0,
+            cost: response.usage?.cost)
+        guard let content = response.choices.first?.message.content, !content.isEmpty
         else { throw OpenRouterError.damagedResponse }
         return content
     }
@@ -653,7 +666,20 @@ private struct ModelReasoning: Decodable {
 }
 private struct ChatResponse: Decodable {
     struct Choice: Decodable { struct Message: Decodable { let content: String? }; let message: Message }
+    /// Расход по этому ответу. OpenRouter присылает его всегда, но поле
+    /// необязательное: провайдер может не назвать цену.
+    struct Usage: Decodable {
+        let promptTokens: Int?
+        let completionTokens: Int?
+        let cost: Double?
+        enum CodingKeys: String, CodingKey {
+            case cost
+            case promptTokens = "prompt_tokens"
+            case completionTokens = "completion_tokens"
+        }
+    }
     let choices: [Choice]
+    let usage: Usage?
 }
 
 private struct ChatRequest: Encodable {
