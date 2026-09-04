@@ -66,6 +66,6 @@ actor ShortsAnalysisCache {
                 data: Data(
                     "\(word.wordID)|\(word.text)|\(word.timelineStart)|\(word.timelineEnd);".utf8))
         }
-        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
+        return hasher.finalize().hex
     }
 }

@@ -84,7 +84,7 @@ actor VoiceEnhanceStore {
     }
 
     private static func hash(_ key: String) -> String {
-        SHA256.hash(data: Data(key.utf8)).map { String(format: "%02x", $0) }.joined()
+        SHA256.hash(data: Data(key.utf8)).hex
     }
 
     /// Держим только один вариант настроек на исходник — CAF большие.

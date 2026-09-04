@@ -9,15 +9,11 @@ extension AgentService {
             for path in paths where !FileManager.default.fileExists(atPath: path) {
                 throw AgentServiceError.missingFile(path)
             }
-            if request.aiMode != .off {
-                let transcriptStore = TranscriptStore(
-                    cacheDir: store.transcriptsDir, modelsDir: transcriptionModelsDirectory)
-                if await !transcriptStore.modelIsCached(), !request.confirmModelDownload {
-                    return .failure(
-                        command: "edit_video", code: "MODEL_DOWNLOAD_REQUIRED",
-                        message: "Нужна совместимая модель Parakeet Core ML (около 500 МБ).",
-                        recovery: "Повторите вызов с confirmModelDownload=true.")
-                }
+            if request.aiMode != .off,
+                let refusal = await refusalIfModelNeedsDownload(
+                    command: "edit_video", confirmed: request.confirmModelDownload)
+            {
+                return refusal
             }
             let run = try await beginRun(
                 mode: runMode, kind: request.projectID == nil ? .editVideo : .editProject,
@@ -56,8 +52,7 @@ extension AgentService {
     }
 
     private func prepareExternalEdit(project: Project, runID: UUID) async throws -> AgentResponse {
-        let transcriptStore = TranscriptStore(
-            cacheDir: store.transcriptsDir, modelsDir: transcriptionModelsDirectory)
+        let transcriptStore = makeTranscriptStore()
         var seen = Set<UUID>()
         let sources = project.clips.compactMap { clip in
             seen.insert(clip.source.id).inserted ? clip.source : nil
@@ -97,8 +92,7 @@ extension AgentService {
     }
 
     private func applyingSmartEdit(to project: Project, runID: UUID) async throws -> Project {
-        let transcriptStore = TranscriptStore(
-            cacheDir: store.transcriptsDir, modelsDir: transcriptionModelsDirectory)
+        let transcriptStore = makeTranscriptStore()
         let configuration = try await AgentAIConfigurationResolver.resolve(
             reasoningKey: EditorController.smartEditReasoningKey)
         let service = SmartEditService(
@@ -190,7 +184,7 @@ extension AgentService {
         result.detection =
             profile == .dynamic
             ? DetectionSettings(thresholdDB: -38, minPauseDuration: 0.55, paddingMS: 110)
-            : DetectionSettings(thresholdDB: -40, minPauseDuration: 0.8, paddingMS: 150)
+            : DetectionSettings()
         for source in Set(result.clips.map(\.sourcePath)) { _ = await waveforms.ensure(path: source) }
         let pauses = SilenceDetector.findPauses(
             clips: result.clips, peaksFor: { self.waveforms.peaks(for: $0) }, settings: result.detection)

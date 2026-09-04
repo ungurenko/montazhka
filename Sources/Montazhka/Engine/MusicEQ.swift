@@ -198,7 +198,7 @@ actor MusicEQStore {
         let size = (attrs?[.size] as? Int) ?? 0
         let mtime = (attrs?[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0
         let key = "\(path)|\(size)|\(Int(mtime))|\(MusicEQ.cacheKey)"
-        let hash = SHA256.hash(data: Data(key.utf8)).map { String(format: "%02x", $0) }.joined()
+        let hash = SHA256.hash(data: Data(key.utf8)).hex
         return cacheDir.appendingPathComponent("\(hash).caf")
     }
 }

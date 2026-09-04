@@ -161,7 +161,7 @@ struct SmartEditSnapshot: Equatable, Sendable {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         let data = (try? encoder.encode(clips)) ?? Data()
-        id = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        id = SHA256.hash(data: data).hex
     }
 }
 

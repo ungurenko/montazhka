@@ -21,13 +21,11 @@ extension AgentService {
             guard FileManager.default.fileExists(atPath: sourceURL.path) else {
                 throw AgentServiceError.missingFile(sourceURL.path)
             }
-            let transcriptStore = TranscriptStore(
-                cacheDir: store.transcriptsDir, modelsDir: transcriptionModelsDirectory)
-            if await !transcriptStore.modelIsCached(), !confirmModelDownload {
-                return .failure(
-                    command: "make_shorts", code: "MODEL_DOWNLOAD_REQUIRED",
-                    message: "Нужна совместимая модель Parakeet Core ML (около 500 МБ).",
-                    recovery: "Повторите вызов с confirmModelDownload=true.")
+            let transcriptStore = makeTranscriptStore()
+            if let refusal = await refusalIfModelNeedsDownload(
+                command: "make_shorts", confirmed: confirmModelDownload)
+            {
+                return refusal
             }
             let asset = AVURLAsset(url: sourceURL)
             guard let duration = try? await asset.load(.duration).seconds,

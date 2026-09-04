@@ -126,6 +126,24 @@ actor AgentService {
         AgentModelLocator.findCompatibleModel()?.deletingLastPathComponent() ?? store.modelsDir
     }
 
+    /// Новое хранилище расшифровок. Внутри него живёт загруженная модель
+    /// распознавания, поэтому на одну команду хватает одного экземпляра —
+    /// не создавай его в цикле.
+    func makeTranscriptStore() -> TranscriptStore {
+        TranscriptStore(cacheDir: store.transcriptsDir, modelsDir: transcriptionModelsDirectory)
+    }
+
+    /// Модель распознавания весит полгигабайта, поэтому агент не качает её
+    /// молча: без явного подтверждения команда возвращает отказ с объяснением.
+    /// Ответ есть — значит команду выполнять нельзя.
+    func refusalIfModelNeedsDownload(command: String, confirmed: Bool) async -> AgentResponse? {
+        guard await !makeTranscriptStore().modelIsCached(), !confirmed else { return nil }
+        return .failure(
+            command: command, code: "MODEL_DOWNLOAD_REQUIRED",
+            message: "Нужна совместимая модель Parakeet Core ML (около 500 МБ).",
+            recovery: "Повторите вызов с confirmModelDownload=true.")
+    }
+
     init(baseDirectory: URL? = nil) {
         store = ProjectStore(baseDirectory: baseDirectory)
         let base =
