@@ -21,12 +21,12 @@ extension AgentService {
             guard FileManager.default.fileExists(atPath: sourceURL.path) else {
                 throw AgentServiceError.missingFile(sourceURL.path)
             }
-            let transcriptStore = makeTranscriptStore()
             if let refusal = await refusalIfModelNeedsDownload(
                 command: "make_shorts", confirmed: confirmModelDownload)
             {
                 return refusal
             }
+            let transcriptStore = makeTranscriptStore()
             let asset = AVURLAsset(url: sourceURL)
             guard let duration = try? await asset.load(.duration).seconds,
                 duration.isFinite, duration >= ShortsLimits.minSourceDuration
