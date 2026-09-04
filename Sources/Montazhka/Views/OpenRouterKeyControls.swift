@@ -2,12 +2,28 @@ import SwiftUI
 
 /// Контракт «владельца ключа OpenRouter»: общий между EditorController
 /// и ShortsController, поэтому блок управления ключом один на оба экрана.
+/// Владелец называет только своё AI-подключение и работу, которую без ключа
+/// продолжать нечем; сами действия с ключом у обоих одинаковые.
 @MainActor
 protocol OpenRouterKeyControlling: AnyObject {
-    var openRouterKeyStatus: OpenRouterKeyStatus { get }
-    func validateSavedOpenRouterKey() async
-    func deleteOpenRouterKey() async
-    func saveAndValidateOpenRouterKey(_ key: String) async
+    var aiConnection: AIConnectionController { get }
+    func cancelWorkNeedingOpenRouterKey()
+}
+
+extension OpenRouterKeyControlling {
+    var openRouterKeyStatus: OpenRouterKeyStatus { aiConnection.openRouterKeyStatus }
+
+    func saveAndValidateOpenRouterKey(_ key: String) async {
+        await aiConnection.saveAndValidateOpenRouterKey(key)
+    }
+
+    func validateSavedOpenRouterKey() async {
+        await aiConnection.validateSavedOpenRouterKey()
+    }
+
+    func deleteOpenRouterKey() async {
+        if await aiConnection.deleteOpenRouterKey() { cancelWorkNeedingOpenRouterKey() }
+    }
 }
 
 /// Общий блок управления ключом OpenRouter для панелей «Умный монтаж» и нарезки

@@ -156,7 +156,6 @@ final class ShortsController {
     private(set) var transcriptWords: [TranscriptWord] = []
     private(set) var analysisWarnings: [ShortsAnalysisWarning] = []
     private(set) var exportState: ShortsExportState = .idle
-    var openRouterKeyStatus: OpenRouterKeyStatus { aiConnection.openRouterKeyStatus }
 
     let player = AVPlayer()
     let aiConnection: AIConnectionController
@@ -336,19 +335,7 @@ final class ShortsController {
 
     // MARK: - AI-провайдер и ключ OpenRouter
 
-    func refreshOpenRouterKeyState() { aiConnection.refreshOpenRouterKeyState() }
-
-    func saveAndValidateOpenRouterKey(_ key: String) async {
-        await aiConnection.saveAndValidateOpenRouterKey(key)
-    }
-
-    func validateSavedOpenRouterKey() async {
-        await aiConnection.validateSavedOpenRouterKey()
-    }
-
-    func deleteOpenRouterKey() async {
-        if await aiConnection.deleteOpenRouterKey() { cancelAnalysis() }
-    }
+    func cancelWorkNeedingOpenRouterKey() { cancelAnalysis() }
 
     // MARK: - Анализ
 

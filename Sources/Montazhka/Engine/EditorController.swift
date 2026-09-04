@@ -99,7 +99,6 @@ final class EditorController: ExportPreparing {
     /// Во что обошёлся последний запуск умного монтажа.
     private(set) var smartEditUsage: AIUsage = .empty
     @ObservationIgnored let activity: ActivityCenter
-    var openRouterKeyStatus: OpenRouterKeyStatus { aiConnection.openRouterKeyStatus }
 
     let player = AVPlayer()
     let aiConnection: AIConnectionController
@@ -868,21 +867,7 @@ final class EditorController: ExportPreparing {
 
     // MARK: - Умный монтаж
 
-    func refreshOpenRouterKeyState() {
-        aiConnection.refreshOpenRouterKeyState()
-    }
-
-    func saveAndValidateOpenRouterKey(_ key: String) async {
-        await aiConnection.saveAndValidateOpenRouterKey(key)
-    }
-
-    func validateSavedOpenRouterKey() async {
-        await aiConnection.validateSavedOpenRouterKey()
-    }
-
-    func deleteOpenRouterKey() async {
-        if await aiConnection.deleteOpenRouterKey() { cancelSmartEdit() }
-    }
+    func cancelWorkNeedingOpenRouterKey() { cancelSmartEdit() }
 
     func analyzeSmartEdits() {
         guard !project.clips.isEmpty else { return }

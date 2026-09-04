@@ -155,8 +155,6 @@ final class AIConnectionController {
         }
     }
 
-    func refreshOpenRouterKeyState() { keyManager.refresh() }
-
     func saveAndValidateOpenRouterKey(_ key: String) async {
         await keyManager.saveAndValidate(key)
         refreshReasoningOptions()
