@@ -11,7 +11,21 @@ protocol PreferenceStoring: Sendable {
 
 /// Обёртка над UserDefaults; потокобезопасность обеспечивает сам UserDefaults.
 struct UserDefaultsPreferenceStore: PreferenceStoring, @unchecked Sendable {
-    static let standard = UserDefaultsPreferenceStore(defaults: .standard)
+    static let standard = UserDefaultsPreferenceStore(defaults: settingsDefaults())
+
+    private static let uiTestSuiteName = "ru.ungurenko.montazhka.ui-tests"
+
+    /// Под UI-тестами настройки живут в отдельной песочнице, которая очищается
+    /// при запуске: проверки не должны читать и менять настройки пользователя
+    /// и обязаны каждый раз начинать с одного и того же состояния.
+    private static func settingsDefaults() -> UserDefaults {
+        guard CommandLine.arguments.contains("--ui-testing"),
+            ProcessInfo.processInfo.environment["MONTAZHKA_UI_TEST_MODE"] == "1",
+            let sandbox = UserDefaults(suiteName: uiTestSuiteName)
+        else { return .standard }
+        sandbox.removePersistentDomain(forName: uiTestSuiteName)
+        return sandbox
+    }
 
     private let defaults: UserDefaults
 

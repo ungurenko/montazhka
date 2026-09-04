@@ -114,10 +114,12 @@ final class MontazhkaUITests: XCTestCase {
         XCTAssertTrue(subtitles.waitForExistence(timeout: 5))
         subtitles.click()
         XCTAssertTrue(app.descendants(matching: .any)["shorts.subtitlePresets"].waitForExistence(timeout: 5))
-        // Тонкая настройка спрятана за «Настроить» — раскрываем и проверяем её.
-        let settings = app.disclosureTriangles.firstMatch
+        // Тонкая настройка спрятана за «Настроить». Треугольник ищем по имени:
+        // firstMatch попадает в «Почему выбран» у карточки ролика. И нажимаем
+        // у левого края — раскрывает только сам треугольник, а не подпись.
+        let settings = app.disclosureTriangles["Настроить"]
         XCTAssertTrue(settings.waitForExistence(timeout: 5))
-        settings.click()
+        settings.coordinate(withNormalizedOffset: CGVector(dx: 0.05, dy: 0.5)).click()
         XCTAssertTrue(app.descendants(matching: .any)["shorts.subtitleSize"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.descendants(matching: .any)["shorts.subtitlePosition"].exists)
 
