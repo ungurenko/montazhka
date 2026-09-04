@@ -197,7 +197,9 @@ struct ShortsCutTests {
                     """),
         ])
         let client = OpenRouterClient(session: makeMockSession())
-        let result = try await client.proposeShorts(words: words, model: .qwen, apiKey: "secret")
+        let result = try await client.run(
+            AIPasses.shortsProposals(words: words, videoMap: ""),
+            model: .qwen, apiKey: "secret")
         #expect((result.clips.map(\.id)) == (["s1"]))
         #expect((ShortsMockURLProtocol.recordedRequests.count) == (2))
     }

@@ -31,16 +31,7 @@ actor UnifiedAIClient: SmartEditAIServing, ShortsAIServing {
         words: [OpenRouterTranscriptWord],
         configuration: AIRequestConfiguration
     ) async throws -> ProposalEnvelope {
-        if case .openRouter(let model, let effort, let apiKey) = configuration {
-            return try await openRouter.propose(
-                words: words, model: model, effort: effort, apiKey: apiKey)
-        }
-        return try await completeAndDecode(
-            system: SmartEditPrompts.editorSystem,
-            user: SmartEditPrompts.proposalUser(words: words),
-            contract: "proposal_schema_v1",
-            configuration: configuration,
-            decode: { try OpenRouterClient.decodeProposals($0, words: words) })
+        try await run(AIPasses.proposals(words: words), configuration: configuration)
     }
 
     func review(
@@ -48,33 +39,15 @@ actor UnifiedAIClient: SmartEditAIServing, ShortsAIServing {
         proposals: ProposalEnvelope,
         configuration: AIRequestConfiguration
     ) async throws -> ReviewEnvelope {
-        if case .openRouter(let model, let effort, let apiKey) = configuration {
-            return try await openRouter.review(
-                words: words, proposals: proposals, model: model,
-                effort: effort, apiKey: apiKey)
-        }
-        return try await completeAndDecode(
-            system: SmartEditPrompts.reviewerSystem,
-            user: SmartEditPrompts.reviewUser(words: words, proposals: proposals),
-            contract: "review_schema_v1",
-            configuration: configuration,
-            decode: { try OpenRouterClient.decodeReviews($0, proposals: proposals, words: words) })
+        try await run(
+            AIPasses.reviews(words: words, proposals: proposals), configuration: configuration)
     }
 
     func mapShortsWindow(
         words: [OpenRouterTranscriptWord],
         configuration: AIRequestConfiguration
     ) async throws -> ShortsMapEnvelope {
-        if case .openRouter(let model, let effort, let apiKey) = configuration {
-            return try await openRouter.mapShortsWindow(
-                words: words, model: model, effort: effort, apiKey: apiKey)
-        }
-        return try await completeAndDecode(
-            system: ShortsPrompts.mapperSystem,
-            user: ShortsPrompts.mapUser(words: words),
-            contract: "shorts_map_schema_v1",
-            configuration: configuration,
-            decode: { try OpenRouterClient.decodeShortsMap($0, words: words) })
+        try await run(AIPasses.shortsMap(words: words), configuration: configuration)
     }
 
     func proposeShorts(
@@ -82,17 +55,9 @@ actor UnifiedAIClient: SmartEditAIServing, ShortsAIServing {
         configuration: AIRequestConfiguration,
         videoMap: String
     ) async throws -> ShortsProposalEnvelope {
-        if case .openRouter(let model, let effort, let apiKey) = configuration {
-            return try await openRouter.proposeShorts(
-                words: words, model: model,
-                effort: effort, apiKey: apiKey, videoMap: videoMap)
-        }
-        return try await completeAndDecode(
-            system: ShortsPrompts.selectorSystem,
-            user: ShortsPrompts.proposalUser(words: words, videoMap: videoMap),
-            contract: "shorts_clips_schema_v1",
-            configuration: configuration,
-            decode: { try OpenRouterClient.decodeShortsProposals($0, words: words) })
+        try await run(
+            AIPasses.shortsProposals(words: words, videoMap: videoMap),
+            configuration: configuration)
     }
 
     func rankShorts(
@@ -101,19 +66,10 @@ actor UnifiedAIClient: SmartEditAIServing, ShortsAIServing {
         configuration: AIRequestConfiguration,
         videoMap: String
     ) async throws -> ShortsRankingEnvelope {
-        if case .openRouter(let model, let effort, let apiKey) = configuration {
-            return try await openRouter.rankShorts(
-                proposals: proposals, desiredCount: desiredCount,
-                model: model, effort: effort,
-                apiKey: apiKey, videoMap: videoMap)
-        }
-        return try await completeAndDecode(
-            system: ShortsPrompts.rankerSystem,
-            user: ShortsPrompts.rankUser(
+        try await run(
+            AIPasses.shortsRanking(
                 proposals: proposals, desiredCount: desiredCount, videoMap: videoMap),
-            contract: "shorts_decisions_schema_v1",
-            configuration: configuration,
-            decode: { try OpenRouterClient.decodeShortsRanking($0, proposals: proposals) })
+            configuration: configuration)
     }
 
     func verifyShorts(
@@ -121,45 +77,30 @@ actor UnifiedAIClient: SmartEditAIServing, ShortsAIServing {
         videoMap: String,
         configuration: AIRequestConfiguration
     ) async throws -> ShortsVerdictEnvelope {
-        if case .openRouter(let model, let effort, let apiKey) = configuration {
-            return try await openRouter.verifyShorts(
-                inputs: inputs, videoMap: videoMap,
-                model: model, effort: effort, apiKey: apiKey)
-        }
-        return try await completeAndDecode(
-            system: ShortsPrompts.verifierSystem,
-            user: ShortsPrompts.verifyUser(inputs: inputs, videoMap: videoMap),
-            contract: "shorts_verdicts_schema_v1",
-            configuration: configuration,
-            decode: { try OpenRouterClient.decodeShortsVerdicts($0, inputs: inputs) })
-    }
-
-    private func completeAndDecode<Value>(
-        system: String,
-        user: String,
-        contract: String,
-        configuration: AIRequestConfiguration,
-        decode: (String) throws -> Value
-    ) async throws -> Value {
-        let content = try await cli.complete(
-            system: system, user: user, configuration: configuration)
-        do {
-            return try decode(content)
-        } catch {
-            let repaired = try await repair(
-                content, contract: contract, configuration: configuration)
-            return try decode(repaired)
-        }
-    }
-
-    private func repair(
-        _ content: String,
-        contract: String,
-        configuration: AIRequestConfiguration
-    ) async throws -> String {
-        return try await cli.complete(
-            system: "Ты исправляешь только JSON-формат.",
-            user: SmartEditPrompts.repairUser(content, contract: contract),
+        try await run(
+            AIPasses.shortsVerdicts(inputs: inputs, videoMap: videoMap),
             configuration: configuration)
+    }
+
+    /// Один и тот же проход уходит либо в OpenRouter, либо в CLI-агента.
+    /// CLI-агенты не знают про схемы ответа и чинят сломанный JSON всегда.
+    private func run<Value: Sendable>(
+        _ pass: AIPass<Value>,
+        configuration: AIRequestConfiguration
+    ) async throws -> Value {
+        if case .openRouter(let model, let effort, let apiKey) = configuration {
+            return try await openRouter.run(pass, model: model, effort: effort, apiKey: apiKey)
+        }
+        let content = try await cli.complete(
+            system: pass.system, user: pass.user, configuration: configuration)
+        do {
+            return try pass.decode(content)
+        } catch {
+            let repaired = try await cli.complete(
+                system: SmartEditPrompts.repairSystem,
+                user: SmartEditPrompts.repairUser(content, contract: pass.schema.contract),
+                configuration: configuration)
+            return try pass.decode(repaired)
+        }
     }
 }

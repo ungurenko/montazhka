@@ -113,8 +113,8 @@ struct OpenRouterClientTests {
         ])
         let client = OpenRouterClient(session: makeMockSession())
 
-        _ = try await client.propose(
-            words: [.init(id: "w000001", text: "я я начну", start: 0, end: 1)],
+        _ = try await client.run(
+            AIPasses.proposals(words: [.init(id: "w000001", text: "я я начну", start: 0, end: 1)]),
             model: .qwen, apiKey: "secret")
 
         let usage = await client.collectedUsage()
@@ -148,8 +148,8 @@ struct OpenRouterClientTests {
         ])
         let client = OpenRouterClient(session: makeMockSession())
 
-        let result = try await client.propose(
-            words: [.init(id: "w000001", text: "я я начну", start: 0, end: 1)],
+        let result = try await client.run(
+            AIPasses.proposals(words: [.init(id: "w000001", text: "я я начну", start: 0, end: 1)]),
             model: .qwen, apiKey: "secret")
 
         #expect((result.edits.map(\.id)) == (["e1"]))
@@ -168,8 +168,8 @@ struct OpenRouterClientTests {
             .json(content: "{\"schema_version\":1,\"edits\":[]}")
         ])
         let client = OpenRouterClient(session: makeMockSession())
-        _ = try await client.propose(
-            words: [.init(id: "w000001", text: "тест", start: 0, end: 1)],
+        _ = try await client.run(
+            AIPasses.proposals(words: [.init(id: "w000001", text: "тест", start: 0, end: 1)]),
             model: .deepSeek, apiKey: "secret")
         let body = try #require(MockOpenRouterURLProtocol.recordedRequests.first?.body)
         let json = try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])
@@ -195,18 +195,18 @@ struct OpenRouterClientTests {
             """
         ShortsMockBodyURLProtocol.configure(responses: [.json(content: content)])
         let client = OpenRouterClient(session: makeSession(ShortsMockBodyURLProtocol.self))
-        _ = try await client.proposeShorts(
-            words: words, model: .deepSeek,
-            effort: "high", apiKey: "secret")
+        _ = try await client.run(
+            AIPasses.shortsProposals(words: words, videoMap: ""),
+            model: .deepSeek, effort: "high", apiKey: "secret")
         let body = try #require(ShortsMockBodyURLProtocol.recordedRequests.first)
         let json = try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])
         let reasoning = try #require(json["reasoning"] as? [String: Any])
         #expect((reasoning["effort"] as? String) == ("high"))
 
         ShortsMockBodyURLProtocol.configure(responses: [.json(content: content)])
-        _ = try await client.proposeShorts(
-            words: words, model: .deepSeek,
-            effort: nil, apiKey: "secret")
+        _ = try await client.run(
+            AIPasses.shortsProposals(words: words, videoMap: ""),
+            model: .deepSeek, effort: nil, apiKey: "secret")
         let autoBody = try #require(ShortsMockBodyURLProtocol.recordedRequests.last)
         let autoJSON = try #require(JSONSerialization.jsonObject(with: autoBody) as? [String: Any])
         #expect((autoJSON["reasoning"]) == nil, "«Авто» не должно отправлять параметр reasoning")

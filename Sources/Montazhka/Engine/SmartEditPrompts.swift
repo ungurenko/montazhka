@@ -39,6 +39,9 @@ enum SmartEditPrompts {
             """
     }
 
+    /// Просьба переписать сломанный JSON — одна на оба пути к модели.
+    static let repairSystem = "Ты исправляешь только JSON-формат."
+
     static func repairUser(_ content: String, contract: String) -> String {
         """
         Исправь только формат следующего ответа под контракт \(contract). Смысл, ID и решения не меняй. Верни только JSON.

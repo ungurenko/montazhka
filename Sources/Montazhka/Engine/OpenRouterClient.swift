@@ -166,135 +166,35 @@ actor OpenRouterClient {
         return byID
     }
 
-    func propose(
-        words: [OpenRouterTranscriptWord], model: SmartEditModel,
-        effort: String? = nil, apiKey: String
-    ) async throws -> ProposalEnvelope {
-        try await completeAndDecode(
-            system: SmartEditPrompts.editorSystem,
-            user: SmartEditPrompts.proposalUser(words: words),
-            schema: .proposals, contract: "proposal_schema_v1", repair: .qwenOnly,
-            model: model, effort: effort, apiKey: apiKey
-        ) { try Self.decodeProposals($0, words: words) }
-    }
-
-    func review(
-        words: [OpenRouterTranscriptWord], proposals: ProposalEnvelope,
-        model: SmartEditModel, effort: String? = nil,
-        apiKey: String
-    ) async throws -> ReviewEnvelope {
-        try await completeAndDecode(
-            system: SmartEditPrompts.reviewerSystem,
-            user: SmartEditPrompts.reviewUser(words: words, proposals: proposals),
-            schema: .reviews, contract: "review_schema_v1", repair: .qwenOnly,
-            model: model, effort: effort, apiKey: apiKey
-        ) { try Self.decodeReviews($0, proposals: proposals, words: words) }
-    }
-
-    /// Нарезка на shorts, проход 0: карта окна — о чём кусок и где сильные места.
-    func mapShortsWindow(
-        words: [OpenRouterTranscriptWord], model: SmartEditModel,
-        effort: String? = nil, apiKey: String
-    ) async throws -> ShortsMapEnvelope {
-        try await completeAndDecode(
-            system: ShortsPrompts.mapperSystem,
-            user: ShortsPrompts.mapUser(words: words),
-            schema: .shortsMap, contract: "shorts_map_schema_v1", repair: .always,
-            model: model, effort: effort, apiKey: apiKey
-        ) { try Self.decodeShortsMap($0, words: words) }
-    }
-
-    /// Нарезка на shorts, проход 1: предложения по одному окну транскрипта.
-    /// videoMap — карта всего видео, чтобы окно видело контекст соседей.
-    func proposeShorts(
-        words: [OpenRouterTranscriptWord], model: SmartEditModel,
-        effort: String? = nil, apiKey: String,
-        videoMap: String = ""
-    ) async throws -> ShortsProposalEnvelope {
-        try await completeAndDecode(
-            system: ShortsPrompts.selectorSystem,
-            user: ShortsPrompts.proposalUser(words: words, videoMap: videoMap),
-            schema: .shortsProposals, contract: "shorts_clips_schema_v1", repair: .always,
-            model: model, effort: effort, apiKey: apiKey
-        ) { try Self.decodeShortsProposals($0, words: words) }
-    }
-
-    /// Нарезка на shorts, проход 2: отбор и ранжирование кандидатов по сводкам.
-    func rankShorts(
-        proposals: [ShortsRankInput], desiredCount: Int?,
-        model: SmartEditModel, effort: String? = nil, apiKey: String,
-        videoMap: String = ""
-    ) async throws -> ShortsRankingEnvelope {
-        try await completeAndDecode(
-            system: ShortsPrompts.rankerSystem,
-            user: ShortsPrompts.rankUser(
-                proposals: proposals, desiredCount: desiredCount, videoMap: videoMap),
-            schema: .shortsRanking, contract: "shorts_decisions_schema_v1", repair: .always,
-            model: model, effort: effort, apiKey: apiKey
-        ) { try Self.decodeShortsRanking($0, proposals: proposals) }
-    }
-
-    /// Нарезка на shorts, проход 3: «тест холодного зрителя» для отобранных
-    /// роликов — слабые отсеиваются с приговором в одно предложение.
-    func verifyShorts(
-        inputs: [ShortsVerifyInput], videoMap: String,
-        model: SmartEditModel, effort: String? = nil,
-        apiKey: String
-    ) async throws -> ShortsVerdictEnvelope {
-        try await completeAndDecode(
-            system: ShortsPrompts.verifierSystem,
-            user: ShortsPrompts.verifyUser(inputs: inputs, videoMap: videoMap),
-            schema: .shortsVerdicts, contract: "shorts_verdicts_schema_v1", repair: .always,
-            model: model, effort: effort, apiKey: apiKey
-        ) { try Self.decodeShortsVerdicts($0, inputs: inputs) }
-    }
-
-    /// Когда просить модель переписать сломанный JSON. Умный монтаж чинит только
-    /// за qwen: остальные модели там ошибаются редко, и лишний вызов не окупается.
-    /// Проходы нарезки чинят за любой моделью — ответы там длиннее и рвутся чаще.
-    private enum RepairPolicy {
-        case qwenOnly, always
-    }
-
-    /// Общий ход любого запроса к модели: собрать промпт, отправить, разобрать
-    /// ответ. Не разобрался — попросить модель переписать тот же JSON по контракту
-    /// и разобрать ещё раз.
-    private func completeAndDecode<Value>(
-        system: String,
-        user: @autoclosure () throws -> String,
-        schema: OutputSchema,
-        contract: String,
-        repair: RepairPolicy,
+    /// Выполняет проход: отправляет промпт, разбирает ответ. Не разобрался —
+    /// просит модель переписать тот же JSON по контракту и разбирает ещё раз.
+    func run<Value: Sendable>(
+        _ pass: AIPass<Value>,
         model: SmartEditModel,
-        effort: String?,
-        apiKey: String,
-        decode: (String) throws -> Value
+        effort: String? = nil,
+        apiKey: String
     ) async throws -> Value {
         let content = try await chat(
-            model: model, apiKey: apiKey, system: system,
-            user: user(), schema: schema, reasoningEffort: effort)
+            model: model, apiKey: apiKey, system: pass.system,
+            user: pass.user, schema: pass.schema, reasoningEffort: effort)
         do {
-            return try decode(content)
+            return try pass.decode(content)
         } catch is CancellationError {
             throw CancellationError()
-        } catch  where repair == .always || model == .qwen {
+        } catch  where pass.repairsEveryModel || model == .qwen {
             let repaired = try await chat(
                 model: model, apiKey: apiKey,
-                system: "Ты исправляешь только JSON-формат.",
-                user: SmartEditPrompts.repairUser(content, contract: contract),
-                schema: .jsonObject,
+                system: SmartEditPrompts.repairSystem,
+                user: SmartEditPrompts.repairUser(content, contract: pass.schema.contract),
+                schema: nil,
                 reasoningEffort: "minimal")
-            return try decode(repaired)
+            return try pass.decode(repaired)
         }
-    }
-
-    private enum OutputSchema {
-        case proposals, reviews, jsonObject, shortsProposals, shortsRanking, shortsMap, shortsVerdicts
     }
 
     private func chat(
         model: SmartEditModel, apiKey: String, system: String,
-        user: String, schema: OutputSchema,
+        user: String, schema: AIOutputSchema?,
         reasoningEffort: String? = nil
     ) async throws -> String {
         var request = URLRequest(url: baseURL.appendingPathComponent("chat/completions"))
@@ -564,8 +464,8 @@ actor OpenRouterClient {
         return firstIndex...lastIndex
     }
 
-    private func responseFormat(for schema: OutputSchema, strict: Bool) -> ResponseFormat {
-        guard strict, schema != .jsonObject else { return .init(type: "json_object", jsonSchema: nil) }
+    private func responseFormat(for schema: AIOutputSchema?, strict: Bool) -> ResponseFormat {
+        guard strict, let schema else { return .init(type: "json_object", jsonSchema: nil) }
         switch schema {
         case .proposals:
             return .init(
@@ -590,7 +490,6 @@ actor OpenRouterClient {
             return .init(
                 type: "json_schema",
                 jsonSchema: .init(name: "shorts_verdicts", strict: true, schema: Self.shortsVerdictsSchema))
-        case .jsonObject: return .init(type: "json_object", jsonSchema: nil)
         }
     }
 
