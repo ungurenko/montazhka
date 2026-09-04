@@ -131,11 +131,15 @@ struct ShortsAnalysisCacheTests {
     private func mappedWords(count: Int) -> [MappedTranscriptWord] {
         let id = UUID()
         return (0..<count).map { index in
-            MappedTranscriptWord(
+            // Границы вынесены в переменные: на всю тройку выражений сразу
+            // компилятор тратит недопустимо много времени.
+            let start = Double(index)
+            let end = start + 0.4
+            return MappedTranscriptWord(
                 wordID: String(format: "w%06d", index + 1), text: "слово\(index)",
                 clipID: id, sourceID: id,
-                sourceStart: Double(index), sourceEnd: Double(index) + 0.4,
-                timelineStart: Double(index), timelineEnd: Double(index) + 0.4,
+                sourceStart: start, sourceEnd: end,
+                timelineStart: start, timelineEnd: end,
                 confidence: 0.99)
         }
     }
