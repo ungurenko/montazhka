@@ -27,7 +27,8 @@ struct ShortsSubtitleOverlayView: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(
                     maxWidth: ShortsSubtitleLayout.textWidth(
-                        fontSize: fontSize, canvasSize: canvasSize))
+                        fontSize: fontSize, canvasSize: canvasSize)
+                )
                 .padding(.horizontal, fontSize * ShortsSubtitleLayout.horizontalPaddingScale)
                 .padding(.vertical, fontSize * ShortsSubtitleLayout.verticalPaddingScale)
 

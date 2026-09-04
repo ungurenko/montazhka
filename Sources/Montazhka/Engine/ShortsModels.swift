@@ -228,7 +228,7 @@ struct ShortsAnalysisResult: Sendable {
 
 // MARK: - Контракты обмена с LLM
 
-struct ShortsProposalEnvelope: Codable, Equatable, Sendable {
+struct ShortsProposalEnvelope: AIResponseEnvelope, Codable, Equatable, Sendable {
     let schemaVersion: Int
     let clips: [ShortsProposalDTO]
     enum CodingKeys: String, CodingKey { case schemaVersion = "schema_version", clips }
@@ -308,7 +308,7 @@ extension ShortsProposalDTO {
 
 enum ShortsDecision: String, Codable, Sendable { case accept, reject }
 
-struct ShortsRankingEnvelope: Codable, Equatable, Sendable {
+struct ShortsRankingEnvelope: AIResponseEnvelope, Codable, Equatable, Sendable {
     let schemaVersion: Int
     let decisions: [ShortsRankDTO]
     enum CodingKeys: String, CodingKey { case schemaVersion = "schema_version", decisions }
@@ -379,7 +379,7 @@ struct ShortsVerifyInput: Codable, Equatable, Sendable {
 // MARK: - Карта видео (проход 0)
 
 /// Итог анализа одного окна: о чём кусок и где его сильные места.
-struct ShortsMapEnvelope: Codable, Equatable, Sendable {
+struct ShortsMapEnvelope: AIResponseEnvelope, Codable, Equatable, Sendable {
     let schemaVersion: Int
     let summary: String
     let peaks: [ShortsMapPeakDTO]
@@ -399,7 +399,7 @@ struct ShortsMapPeakDTO: Codable, Equatable, Sendable {
 
 // MARK: - Верификация (проход 3)
 
-struct ShortsVerdictEnvelope: Codable, Equatable, Sendable {
+struct ShortsVerdictEnvelope: AIResponseEnvelope, Codable, Equatable, Sendable {
     let schemaVersion: Int
     let verdicts: [ShortsVerdictDTO]
     enum CodingKeys: String, CodingKey { case schemaVersion = "schema_version", verdicts }

@@ -256,7 +256,8 @@ struct ShortsView: View {
                     .foregroundStyle(Color(appearance.textColor.nsColor))
                     .shadow(
                         color: appearance.background == .shadow ? .black : .clear,
-                        radius: 1, x: 0, y: 1)
+                        radius: 1, x: 0, y: 1
+                    )
                     .padding(.horizontal, 6)
                     .padding(.vertical, 2)
                     .background {

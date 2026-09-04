@@ -20,8 +20,9 @@ struct ShortsControllerTests {
         var savedAppearance = ShortsSubtitlePreset.plate.appearance
         savedAppearance.size = .large
         ShortsSubtitleSettings(
-            enabled: true, appearance: savedAppearance, highlightActiveWord: true)
-            .save(in: preferences)
+            enabled: true, appearance: savedAppearance, highlightActiveWord: true
+        )
+        .save(in: preferences)
 
         let repository = ProjectStore(baseDirectory: root)
         let shorts = ShortsController(

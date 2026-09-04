@@ -41,7 +41,13 @@ struct ModelReasoningCapabilities: Equatable, Sendable {
         efforts: [], defaultEffort: nil, mandatory: false)
 }
 
-struct ProposalEnvelope: Codable, Equatable, Sendable {
+/// Ответ модели всегда приходит конвертом с номером схемы — по нему разбор
+/// отличает годный ответ от ответа другой, несовместимой версии.
+protocol AIResponseEnvelope: Decodable {
+    var schemaVersion: Int { get }
+}
+
+struct ProposalEnvelope: AIResponseEnvelope, Codable, Equatable, Sendable {
     let schemaVersion: Int
     let edits: [ProposalDTO]
     enum CodingKeys: String, CodingKey { case schemaVersion = "schema_version", edits }
@@ -61,7 +67,7 @@ struct ProposalDTO: Codable, Equatable, Sendable {
     }
 }
 
-struct ReviewEnvelope: Codable, Equatable, Sendable {
+struct ReviewEnvelope: AIResponseEnvelope, Codable, Equatable, Sendable {
     let schemaVersion: Int
     let decisions: [ReviewDTO]
     enum CodingKeys: String, CodingKey { case schemaVersion = "schema_version", decisions }
@@ -164,21 +170,12 @@ actor OpenRouterClient {
         words: [OpenRouterTranscriptWord], model: SmartEditModel,
         effort: String? = nil, apiKey: String
     ) async throws -> ProposalEnvelope {
-        let user = try SmartEditPrompts.proposalUser(words: words)
-        let content = try await chat(
-            model: model, apiKey: apiKey,
+        try await completeAndDecode(
             system: SmartEditPrompts.editorSystem,
-            user: user, schema: .proposals,
-            reasoningEffort: effort)
-        do { return try Self.decodeProposals(content, words: words) } catch  where model == .qwen {
-            let repaired = try await chat(
-                model: model, apiKey: apiKey,
-                system: "Ты исправляешь только JSON-формат.",
-                user: SmartEditPrompts.repairUser(content, contract: "proposal_schema_v1"),
-                schema: .jsonObject,
-                reasoningEffort: "minimal")
-            return try Self.decodeProposals(repaired, words: words)
-        }
+            user: SmartEditPrompts.proposalUser(words: words),
+            schema: .proposals, contract: "proposal_schema_v1", repair: .qwenOnly,
+            model: model, effort: effort, apiKey: apiKey
+        ) { try Self.decodeProposals($0, words: words) }
     }
 
     func review(
@@ -186,21 +183,12 @@ actor OpenRouterClient {
         model: SmartEditModel, effort: String? = nil,
         apiKey: String
     ) async throws -> ReviewEnvelope {
-        let user = try SmartEditPrompts.reviewUser(words: words, proposals: proposals)
-        let content = try await chat(
-            model: model, apiKey: apiKey,
+        try await completeAndDecode(
             system: SmartEditPrompts.reviewerSystem,
-            user: user, schema: .reviews,
-            reasoningEffort: effort)
-        do { return try Self.decodeReviews(content, proposals: proposals, words: words) } catch  where model == .qwen {
-            let repaired = try await chat(
-                model: model, apiKey: apiKey,
-                system: "Ты исправляешь только JSON-формат.",
-                user: SmartEditPrompts.repairUser(content, contract: "review_schema_v1"),
-                schema: .jsonObject,
-                reasoningEffort: "minimal")
-            return try Self.decodeReviews(repaired, proposals: proposals, words: words)
-        }
+            user: SmartEditPrompts.reviewUser(words: words, proposals: proposals),
+            schema: .reviews, contract: "review_schema_v1", repair: .qwenOnly,
+            model: model, effort: effort, apiKey: apiKey
+        ) { try Self.decodeReviews($0, proposals: proposals, words: words) }
     }
 
     /// Нарезка на shorts, проход 0: карта окна — о чём кусок и где сильные места.
@@ -208,23 +196,12 @@ actor OpenRouterClient {
         words: [OpenRouterTranscriptWord], model: SmartEditModel,
         effort: String? = nil, apiKey: String
     ) async throws -> ShortsMapEnvelope {
-        let user = try ShortsPrompts.mapUser(words: words)
-        let content = try await chat(
-            model: model, apiKey: apiKey,
+        try await completeAndDecode(
             system: ShortsPrompts.mapperSystem,
-            user: user, schema: .shortsMap,
-            reasoningEffort: effort)
-        do { return try Self.decodeShortsMap(content, words: words) } catch is CancellationError {
-            throw CancellationError()
-        } catch {
-            let repaired = try await chat(
-                model: model, apiKey: apiKey,
-                system: "Ты исправляешь только JSON-формат.",
-                user: SmartEditPrompts.repairUser(content, contract: "shorts_map_schema_v1"),
-                schema: .jsonObject,
-                reasoningEffort: "minimal")
-            return try Self.decodeShortsMap(repaired, words: words)
-        }
+            user: ShortsPrompts.mapUser(words: words),
+            schema: .shortsMap, contract: "shorts_map_schema_v1", repair: .always,
+            model: model, effort: effort, apiKey: apiKey
+        ) { try Self.decodeShortsMap($0, words: words) }
     }
 
     /// Нарезка на shorts, проход 1: предложения по одному окну транскрипта.
@@ -234,25 +211,12 @@ actor OpenRouterClient {
         effort: String? = nil, apiKey: String,
         videoMap: String = ""
     ) async throws -> ShortsProposalEnvelope {
-        let user = try ShortsPrompts.proposalUser(words: words, videoMap: videoMap)
-        let content = try await chat(
-            model: model, apiKey: apiKey,
+        try await completeAndDecode(
             system: ShortsPrompts.selectorSystem,
-            user: user, schema: .shortsProposals,
-            reasoningEffort: effort)
-        do { return try Self.decodeShortsProposals(content, words: words) } catch is CancellationError {
-            throw CancellationError()
-        } catch {
-            // Модели иногда заворачивают JSON в markdown или эхо-обёртку —
-            // чиним отдельным вызовом независимо от модели.
-            let repaired = try await chat(
-                model: model, apiKey: apiKey,
-                system: "Ты исправляешь только JSON-формат.",
-                user: SmartEditPrompts.repairUser(content, contract: "shorts_clips_schema_v1"),
-                schema: .jsonObject,
-                reasoningEffort: "minimal")
-            return try Self.decodeShortsProposals(repaired, words: words)
-        }
+            user: ShortsPrompts.proposalUser(words: words, videoMap: videoMap),
+            schema: .shortsProposals, contract: "shorts_clips_schema_v1", repair: .always,
+            model: model, effort: effort, apiKey: apiKey
+        ) { try Self.decodeShortsProposals($0, words: words) }
     }
 
     /// Нарезка на shorts, проход 2: отбор и ранжирование кандидатов по сводкам.
@@ -261,25 +225,13 @@ actor OpenRouterClient {
         model: SmartEditModel, effort: String? = nil, apiKey: String,
         videoMap: String = ""
     ) async throws -> ShortsRankingEnvelope {
-        let user = try ShortsPrompts.rankUser(
-            proposals: proposals, desiredCount: desiredCount,
-            videoMap: videoMap)
-        let content = try await chat(
-            model: model, apiKey: apiKey,
+        try await completeAndDecode(
             system: ShortsPrompts.rankerSystem,
-            user: user, schema: .shortsRanking,
-            reasoningEffort: effort)
-        do { return try Self.decodeShortsRanking(content, proposals: proposals) } catch is CancellationError {
-            throw CancellationError()
-        } catch {
-            let repaired = try await chat(
-                model: model, apiKey: apiKey,
-                system: "Ты исправляешь только JSON-формат.",
-                user: SmartEditPrompts.repairUser(content, contract: "shorts_decisions_schema_v1"),
-                schema: .jsonObject,
-                reasoningEffort: "minimal")
-            return try Self.decodeShortsRanking(repaired, proposals: proposals)
-        }
+            user: ShortsPrompts.rankUser(
+                proposals: proposals, desiredCount: desiredCount, videoMap: videoMap),
+            schema: .shortsRanking, contract: "shorts_decisions_schema_v1", repair: .always,
+            model: model, effort: effort, apiKey: apiKey
+        ) { try Self.decodeShortsRanking($0, proposals: proposals) }
     }
 
     /// Нарезка на shorts, проход 3: «тест холодного зрителя» для отобранных
@@ -289,22 +241,50 @@ actor OpenRouterClient {
         model: SmartEditModel, effort: String? = nil,
         apiKey: String
     ) async throws -> ShortsVerdictEnvelope {
-        let user = try ShortsPrompts.verifyUser(inputs: inputs, videoMap: videoMap)
-        let content = try await chat(
-            model: model, apiKey: apiKey,
+        try await completeAndDecode(
             system: ShortsPrompts.verifierSystem,
-            user: user, schema: .shortsVerdicts,
-            reasoningEffort: effort)
-        do { return try Self.decodeShortsVerdicts(content, inputs: inputs) } catch is CancellationError {
+            user: ShortsPrompts.verifyUser(inputs: inputs, videoMap: videoMap),
+            schema: .shortsVerdicts, contract: "shorts_verdicts_schema_v1", repair: .always,
+            model: model, effort: effort, apiKey: apiKey
+        ) { try Self.decodeShortsVerdicts($0, inputs: inputs) }
+    }
+
+    /// Когда просить модель переписать сломанный JSON. Умный монтаж чинит только
+    /// за qwen: остальные модели там ошибаются редко, и лишний вызов не окупается.
+    /// Проходы нарезки чинят за любой моделью — ответы там длиннее и рвутся чаще.
+    private enum RepairPolicy {
+        case qwenOnly, always
+    }
+
+    /// Общий ход любого запроса к модели: собрать промпт, отправить, разобрать
+    /// ответ. Не разобрался — попросить модель переписать тот же JSON по контракту
+    /// и разобрать ещё раз.
+    private func completeAndDecode<Value>(
+        system: String,
+        user: @autoclosure () throws -> String,
+        schema: OutputSchema,
+        contract: String,
+        repair: RepairPolicy,
+        model: SmartEditModel,
+        effort: String?,
+        apiKey: String,
+        decode: (String) throws -> Value
+    ) async throws -> Value {
+        let content = try await chat(
+            model: model, apiKey: apiKey, system: system,
+            user: user(), schema: schema, reasoningEffort: effort)
+        do {
+            return try decode(content)
+        } catch is CancellationError {
             throw CancellationError()
-        } catch {
+        } catch  where repair == .always || model == .qwen {
             let repaired = try await chat(
                 model: model, apiKey: apiKey,
                 system: "Ты исправляешь только JSON-формат.",
-                user: SmartEditPrompts.repairUser(content, contract: "shorts_verdicts_schema_v1"),
+                user: SmartEditPrompts.repairUser(content, contract: contract),
                 schema: .jsonObject,
                 reasoningEffort: "minimal")
-            return try Self.decodeShortsVerdicts(repaired, inputs: inputs)
+            return try decode(repaired)
         }
     }
 
@@ -396,12 +376,10 @@ actor OpenRouterClient {
         _ content: String,
         words: [OpenRouterTranscriptWord]
     ) throws -> ProposalEnvelope {
-        let decoder = JSONDecoder()
+        let envelope: ProposalEnvelope = try Self.decodedEnvelope(
+            content, label: "Smart edit proposals")
         let wordIndices = try validatedWordIndices(words)
-        guard let data = Self.extractedEnvelopeData(content),
-            let envelope = try? decoder.decode(ProposalEnvelope.self, from: data),
-            envelope.schemaVersion == 1,
-            Set(envelope.edits.map(\.id)).count == envelope.edits.count,
+        guard Set(envelope.edits.map(\.id)).count == envelope.edits.count,
             envelope.edits.allSatisfy({
                 !$0.id.isEmpty && !$0.reason.isEmpty && (0...1).contains($0.confidence)
                     && validRange(
@@ -417,16 +395,14 @@ actor OpenRouterClient {
         proposals: ProposalEnvelope,
         words: [OpenRouterTranscriptWord]
     ) throws -> ReviewEnvelope {
-        let decoder = JSONDecoder()
         let wordIndices = try validatedWordIndices(words)
         guard Set(proposals.edits.map(\.id)).count == proposals.edits.count else {
             throw OpenRouterError.damagedResponse
         }
         let proposalsByID = Dictionary(uniqueKeysWithValues: proposals.edits.map { ($0.id, $0) })
-        guard let data = Self.extractedEnvelopeData(content),
-            let envelope = try? decoder.decode(ReviewEnvelope.self, from: data),
-            envelope.schemaVersion == 1,
-            Set(envelope.decisions.map(\.editID)).count == envelope.decisions.count,
+        let envelope: ReviewEnvelope = try Self.decodedEnvelope(
+            content, label: "Smart edit reviews")
+        guard Set(envelope.decisions.map(\.editID)).count == envelope.decisions.count,
             envelope.decisions.allSatisfy({ review in
                 guard let proposal = proposalsByID[review.editID],
                     !review.reason.isEmpty,
@@ -453,14 +429,8 @@ actor OpenRouterClient {
         _ content: String,
         words: [OpenRouterTranscriptWord]
     ) throws -> ShortsProposalEnvelope {
-        let decoder = JSONDecoder()
-        guard let data = Self.extractedEnvelopeData(content),
-            let envelope = try? decoder.decode(ShortsProposalEnvelope.self, from: data),
-            envelope.schemaVersion == 1
-        else {
-            Logger.network.error("Shorts proposals: повреждённый ответ (\(content.utf8.count) байт)")
-            throw OpenRouterError.damagedResponse
-        }
+        let envelope: ShortsProposalEnvelope = try decodedEnvelope(
+            content, label: "Shorts proposals")
         let wordTimes = try validatedWordIndices(words)
         var seenIDs = Set<String>()
         let clips = envelope.clips.filter { clip in
@@ -479,16 +449,10 @@ actor OpenRouterClient {
         _ content: String,
         proposals: [ShortsRankInput]
     ) throws -> ShortsRankingEnvelope {
-        let decoder = JSONDecoder()
         let proposalIDs = Set(proposals.map(\.id))
-        guard !proposalIDs.isEmpty,
-            let data = Self.extractedEnvelopeData(content),
-            let envelope = try? decoder.decode(ShortsRankingEnvelope.self, from: data),
-            envelope.schemaVersion == 1
-        else {
-            Logger.network.error("Shorts decisions: повреждённый ответ (\(content.utf8.count) байт)")
-            throw OpenRouterError.damagedResponse
-        }
+        guard !proposalIDs.isEmpty else { throw OpenRouterError.damagedResponse }
+        let envelope: ShortsRankingEnvelope = try decodedEnvelope(
+            content, label: "Shorts decisions")
         var seenIDs = Set<String>()
         let decisions = envelope.decisions.filter { decision in
             seenIDs.insert(decision.clipID).inserted && proposalIDs.contains(decision.clipID) && !decision.title.isEmpty
@@ -503,14 +467,7 @@ actor OpenRouterClient {
         _ content: String,
         words: [OpenRouterTranscriptWord]
     ) throws -> ShortsMapEnvelope {
-        let decoder = JSONDecoder()
-        guard let data = Self.extractedEnvelopeData(content),
-            let envelope = try? decoder.decode(ShortsMapEnvelope.self, from: data),
-            envelope.schemaVersion == 1
-        else {
-            Logger.network.error("Shorts map: повреждённый ответ (\(content.utf8.count) байт)")
-            throw OpenRouterError.damagedResponse
-        }
+        let envelope: ShortsMapEnvelope = try decodedEnvelope(content, label: "Shorts map")
         let wordIndices = try validatedWordIndices(words)
         let peaks = envelope.peaks.filter {
             !$0.what.isEmpty
@@ -527,21 +484,32 @@ actor OpenRouterClient {
         _ content: String,
         inputs: [ShortsVerifyInput]
     ) throws -> ShortsVerdictEnvelope {
-        let decoder = JSONDecoder()
         let inputIDs = Set(inputs.map(\.id))
-        guard !inputIDs.isEmpty,
-            let data = Self.extractedEnvelopeData(content),
-            let envelope = try? decoder.decode(ShortsVerdictEnvelope.self, from: data),
-            envelope.schemaVersion == 1
-        else {
-            Logger.network.error("Shorts verdicts: повреждённый ответ (\(content.utf8.count) байт)")
-            throw OpenRouterError.damagedResponse
-        }
+        guard !inputIDs.isEmpty else { throw OpenRouterError.damagedResponse }
+        let envelope: ShortsVerdictEnvelope = try decodedEnvelope(
+            content, label: "Shorts verdicts")
         var seenIDs = Set<String>()
         let verdicts = envelope.verdicts.filter {
             seenIDs.insert($0.clipID).inserted && inputIDs.contains($0.clipID) && !$0.verdict.isEmpty
         }
         return ShortsVerdictEnvelope(schemaVersion: 1, verdicts: verdicts)
+    }
+
+    /// Общий пролог всех разборов: достаём JSON из ответа модели, декодируем
+    /// и проверяем версию схемы. `label` попадает в лог, когда ответ повреждён.
+    private static func decodedEnvelope<Envelope: AIResponseEnvelope>(
+        _ content: String,
+        label: String
+    ) throws -> Envelope {
+        guard let data = extractedEnvelopeData(content),
+            let envelope = try? JSONDecoder().decode(Envelope.self, from: data),
+            envelope.schemaVersion == 1
+        else {
+            Logger.network.error(
+                "\(label, privacy: .public): повреждённый ответ (\(content.utf8.count) байт)")
+            throw OpenRouterError.damagedResponse
+        }
+        return envelope
     }
 
     /// Модели иногда заворачивают JSON в markdown-ограждения или повторяют
