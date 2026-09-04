@@ -1,7 +1,7 @@
 import CryptoKit
 import Foundation
 
-enum SmartEditModel: String, CaseIterable, Codable, Sendable {
+enum SmartEditModel: String, CaseIterable, Codable, Sendable, StoredPreference {
     case qwen = "qwen/qwen3.7-flash"
     case deepSeek = "deepseek/deepseek-v4-flash-0731"
     case luna = "openai/gpt-5.6-luna"
@@ -21,16 +21,7 @@ enum SmartEditModel: String, CaseIterable, Codable, Sendable {
     }
 
     static let key = "smartEdit.openRouterModel"
-
-    /// Восстановленное значение из хранилища настроек; по умолчанию — `.qwen`.
-    static func saved(in store: any PreferenceStoring = UserDefaultsPreferenceStore.standard) -> SmartEditModel {
-        guard let raw = store.string(forKey: key) else { return .qwen }
-        return SmartEditModel(rawValue: raw) ?? .qwen
-    }
-
-    func save(in store: any PreferenceStoring = UserDefaultsPreferenceStore.standard) {
-        store.set(rawValue, forKey: Self.key)
-    }
+    static let fallback = SmartEditModel.qwen
 
     var usesStrictSchema: Bool { self != .qwen }
 }

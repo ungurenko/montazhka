@@ -1,6 +1,6 @@
 import Foundation
 
-enum AIProvider: String, CaseIterable, Codable, Identifiable, Sendable {
+enum AIProvider: String, CaseIterable, Codable, Identifiable, Sendable, StoredPreference {
     case openRouter
     case codexCLI
     case openCodeCLI
@@ -15,20 +15,8 @@ enum AIProvider: String, CaseIterable, Codable, Identifiable, Sendable {
         }
     }
 
-    static let preferenceKey = "ai.provider"
-
-    static func saved(
-        in store: any PreferenceStoring = UserDefaultsPreferenceStore.standard
-    ) -> AIProvider {
-        guard let raw = store.string(forKey: preferenceKey),
-            let provider = AIProvider(rawValue: raw)
-        else { return .openRouter }
-        return provider
-    }
-
-    func save(in store: any PreferenceStoring = UserDefaultsPreferenceStore.standard) {
-        store.set(rawValue, forKey: Self.preferenceKey)
-    }
+    static let key = "ai.provider"
+    static let fallback = AIProvider.openRouter
 
     var modelPreferenceKey: String {
         switch self {

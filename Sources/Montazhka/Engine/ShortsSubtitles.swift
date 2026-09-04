@@ -232,33 +232,16 @@ struct ShortsSubtitleSettings: Equatable, Sendable {
         // Строкой, а не флагом: отсутствие ключа надо отличать от «выключено»,
         // потому что подсветка включена по умолчанию.
         let highlight = store.string(forKey: Keys.highlight).map { $0 == "on" } ?? true
+        // Каждое поле образа необязательно: чего в хранилище нет, то остаётся
+        // из перенесённого старого стиля.
         var appearance = migratedAppearance(in: store)
-        if let font = store.string(forKey: Keys.font).flatMap(ShortsSubtitleFont.init(rawValue:)) {
-            appearance.font = font
-        }
-        if let size = store.string(forKey: Keys.size).flatMap(ShortsSubtitleSize.init(rawValue:)) {
-            appearance.size = size
-        }
-        if let color = store.string(forKey: Keys.textColor)
-            .flatMap(ShortsSubtitleColor.init(rawValue:))
-        {
-            appearance.textColor = color
-        }
-        if let color = store.string(forKey: Keys.highlightColor)
-            .flatMap(ShortsSubtitleColor.init(rawValue:))
-        {
-            appearance.highlightColor = color
-        }
-        if let background = store.string(forKey: Keys.background)
-            .flatMap(ShortsSubtitleBackground.init(rawValue:))
-        {
-            appearance.background = background
-        }
-        if let position = store.string(forKey: Keys.position)
-            .flatMap(ShortsSubtitlePosition.init(rawValue:))
-        {
-            appearance.position = position
-        }
+        appearance.font = store.value(forKey: Keys.font) ?? appearance.font
+        appearance.size = store.value(forKey: Keys.size) ?? appearance.size
+        appearance.textColor = store.value(forKey: Keys.textColor) ?? appearance.textColor
+        appearance.highlightColor =
+            store.value(forKey: Keys.highlightColor) ?? appearance.highlightColor
+        appearance.background = store.value(forKey: Keys.background) ?? appearance.background
+        appearance.position = store.value(forKey: Keys.position) ?? appearance.position
         return ShortsSubtitleSettings(
             enabled: enabled, appearance: appearance, highlightActiveWord: highlight)
     }

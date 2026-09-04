@@ -47,7 +47,7 @@ enum ShortsCanvasColor: String, CaseIterable, Identifiable, Sendable {
 }
 
 /// Сколько роликов хочет получить пользователь.
-enum ShortsCount: String, CaseIterable, Identifiable, Sendable {
+enum ShortsCount: String, CaseIterable, Identifiable, Sendable, StoredPreference {
     case three = "3"
     case five = "5"
     case eight = "8"
@@ -75,16 +75,7 @@ enum ShortsCount: String, CaseIterable, Identifiable, Sendable {
     }
 
     static let key = "shorts.count"
-
-    /// Восстановленное значение из хранилища настроек; по умолчанию — `.five`.
-    static func saved(in store: any PreferenceStoring = UserDefaultsPreferenceStore.standard) -> ShortsCount {
-        guard let raw = store.string(forKey: key) else { return .five }
-        return ShortsCount(rawValue: raw) ?? .five
-    }
-
-    func save(in store: any PreferenceStoring = UserDefaultsPreferenceStore.standard) {
-        store.set(rawValue, forKey: Self.key)
-    }
+    static let fallback = ShortsCount.five
 }
 
 enum ShortsLimits {
