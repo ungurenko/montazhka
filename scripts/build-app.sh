@@ -30,6 +30,7 @@ trap cleanup EXIT
 binary="$staging_root/Montazhka"
 
 scripts/verify-config.sh
+source scripts/swift-env.sh
 
 if [ "$universal" = true ]; then
   universal_root=".build/universal"

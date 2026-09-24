@@ -88,6 +88,8 @@ MONTAZHKA_SELFTEST_TIMEOUT=30 .build/release/Montazhka --selftest
 .tools/xcodegen generate                      # Montazhka.xcodeproj для Xcode и UI-тестов
 ```
 
+Command Line Tools 27 не содержат плагин макросов SwiftUI, которого требует SDK 27. `scripts/build-app.sh` и `scripts/test.sh` сами замечают это через `scripts/swift-env.sh` и собирают с последним совместимым SDK. Голый `swift build` в такой среде падает — используйте скрипты или `swift build --sdk <путь к MacOSX26.5.sdk>`.
+
 Готовое приложение находится в `build.noindex/Монтажка.app`. `script/build_and_run.sh` также заменяет копию в `/Applications`, чтобы при разработке всегда запускалась свежая версия.
 
 ### Публичный релиз
