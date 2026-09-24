@@ -99,6 +99,48 @@ enum AgentCommand {
                 sourcePath: input,
                 confirmModelDownload: args.contains("--confirm-model-download"),
                 trimPauses: !args.contains("--keep-pauses"))
+        case "transcript":
+            guard let id = value("--project", in: args).flatMap(UUID.init(uuidString:)) else {
+                return .failure(command: "transcript", code: "INVALID_PROJECT_ID", message: "Укажите --project.")
+            }
+            return await service.transcriptOrStartJob(
+                projectID: id, from: number("--from", in: args), to: number("--to", in: args),
+                confirmModelDownload: args.contains("--confirm-model-download"))
+        case "frames":
+            return await service.frames(
+                AgentFramesRequest(
+                    target: target(args), from: number("--from", in: args), to: number("--to", in: args),
+                    count: value("--count", in: args).flatMap(Int.init),
+                    times: (value("--times", in: args) ?? "").split(separator: ",").compactMap {
+                        Double($0.trimmingCharacters(in: .whitespaces))
+                    },
+                    aroundCuts: args.contains("--around-cuts")))
+        case "audio":
+            return await service.audio(
+                target: target(args), from: number("--from", in: args), to: number("--to", in: args),
+                buckets: value("--buckets", in: args).flatMap(Int.init))
+        case "apply-edits":
+            guard let id = value("--project", in: args).flatMap(UUID.init(uuidString:)) else {
+                return .failure(command: "apply_edits", code: "INVALID_PROJECT_ID", message: "Укажите --project.")
+            }
+            do {
+                let operations: [AgentEditOperation]
+                if args.contains("--undo") {
+                    operations = [AgentEditOperation(op: "undo", steps: value("--undo", in: args).flatMap(Int.init))]
+                } else {
+                    guard let path = value("--request", in: args) else {
+                        throw AgentServiceError.invalidInput("Укажите --request <файл|-> с operations или --undo.")
+                    }
+                    let data =
+                        path == "-"
+                        ? FileHandle.standardInput.readDataToEndOfFile()
+                        : try Data(contentsOf: URL(fileURLWithPath: path))
+                    operations = try AgentEditOperation.decodeList(data)
+                }
+                return await service.applyEdits(projectID: id, operations: operations)
+            } catch {
+                return .failure(command: "apply_edits", code: "INVALID_REQUEST", message: error.localizedDescription)
+            }
         case "integration":
             do {
                 let operation = args.dropFirst().first ?? "status"
@@ -128,6 +170,16 @@ enum AgentCommand {
         return args[index + 1]
     }
 
+    private static func number(_ flag: String, in args: [String]) -> Double? {
+        value(flag, in: args).flatMap(Double.init)
+    }
+
+    private static func target(_ args: [String]) -> AgentMediaTarget {
+        AgentMediaTarget(
+            projectID: value("--project", in: args).flatMap(UUID.init(uuidString:)),
+            filePath: value("--file", in: args))
+    }
+
     private static func values(_ flag: String, in args: [String]) -> [String] {
         args.indices.compactMap { args[$0] == flag && $0 + 1 < args.count ? args[$0 + 1] : nil }
     }
@@ -140,7 +192,8 @@ enum AgentCommand {
     }
 
     private static let usage =
-        "Команды: doctor, projects, edit-video, edit-project, job, inspect, export, make-shorts, mcp serve."
+        "Команды: doctor, projects, edit-video, edit-project, job, inspect, transcript, frames, audio, "
+        + "apply-edits, export, make-shorts, mcp serve."
 }
 
 private struct AgentMCPServer {
@@ -150,7 +203,8 @@ private struct AgentMCPServer {
         let server = Server(
             name: "Montazhka", version: "1.0.0",
             instructions:
-                "Локальный монтаж видео. Сначала вызовите montazhka_doctor. Финальный экспорт только после явного подтверждения пользователя.",
+                "Локальный монтаж видео. Сначала вызовите montazhka_doctor и прочитайте montazhka://guide. "
+                + "Финальный экспорт — когда пользователь поручил сделать готовый файл.",
             capabilities: .init(resources: .init(), tools: .init()))
         await server.withMethodHandler(ListTools.self) { _ in
             ListTools.Result(
@@ -169,7 +223,14 @@ private struct AgentMCPServer {
             let response = await call(name: request.name, arguments: request.arguments ?? [:])
             let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
             let text = (try? String(decoding: encoder.encode(response), as: UTF8.self)) ?? "{}"
-            return CallTool.Result(content: [.text(text: text, annotations: nil, _meta: nil)], isError: !response.ok)
+            var content: [Tool.Content] = [.text(text: text, annotations: nil, _meta: nil)]
+            if case .string(let path)? = response.data?["imagePath"],
+                let image = FileManager.default.contents(atPath: path)
+            {
+                content.append(
+                    .image(data: image.base64EncodedString(), mimeType: "image/jpeg", annotations: nil, _meta: nil))
+            }
+            return CallTool.Result(content: content, isError: !response.ok)
         }
         await server.withMethodHandler(ListResources.self) { _ in
             ListResources.Result(resources: [
@@ -249,8 +310,42 @@ private struct AgentMCPServer {
             } catch {
                 return .failure(command: "make_shorts", code: "JOB_START_FAILED", message: error.localizedDescription)
             }
+        case "montazhka_transcript":
+            guard let id = arguments["projectId"]?.stringValue.flatMap(UUID.init(uuidString:)) else {
+                return .failure(command: "transcript", code: "INVALID_PROJECT_ID", message: "Нужен projectId.")
+            }
+            return await service.transcriptOrStartJob(
+                projectID: id, from: Self.double(arguments["from"]), to: Self.double(arguments["to"]),
+                confirmModelDownload: arguments["confirmModelDownload"]?.boolValue ?? false)
+        case "montazhka_frames":
+            return await service.frames(
+                AgentFramesRequest(
+                    target: Self.target(arguments), from: Self.double(arguments["from"]),
+                    to: Self.double(arguments["to"]), count: arguments["count"]?.intValue,
+                    times: arguments["times"]?.arrayValue?.compactMap(Self.double) ?? [],
+                    aroundCuts: arguments["aroundCuts"]?.boolValue ?? false))
+        case "montazhka_audio":
+            return await service.audio(
+                target: Self.target(arguments), from: Self.double(arguments["from"]),
+                to: Self.double(arguments["to"]), buckets: arguments["buckets"]?.intValue)
+        case "montazhka_apply_edits":
+            guard let id = arguments["projectId"]?.stringValue.flatMap(UUID.init(uuidString:)) else {
+                return .failure(command: "apply_edits", code: "INVALID_PROJECT_ID", message: "Нужен projectId.")
+            }
+            do {
+                let data = try JSONEncoder().encode(arguments["operations"] ?? .array([]))
+                return await service.applyEdits(projectID: id, operations: try AgentEditOperation.decodeList(data))
+            } catch {
+                return .failure(command: "apply_edits", code: "INVALID_REQUEST", message: error.localizedDescription)
+            }
         default: return .failure(command: name, code: "UNKNOWN_TOOL", message: "Неизвестный инструмент.")
         }
+    }
+
+    private static func target(_ arguments: [String: Value]) -> AgentMediaTarget {
+        AgentMediaTarget(
+            projectID: arguments["projectId"]?.stringValue.flatMap(UUID.init(uuidString:)),
+            filePath: arguments["filePath"]?.stringValue)
     }
 
     private static func double(_ value: Value?) -> Double? {
@@ -323,21 +418,40 @@ enum AgentDocumentation {
         `aiMode=built-in` использует настройки ИИ приложения; `aiMode=external` отдаёт расшифровку агенту.
         Долгие операции возвращают `jobId`; состояние читает `montazhka_get_job`.
         Большие материалы доступны через `montazhka://runs/{jobId}/{artifact}`.
-        Всегда проверьте файлы, длительность, дорожки, резы, склейки и черновой MP4.
-        Финальный экспорт требует `final=true` и `confirmFinal=true` после явного «ОК» пользователя.
+
+        ## Самостоятельный монтаж
+        Все инструменты ниже работают во времени ленты проекта (секунды итогового ролика).
+        1. `montazhka_edit_video` (паузы убраны) → `montazhka_inspect`: клипы с номерами и временем.
+        2. `montazhka_transcript`: слова `начало конец слово`, отметки пауз и склеек. Если расшифровки
+           нет, вызов запускает её в фоне и возвращает `jobId` — дождитесь его и вызовите снова.
+        3. `montazhka_frames`: сетка кадров картинкой. Узкий `from/to` — приближение к моменту.
+           `montazhka_audio`: громкость по отрезкам и тишины.
+        4. `montazhka_apply_edits` пачкой: delete, split, move, trim, insert (вставка куска другого
+           исходника для сборки из нескольких файлов). Операции идут по порядку; диапазоны одного
+           delete считаются по ленте до операции. Ответ содержит новую ленту и предупреждения о резах
+           посреди слова. Ошибка — `{"op":"undo"}` отдельным вызовом.
+        5. После правок: `montazhka_frames aroundCuts=true` (скачки картинки) и `montazhka_audio` у склеек.
+        6. Если пользователь поручил сделать готовый файл, это согласие на финал:
+           `montazhka_export final=true confirmFinal=true quality=high`.
+        7. Проверьте результат: `durationCheck.matches` в итоге задачи, затем `montazhka_frames`
+           и `montazhka_audio` с `filePath` готового MP4.
+        Говорящая голова: режьте по словам (оговорки, повторы, дубли — оставляйте последний удачный).
+        Запись экрана: ищите по кадрам участки, где картинка не меняется, и сокращайте их.
+
         Исходные видео не перезаписываются; существующий результат требует `overwrite=true`.
         """
 
     static let skill = """
         ---
         name: montazhka
-        description: Управляет локальным видеомонтажом через компактный MCP Монтажки.
+        description: Самостоятельный локальный видеомонтаж через MCP Монтажки — смотреть кадры, слушать громкость, читать расшифровку, резать, переставлять и отдавать готовый MP4.
         ---
         # Монтажка
-        Сначала вызови `montazhka_doctor`. Для длинных данных читай `montazhka://` ресурс только при необходимости.
+        Сначала вызови `montazhka_doctor` и прочитай ресурс `montazhka://guide` — там полный порядок монтажа.
         Для обычной речи используй профиль `clean-speech`, для энергичного ролика — `dynamic`, для вертикальных клипов — `shorts`.
-        Всегда проверь доступность файлов, длительность, дорожки, резы, склейки и черновой MP4.
-        Финальный экспорт запускай только после явного «ОК» пользователя.
-        Исходники не перезаписывай. Подробный контракт доступен в ресурсе `montazhka://guide`.
+        Решения о резах принимай по расшифровке (`montazhka_transcript`), сомнительные места проверяй кадрами
+        (`montazhka_frames`) и громкостью (`montazhka_audio`), правь через `montazhka_apply_edits`.
+        После правок посмотри кадры у склеек. Если пользователь поручил готовый файл — делай финальный
+        экспорт сам и проверь готовый MP4 теми же инструментами. Исходники не перезаписывай.
         """
 }

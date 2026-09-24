@@ -19,6 +19,10 @@ struct AgentContractTests {
                 "montazhka_get_job",
                 "montazhka_inspect",
                 "montazhka_export",
+                "montazhka_transcript",
+                "montazhka_frames",
+                "montazhka_audio",
+                "montazhka_apply_edits",
             ])
         #expect(AgentToolCatalog.estimatedTokenCount <= 3_000)
         let editVideo = try #require(tools.first { $0.name == "montazhka_edit_video" })

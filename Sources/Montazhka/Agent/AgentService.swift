@@ -121,6 +121,7 @@ actor AgentService {
     let store: ProjectStore
     let runs: AgentRunStore
     let waveforms: WaveformStore
+    let revisions: AgentRevisionStore
 
     var transcriptionModelsDirectory: URL {
         AgentModelLocator.findCompatibleModel()?.deletingLastPathComponent() ?? store.modelsDir
@@ -152,6 +153,7 @@ actor AgentService {
             .appendingPathComponent("Montazhka", isDirectory: true)
         runs = AgentRunStore(baseDirectory: base.appendingPathComponent("AgentRuns", isDirectory: true))
         waveforms = WaveformStore(cacheDir: store.waveformsDir)
+        revisions = AgentRevisionStore(baseDirectory: base.appendingPathComponent("AgentRevisions", isDirectory: true))
     }
 
     func doctor() async -> AgentResponse {
@@ -223,6 +225,8 @@ actor AgentService {
                     "projectId": .string(project.id.uuidString), "duration": .number(project.totalDuration),
                     "clipCount": .number(Double(project.clips.count)),
                     "missingFiles": .array(missing.sorted().map { .string($0) }),
+                    "revision": .number(Double(await revisions.revision(of: project.id))),
+                    "clips": clipsData(project),
                     "cutChecks": .array(
                         cuts.prefix(50).map {
                             .object([

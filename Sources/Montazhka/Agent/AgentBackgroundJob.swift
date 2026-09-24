@@ -4,6 +4,7 @@ enum AgentWorkerRequest: Codable, Sendable {
     case edit(AgentEditRequest)
     case shorts(sourcePath: String, confirmModelDownload: Bool, trimPauses: Bool)
     case export(projectID: UUID, outputPath: String?, quality: String, final: Bool, confirmFinal: Bool, overwrite: Bool)
+    case transcribe(projectID: UUID)
 }
 
 enum AgentBackgroundJob {
@@ -19,6 +20,7 @@ enum AgentBackgroundJob {
             sources = value.sourcePaths
         case .shorts(let path, _, _): kind = .makeShorts; sources = [path]
         case .export: kind = .export; sources = []
+        case .transcribe: kind = .transcribe; sources = []
         }
         let run = try await store.create(kind: kind, sourcePaths: sources)
         let directory = try await store.artifactDirectory(id: run.id)
@@ -70,6 +72,8 @@ enum AgentBackgroundJob {
                     projectID: id, outputPath: path, quality: quality,
                     final: final, confirmFinal: confirm, overwrite: overwrite,
                     runMode: .existing(jobID))
+            case .transcribe(let id):
+                result = await service.transcribe(projectID: id, runMode: .existing(jobID))
             }
             let directory = try await store.artifactDirectory(id: jobID)
             let resultURL = directory.appendingPathComponent("result.json")

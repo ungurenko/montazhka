@@ -105,7 +105,7 @@ enum AgentToolCatalog {
             "montazhka_get_job", "Получить короткий статус фоновой задачи.", properties: ["jobId": string],
             required: ["jobId"], readOnly: true),
         tool(
-            "montazhka_inspect", "Проверить проект и зоны склеек.",
+            "montazhka_inspect", "Лента проекта: клипы с временем ленты и исходника, ревизия, зоны склеек.",
             properties: [
                 "projectId": string, "cuts": array(number),
             ], required: ["projectId"], readOnly: true),
@@ -116,6 +116,31 @@ enum AgentToolCatalog {
                 "quality": enumStrings(["compact", "medium", "high", "maximum"]),
                 "final": boolean, "confirmFinal": boolean, "overwrite": boolean,
             ], required: ["projectId"], destructive: true),
+        tool(
+            "montazhka_transcript",
+            "Слова с временем ленты, паузы и склейки. Если расшифровки нет — запускает её в фоне и даёт jobId.",
+            properties: [
+                "projectId": string, "from": number, "to": number, "confirmModelDownload": boolean,
+            ], required: ["projectId"], readOnly: true),
+        tool(
+            "montazhka_frames",
+            "Картинка-сетка кадров с таймкодами. Время ленты проекта или filePath. "
+                + "Узкий from/to — приближение; aroundCuts — кадры до/после склеек проекта.",
+            properties: [
+                "projectId": string, "filePath": string, "from": number, "to": number,
+                "count": integer, "times": array(number), "aroundCuts": boolean,
+            ], readOnly: true),
+        tool(
+            "montazhka_audio", "Громкость по отрезкам (dBFS) и тишины в диапазоне ленты проекта или filePath.",
+            properties: [
+                "projectId": string, "filePath": string, "from": number, "to": number, "buckets": integer,
+            ], readOnly: true),
+        tool(
+            "montazhka_apply_edits",
+            "Правки ленты по порядку, время ленты: delete{ranges[{from,to}]}, split{at}, move{clip,to}, "
+                + "trim{clip,edge,seconds}, insert{sourcePath,start,end,at}. undo{steps} — отдельным вызовом.",
+            properties: ["projectId": string, "operations": array(operation)],
+            required: ["projectId", "operations"], destructive: true),
     ]
 
     static var estimatedTokenCount: Int {
@@ -159,6 +184,20 @@ enum AgentToolCatalog {
         ]),
         "required": .array([.string("sourcePath"), .string("start"), .string("end")]),
         "additionalProperties": false,
+    ])
+    private static let operation = AgentJSONValue.object([
+        "type": "object",
+        "properties": .object([
+            "op": enumStrings(["delete", "split", "move", "trim", "insert", "undo"]),
+            "ranges": array(
+                .object([
+                    "type": "object", "properties": .object(["from": number, "to": number]),
+                    "required": .array([.string("from"), .string("to")]),
+                ])),
+            "at": number, "clip": integer, "to": integer, "edge": enumStrings(["start", "end"]),
+            "seconds": number, "sourcePath": string, "start": number, "end": number, "steps": integer,
+        ]),
+        "required": .array([.string("op")]),
     ])
     private static let commonEditProperties: [String: AgentJSONValue] = [
         "name": string,

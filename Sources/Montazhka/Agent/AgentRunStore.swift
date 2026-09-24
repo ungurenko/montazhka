@@ -5,6 +5,7 @@ enum AgentRunKind: String, Codable, Sendable {
     case editProject
     case makeShorts
     case export
+    case transcribe
 }
 
 enum AgentRunStatus: String, Codable, Sendable {
