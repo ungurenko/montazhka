@@ -31,6 +31,8 @@ enum ShortsSubtitleSelfTest {
             .appendingPathComponent("montazhka-selftest-fit-black-\(runID).mp4")
         let whiteFitOutput = FileManager.default.temporaryDirectory
             .appendingPathComponent("montazhka-selftest-fit-white-\(runID).mp4")
+        let draftOutput = FileManager.default.temporaryDirectory
+            .appendingPathComponent("montazhka-selftest-draft-\(runID).mp4")
         defer {
             try? FileManager.default.removeItem(at: source)
             try? FileManager.default.removeItem(at: output)
@@ -38,6 +40,7 @@ enum ShortsSubtitleSelfTest {
             try? FileManager.default.removeItem(at: trimmedOutput)
             try? FileManager.default.removeItem(at: blackFitOutput)
             try? FileManager.default.removeItem(at: whiteFitOutput)
+            try? FileManager.default.removeItem(at: draftOutput)
         }
 
         do {
@@ -202,6 +205,24 @@ enum ShortsSubtitleSelfTest {
                     expectedDuration: 2,
                     check: check)
             }
+
+            // Черновик шортса: хук впечатан в верх вертикального MP4 и потом исчезает.
+            var draft = Project(name: "Шортс", clips: [Clip(sourceURL: source, start: 0, end: 4)])
+            draft.shorts = ShortsPresentation(
+                title: "Шортс", reason: "", layout: .fit, resolvedLayout: .fit,
+                hook: ShortsHook(text: "Монтаж за минуту"), subtitles: nil, zooms: [], exportPath: nil)
+            let plan = try await ShortsRenderer.plan(
+                project: draft, words: [], faces: FaceTrackStore(cacheDir: FileManager.default.temporaryDirectory),
+                quality: .compact)
+            try await ShortsRenderer.export(plan, quality: .compact, to: draftOutput) { _ in }
+            let draftAsset = AVURLAsset(url: draftOutput)
+            let draftTrack = try await draftAsset.loadTracks(withMediaType: .video).first
+            let draftSize = try await draftTrack?.load(.naturalSize) ?? .zero
+            let withHook = try image(at: 1, in: draftAsset)
+            let withoutHook = try image(at: 3.5, in: draftAsset)
+            check(
+                draftSize.height > draftSize.width && hasMeaningfulDifference(between: withoutHook, and: withHook),
+                "черновик шортса: вертикальный MP4 с хуком в первые секунды")
         } catch {
             check(false, "экспорт MP4 с автоматическими субтитрами (\(error.localizedDescription))")
         }

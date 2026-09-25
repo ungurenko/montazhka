@@ -106,6 +106,8 @@ struct PreparedExport {
     let composition: AVComposition
     let audioMix: AVAudioMix?
     let warning: String?
+    /// Своя картинка кадра (черновик шортса: вертикаль, надписи). nil — как есть.
+    var videoComposition: AVVideoComposition? = nil
 }
 
 @MainActor
@@ -131,6 +133,14 @@ struct TranscodingVideoExporter: VideoExporting {
         to url: URL,
         progress: @escaping @Sendable (Double) -> Void
     ) async throws {
+        if let videoComposition = prepared.videoComposition {
+            try await Transcoder.export(
+                composed: ExportInput(
+                    composition: prepared.composition, audioMix: prepared.audioMix,
+                    videoComposition: videoComposition),
+                quality: quality, to: url, progress: progress)
+            return
+        }
         let input = ExportInput(composition: prepared.composition, audioMix: prepared.audioMix)
         let settings = try await Transcoder.settings(for: quality, input: input)
         try await Transcoder.export(

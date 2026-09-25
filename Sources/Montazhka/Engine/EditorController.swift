@@ -347,12 +347,29 @@ final class EditorController: ExportPreparing {
     }
 
     func prepareExport() async throws -> PreparedExport {
+        if project.shorts != nil { return try await prepareShortsExport() }
         let result = await compositionForExport()
         return PreparedExport(
             composition: result.composition,
             audioMix: result.audioMix,
             warning: result.audioWarning
         )
+    }
+
+    /// Черновик шортса выгружается так же, как у агента: вертикально, с лицом,
+    /// наездами, хуком и субтитрами.
+    private func prepareShortsExport() async throws -> PreparedExport {
+        let directories = repository.directories
+        let sources = Array(Dictionary(project.clips.map { ($0.source.id, $0.source) }, uniquingKeysWith: { a, _ in a }).values)
+        let words = try await transcriptStore.correctedCachedWords(for: sources, glossaryURL: directories.glossary)
+        let plan = try await ShortsRenderer.plan(
+            project: project, words: words ?? [], faces: FaceTrackStore(cacheDir: directories.faceTracks),
+            quality: .high, voiceStore: VoiceEnhanceStore(cacheDir: directories.enhancedAudio),
+            musicEQStore: MusicEQStore(cacheDir: directories.musicEQ))
+        return PreparedExport(
+            composition: plan.composition, audioMix: plan.audioMix,
+            warning: plan.warnings.isEmpty ? nil : plan.warnings.map(\.message).joined(separator: "\n"),
+            videoComposition: plan.exportComposition)
     }
 
     private func renderComposition(mode: MediaRenderMode) async -> MediaRenderResult {

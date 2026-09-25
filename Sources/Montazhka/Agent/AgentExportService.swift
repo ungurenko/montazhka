@@ -12,8 +12,12 @@ extension AgentService {
             if final && !confirmFinal { throw AgentServiceError.finalApprovalRequired }
             let project = try await store.load(id: projectID)
             guard let first = project.clips.first else { throw AgentServiceError.emptyProject }
+            let draftPath = project.shorts?.exportPath.map(URL.init(fileURLWithPath:))
             let destination =
-                outputPath.map(URL.init(fileURLWithPath:)) ?? Self.defaultOutputURL(source: first.url, final: final)
+                outputPath.map(URL.init(fileURLWithPath:)) ?? draftPath
+                ?? Self.defaultOutputURL(source: first.url, final: final)
+            // Файл черновика шортса перевыгружается после каждой правки — это не чужой файл.
+            let overwrite = overwrite || destination.standardized == draftPath?.standardized
             let sources = Set(project.clips.map { URL(fileURLWithPath: $0.sourcePath).resolvingSymlinksInPath().path })
             if sources.contains(destination.resolvingSymlinksInPath().path) {
                 throw AgentServiceError.invalidInput("Нельзя сохранять результат поверх исходника: \(destination.path)")
@@ -25,17 +29,23 @@ extension AgentService {
                 mode: runMode, kind: .export, sourcePaths: project.clips.map(\.sourcePath),
                 stage: "Экспорт", projectID: project.id)
             activeRunID = run.id
-            let voice = VoiceEnhanceStore(cacheDir: store.enhancedAudioDir)
-            let music = MusicEQStore(cacheDir: store.musicEQDir)
-            let rendered = await MediaPipeline(voiceStore: voice, musicEQStore: music).render(
-                MediaRenderRequest(project: project, mode: .export, readyEnhancedAudio: [:]))
             guard let exportQuality = ExportQuality(rawValue: quality) else {
                 throw AgentServiceError.invalidInput("Неизвестное качество экспорта: \(quality)")
             }
-            let input = ExportInput(composition: rendered.composition, audioMix: rendered.audioMix)
-            let settings = try await Transcoder.settings(for: exportQuality, input: input)
-            try await Transcoder.export(input: input, settings: settings, to: destination) { progress in
+            let progress: @Sendable (Double) -> Void = { progress in
                 Task { try? await self.runs.update(id: run.id) { $0.progress = max($0.progress, progress) } }
+            }
+            if project.shorts != nil {
+                let plan = try await shortsPlan(project, quality: exportQuality)
+                try await ShortsRenderer.export(plan, quality: exportQuality, to: destination, progress: progress)
+            } else {
+                let voice = VoiceEnhanceStore(cacheDir: store.enhancedAudioDir)
+                let music = MusicEQStore(cacheDir: store.musicEQDir)
+                let rendered = await MediaPipeline(voiceStore: voice, musicEQStore: music).render(
+                    MediaRenderRequest(project: project, mode: .export, readyEnhancedAudio: [:]))
+                let input = ExportInput(composition: rendered.composition, audioMix: rendered.audioMix)
+                let settings = try await Transcoder.settings(for: exportQuality, input: input)
+                try await Transcoder.export(input: input, settings: settings, to: destination, progress: progress)
             }
             let actual = try await AVURLAsset(url: destination).load(.duration).seconds
             let matches = abs(actual - project.totalDuration) <= 0.25
@@ -61,6 +71,15 @@ extension AgentService {
             if let activeRunID { await failRun(id: activeRunID, error: error) }
             return failure("export", error)
         }
+    }
+
+    /// План черновика шортса со словами из кэша расшифровки (если она есть).
+    func shortsPlan(_ project: Project, quality: ExportQuality) async throws -> ShortsRenderer.Plan {
+        let words = (try? await cachedTranscriptWords(for: project)) ?? nil
+        return try await ShortsRenderer.plan(
+            project: project, words: words ?? [], faces: FaceTrackStore(cacheDir: store.faceTracksDir),
+            quality: quality, voiceStore: VoiceEnhanceStore(cacheDir: store.enhancedAudioDir),
+            musicEQStore: MusicEQStore(cacheDir: store.musicEQDir))
     }
 
     private static func defaultOutputURL(source: URL, final: Bool) -> URL {

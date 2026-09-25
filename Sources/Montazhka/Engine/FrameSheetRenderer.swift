@@ -26,9 +26,23 @@ enum FrameSheetRenderer {
     private static let labelHeight = 28.0
 
     /// `labels` — подписи к кадрам (по умолчанию время из `times`).
+    /// Кадр с надписями поверх: надписи рисуются в размер кадра.
+    private static func composite(_ frame: CGImage, _ overlay: CGImage) -> CGImage? {
+        let rect = CGRect(x: 0, y: 0, width: frame.width, height: frame.height)
+        guard
+            let context = CGContext(
+                data: nil, width: frame.width, height: frame.height, bitsPerComponent: 8, bytesPerRow: 0,
+                space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+        else { return nil }
+        context.draw(frame, in: rect)
+        context.draw(overlay, in: rect)
+        return context.makeImage()
+    }
+
     static func render(
         asset: AVAsset, videoComposition: AVVideoComposition? = nil,
-        times: [Double], labels: [String]? = nil, to url: URL
+        times: [Double], labels: [String]? = nil, to url: URL,
+        overlayAt: ((Double) -> CGImage?)? = nil
     ) async throws -> (extracted: Int, width: Int, height: Int) {
         let times = Array(times.prefix(maxFrames))
         guard !times.isEmpty else { throw FrameSheetError.noTimes }
@@ -45,7 +59,7 @@ enum FrameSheetRenderer {
         var images: [CGImage?] = []
         for time in times {
             let image = try? await generator.image(at: CMTime(seconds: max(0, time), preferredTimescale: 600)).image
-            images.append(image)
+            images.append(image.map { frame in overlayAt?(time).flatMap { composite(frame, $0) } ?? frame })
         }
         guard let sample = images.compactMap({ $0 }).first else { throw FrameSheetError.noVideo }
         let aspect = Double(sample.height) / Double(max(1, sample.width))

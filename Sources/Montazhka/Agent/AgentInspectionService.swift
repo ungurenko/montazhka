@@ -26,6 +26,7 @@ extension AgentService {
     func frames(_ request: AgentFramesRequest) async -> AgentResponse {
         do {
             var project: Project?
+            var shortsDraft: ShortsRenderer.Plan?
             if let id = request.target.projectID { project = try await store.load(id: id) }
             let asset: AVAsset
             let duration: Double
@@ -36,6 +37,14 @@ extension AgentService {
                 }
                 asset = AVURLAsset(url: url)
                 duration = try await asset.load(.duration).seconds
+            } else if let project, project.shorts != nil {
+                guard !project.clips.isEmpty else { throw AgentServiceError.emptyProject }
+                // Черновик шортса агент видит таким, каким он выйдет: вертикально,
+                // с лицом в кадре, наездами, хуком и субтитрами.
+                let plan = try await shortsPlan(project, quality: .compact)
+                shortsDraft = plan
+                asset = plan.composition
+                duration = project.totalDuration
             } else if let project {
                 guard !project.clips.isEmpty else { throw AgentServiceError.emptyProject }
                 asset = await CompositionBuilder.buildResult(clips: project.clips).composition
@@ -76,7 +85,9 @@ extension AgentService {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             Self.removeOldInspections(in: directory)
             let url = directory.appendingPathComponent("frames-\(UUID().uuidString).jpg")
-            let sheet = try await FrameSheetRenderer.render(asset: asset, times: times, labels: labels, to: url)
+            let sheet = try await FrameSheetRenderer.render(
+                asset: asset, videoComposition: shortsDraft?.frameComposition, times: times, labels: labels,
+                to: url, overlayAt: shortsDraft.map { plan in { plan.overlay(at: $0) } })
             return .success(
                 command: "frames",
                 data: [
@@ -136,21 +147,8 @@ extension AgentService {
     /// Слова исходников проекта (время исходника). Если какой-то исходник ещё
     /// не расшифрован, возвращает nil — расшифровку нужно запустить фоновой задачей.
     func cachedTranscriptWords(for project: Project) async throws -> [TranscriptWord]? {
-        let transcriptStore = makeTranscriptStore()
-        let sources = uniqueSources(project.clips)
-        for source in sources {
-            let cached = await transcriptStore.cacheURL(for: source)
-            guard FileManager.default.fileExists(atPath: cached.path) else { return nil }
-        }
-        let glossary = Glossary.load(from: store.glossaryURL)
-        var words: [TranscriptWord] = []
-        for source in sources {
-            let raw = try await transcriptStore.ensure(source: source)
-            let fixes = TranscriptCorrections.load(
-                from: TranscriptCorrections.url(forTranscript: await transcriptStore.cacheURL(for: source)))
-            words += TranscriptCorrections.apply(fixes, to: glossary.apply(to: raw))
-        }
-        return words
+        try await makeTranscriptStore().correctedCachedWords(
+            for: uniqueSources(project.clips), glossaryURL: store.glossaryURL)
     }
 
     /// Слова во времени ленты.

@@ -12,6 +12,8 @@ struct MediaRenderRequest: Sendable {
     let readyEnhancedAudio: [String: URL]
     /// Участки речи на ленте — для приглушения музыки, если оно включено.
     var speechRanges: [TimelineRange] = []
+    /// Сколько копий видеодорожки собрать (раскладке «экран + лицо» нужны две).
+    var videoCopies = 1
 }
 
 struct MediaRenderResult: @unchecked Sendable {
@@ -57,7 +59,8 @@ actor MediaPipeline {
         let built = await CompositionBuilder.buildResult(
             clips: request.project.clips,
             enhancedAudio: request.project.voiceEnhance.enabled ? enhanced : [:],
-            music: music
+            music: music,
+            videoCopies: request.videoCopies
         )
         warnings.append(contentsOf: built.warnings)
         return MediaRenderResult(

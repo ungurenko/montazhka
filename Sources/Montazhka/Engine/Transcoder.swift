@@ -388,3 +388,20 @@ enum Transcoder {
         }
     }
 }
+
+extension Transcoder {
+    /// Запись со своей видеокомпозицией (черновик шортса): размер кадра задаёт
+    /// композиция, битрейт — качество.
+    static func export(
+        composed input: ExportInput, quality: ExportQuality, to url: URL,
+        progress: @escaping @Sendable (Double) -> Void
+    ) async throws {
+        let dimensions = input.videoComposition?.renderSize ?? .zero
+        try await exportWithOfflineComposition(
+            input: input,
+            settings: Settings(
+                dimensions: dimensions, videoBitrate: quality.videoBitrate(forDimensions: dimensions),
+                audioBitrate: quality.audioBitrate),
+            to: url, progress: progress)
+    }
+}

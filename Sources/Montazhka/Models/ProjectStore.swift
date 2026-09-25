@@ -77,8 +77,8 @@ final class ProjectStore: ProjectRepository, Sendable {
     var modelsDir: URL { directories.models }
     var shortsAnalysisDir: URL { directories.shortsAnalysis }
     /// Словарь терминов для расшифровок (общий для всех проектов).
-    var glossaryURL: URL { baseDirectory.appendingPathComponent("glossary.json") }
-    var faceTracksDir: URL { baseDirectory.appendingPathComponent("FaceTracks", isDirectory: true) }
+    var glossaryURL: URL { directories.glossary }
+    var faceTracksDir: URL { directories.faceTracks }
 
     init(baseDirectory: URL? = nil) {
         let base =

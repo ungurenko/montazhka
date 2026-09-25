@@ -11,6 +11,15 @@ struct ProjectDirectories: Sendable {
     let shortsAnalysis: URL
 }
 
+extension ProjectDirectories {
+    /// Общая папка данных приложения (родитель папки проектов).
+    private var base: URL { projects.deletingLastPathComponent() }
+    /// Словарь терминов для расшифровок.
+    var glossary: URL { base.appendingPathComponent("glossary.json") }
+    /// Кэш найденных лиц для черновиков шортсов.
+    var faceTracks: URL { base.appendingPathComponent("FaceTracks", isDirectory: true) }
+}
+
 /// Единственная точка доступа к проектам. Все операции одного адаптера выполняются
 /// последовательно; чтение видит все ранее запрошенные записи.
 protocol ProjectRepository: Sendable {
