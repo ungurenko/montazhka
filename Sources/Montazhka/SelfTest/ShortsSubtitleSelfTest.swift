@@ -33,6 +33,8 @@ enum ShortsSubtitleSelfTest {
             .appendingPathComponent("montazhka-selftest-fit-white-\(runID).mp4")
         let draftOutput = FileManager.default.temporaryDirectory
             .appendingPathComponent("montazhka-selftest-draft-\(runID).mp4")
+        let timedOutput = FileManager.default.temporaryDirectory
+            .appendingPathComponent("montazhka-selftest-timed-\(runID).mp4")
         defer {
             try? FileManager.default.removeItem(at: source)
             try? FileManager.default.removeItem(at: output)
@@ -41,6 +43,7 @@ enum ShortsSubtitleSelfTest {
             try? FileManager.default.removeItem(at: blackFitOutput)
             try? FileManager.default.removeItem(at: whiteFitOutput)
             try? FileManager.default.removeItem(at: draftOutput)
+            try? FileManager.default.removeItem(at: timedOutput)
         }
 
         do {
@@ -242,11 +245,46 @@ enum ShortsSubtitleSelfTest {
             check(
                 draftSize.height > draftSize.width && hasMeaningfulDifference(between: withoutHook, and: withHook),
                 "черновик шортса: вертикальный MP4 с хуком в первые секунды")
+
+            // Фраза видна только в своё время: между фразами внизу нет текста.
+            var timed = Project(name: "Шортс", clips: [Clip(sourceURL: source, start: 0, end: 4)])
+            let spokenID = timed.clips[0].source.id
+            timed.shorts = ShortsPresentation(
+                title: "Шортс", reason: "", layout: .fit, resolvedLayout: .fit, hook: nil,
+                subtitles: ShortsDraftSubtitles(appearance: ShortsSubtitlePreset.classic.appearance, highlight: false),
+                zooms: [], exportPath: nil)
+            let spoken = [
+                TranscriptWord(sourceID: spokenID, text: "Первая", start: 0.5, end: 1.2, confidence: 1),
+                TranscriptWord(sourceID: spokenID, text: "Вторая", start: 3.0, end: 3.6, confidence: 1),
+            ]
+            let timedPlan = try await ShortsRenderer.plan(
+                project: timed, words: spoken,
+                faces: FaceTrackStore(cacheDir: FileManager.default.temporaryDirectory), quality: .compact)
+            try await ShortsRenderer.export(timedPlan, quality: .compact, to: timedOutput) { _ in }
+            let timedAsset = AVURLAsset(url: timedOutput)
+            let duringPhrase = brightPixels(in: try image(at: 0.8, in: timedAsset), rows: 0.6...1)
+            let betweenPhrases = brightPixels(in: try image(at: 2.2, in: timedAsset), rows: 0.6...1)
+            check(
+                duringPhrase > 20 && betweenPhrases == 0,
+                "фраза видна только в своё время, между фразами кадр чистый")
         } catch {
             check(false, "экспорт MP4 с автоматическими субтитрами (\(error.localizedDescription))")
         }
 
         return failures
+    }
+
+    /// Сколько светлых пикселей (текст, даже полупрозрачный) в полосе `rows` (доли высоты, сверху вниз).
+    private static func brightPixels(in image: CGImage, rows: ClosedRange<Double>) -> Int {
+        let rep = NSBitmapImageRep(cgImage: image)
+        var count = 0
+        for y in Int(Double(image.height) * rows.lowerBound)..<Int(Double(image.height) * rows.upperBound) {
+            for x in stride(from: 0, to: image.width, by: 2) {
+                guard let color = rep.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else { continue }
+                if color.redComponent > 0.6 && color.greenComponent > 0.6 && color.blueComponent > 0.6 { count += 1 }
+            }
+        }
+        return count
     }
 
     /// Есть ли непрозрачные пиксели в полосе `rows` (доли высоты, сверху вниз).

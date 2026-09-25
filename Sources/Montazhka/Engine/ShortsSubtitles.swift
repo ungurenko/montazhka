@@ -839,15 +839,25 @@ enum ShortsSubtitleRenderer {
     ) {
         layer.setValue(visibleFrom, forKey: visibleFromKey)
         layer.setValue(visibleTo, forKey: visibleToKey)
-        let start = min(0.9999, max(0, visibleFrom / duration))
-        let end = min(1, max(start + 0.0001, visibleTo / duration))
-        let fadeStart = max(start, end - fadeOut / duration)
-        let animation = CAKeyframeAnimation(keyPath: "opacity")
-        animation.values = [0, 1, 1, 0, 0]
-        animation.keyTimes = [
-            NSNumber(value: 0), NSNumber(value: start), NSNumber(value: fadeStart),
-            NSNumber(value: end), NSNumber(value: 1),
+        // Жёсткое включение и выключение (или плавное затухание `fadeOut`).
+        // Между ключами прозрачность меняется линейно, поэтому у каждого края
+        // два ключа почти в одной точке — иначе фраза проступала бы с начала ролика.
+        let edge = 0.002 / duration
+        let start = min(1, max(0, visibleFrom / duration))
+        let end = min(1, max(start + edge, visibleTo / duration))
+        let fadeStart = max(start + edge, end - max(edge, fadeOut / duration))
+        let points: [(time: Double, value: Double)] = [
+            (0, start <= 0 ? 1 : 0), (start, start <= 0 ? 1 : 0), (start + edge, 1), (fadeStart, 1), (end, 0), (1, 0),
         ]
+        var keyTimes: [NSNumber] = []
+        var values: [Double] = []
+        for point in points where keyTimes.last.map({ point.time > $0.doubleValue }) ?? true {
+            keyTimes.append(NSNumber(value: min(1, point.time)))
+            values.append(point.value)
+        }
+        let animation = CAKeyframeAnimation(keyPath: "opacity")
+        animation.values = values
+        animation.keyTimes = keyTimes
         animation.duration = duration
         animation.beginTime = AVCoreAnimationBeginTimeAtZero
         animation.isRemovedOnCompletion = false
