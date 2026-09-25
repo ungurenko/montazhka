@@ -152,6 +152,29 @@ struct ShortsDraftFactoryTests {
         #expect(texts.filter { $0 == "возможно" }.count == 1)
     }
 
+    @Test("a softly spoken word inside a long pause stays, the dead air around it goes")
+    func softWordIsKept() throws {
+        let tail = (0..<24).map { index in
+            TranscriptWord(
+                sourceID: media.id, text: "дальше", start: 6.8 + Double(index) * 0.6,
+                end: 7.3 + Double(index) * 0.6, confidence: 1)
+        }
+        let spoken = [
+            TranscriptWord(sourceID: media.id, text: "наоборот.", start: 1.0, end: 1.8, confidence: 1),
+            TranscriptWord(sourceID: media.id, text: "Но", start: 6.3, end: 6.6, confidence: 1),
+        ] + tail
+        // «Но» сказано тихо: по громкости оно неотличимо от тишины 1.8–6.8 с.
+        let peaks = (0..<2500).map { index -> Float in
+            let time = Double(index) / 100
+            return time >= 1.8 && time < 6.8 ? 0.0005 : 0.3
+        }
+        let clips = try draft(
+            [ShortsDraftFactory.Piece(from: 1, to: spoken.count)], words: spoken, trimPauses: true, peaks: peaks)
+        let texts = TranscriptTimelineMapper.make(clips: clips, transcripts: spoken).words.map(\.text)
+        #expect(texts.prefix(2) == ["наоборот.", "Но"])
+        #expect(!clips.contains { $0.start < 4 && $0.end > 4 }, "мёртвый воздух 2–6 с должен вырезаться: \(clips.map { ($0.start, $0.end) })")
+    }
+
     @Test("zooms are pinned to source time of the chosen words")
     func zoomSpans() throws {
         let spoken = words(10)

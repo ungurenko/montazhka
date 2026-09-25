@@ -175,12 +175,21 @@ enum ShortsDraftFactory {
     }
 
     /// Рез не должен задевать слово (по разметке распознавания): иначе слово
-    /// выпадет из субтитров и номеров, хотя в звуке оно есть. Вырезанный
-    /// промежуток сжимается до краёв соседних слов; если слово накрывает его
-    /// целиком — рез отменяется и куски сливаются. Края всего куска
-    /// дотягиваются до краёв крайних слов.
+    /// выпадет из субтитров и номеров, хотя в звуке оно есть. Края вырезанного
+    /// промежутка отодвигаются к краям соседних слов. Слово целиком внутри
+    /// промежутка (сказано тихо, громкость приняла его за тишину) остаётся
+    /// островком, а тишина вокруг него вырезается. Промежутки короче 0,1 с не режутся.
     private static func keepingWordsWhole(_ segments: [ShortsSegment], words: [MappedTranscriptWord]) -> [ShortsSegment] {
+        let minimumCut = 0.1
         var result: [ShortsSegment] = []
+        /// Продолжает последний кусок до `end` или начинает новый с `start`.
+        func add(_ start: Double, _ end: Double) {
+            if let last = result.last, start - last.end < minimumCut {
+                result[result.count - 1] = ShortsSegment(start: last.start, end: max(last.end, end))
+            } else {
+                result.append(ShortsSegment(start: start, end: end))
+            }
+        }
         for segment in segments {
             guard let last = result.last else {
                 result.append(segment)
@@ -189,20 +198,13 @@ enum ShortsDraftFactory {
             var gapStart = last.end
             var gapEnd = segment.start
             for word in words where word.sourceStart < gapEnd && word.sourceEnd > gapStart {
-                if word.sourceStart <= gapStart {
-                    gapStart = max(gapStart, word.sourceEnd)
-                } else if word.sourceEnd >= gapEnd {
-                    gapEnd = min(gapEnd, word.sourceStart)
-                } else {
-                    gapStart = gapEnd
-                }
+                if word.sourceStart <= gapStart { gapStart = max(gapStart, word.sourceEnd) }
+                if word.sourceEnd >= gapEnd { gapEnd = min(gapEnd, word.sourceStart) }
             }
-            if gapEnd - gapStart < 0.1 {
-                result[result.count - 1] = ShortsSegment(start: last.start, end: segment.end)
-            } else {
-                result[result.count - 1] = ShortsSegment(start: last.start, end: gapStart)
-                result.append(ShortsSegment(start: gapEnd, end: segment.end))
-            }
+            result[result.count - 1] = ShortsSegment(start: last.start, end: max(last.end, min(gapStart, segment.end)))
+            let islands = words.filter { $0.sourceStart >= gapStart && $0.sourceEnd <= gapEnd }
+            for word in islands.sorted(by: { $0.sourceStart < $1.sourceStart }) { add(word.sourceStart, word.sourceEnd) }
+            add(max(gapEnd, result[result.count - 1].end), segment.end)
         }
         guard let first = result.first, let last = result.last else { return result }
         if let word = words.first(where: { $0.sourceStart < first.start && $0.sourceEnd > first.start }) {
