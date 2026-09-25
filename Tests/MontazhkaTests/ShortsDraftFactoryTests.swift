@@ -86,10 +86,11 @@ struct ShortsDraftFactoryTests {
                 sourceID: media.id, text: "дальше", start: 7.0 + Double(index) * 0.6,
                 end: 7.5 + Double(index) * 0.6, confidence: 1)
         }
-        let spoken = [
-            TranscriptWord(sourceID: media.id, text: "наоборот.", start: 1.0, end: 1.8, confidence: 1),
-            TranscriptWord(sourceID: media.id, text: "Но", start: 6.3, end: 6.6, confidence: 1),
-        ] + tail
+        let spoken =
+            [
+                TranscriptWord(sourceID: media.id, text: "наоборот.", start: 1.0, end: 1.8, confidence: 1),
+                TranscriptWord(sourceID: media.id, text: "Но", start: 6.3, end: 6.6, confidence: 1),
+            ] + tail
         let peaks = (0..<2500).map { index -> Float in
             let time = Double(index) / 100
             let silent = (time >= 1.8 && time < 4.4) || (time >= 5.0 && time < 6.3)
@@ -99,7 +100,9 @@ struct ShortsDraftFactoryTests {
             [ShortsDraftFactory.Piece(from: 1, to: spoken.count)], words: spoken, trimPauses: true, peaks: peaks,
             removeFillers: true)
         let gap = clips.filter { $0.end > 1.8 && $0.start < 6.3 }
-        #expect(gap.allSatisfy { $0.start <= 1.8 || $0.start >= 6.1 }, "в промежутке без слов не должно остаться кусков: \(clips.map { ($0.start, $0.end) })")
+        #expect(
+            gap.allSatisfy { $0.start <= 1.8 || $0.start >= 6.1 },
+            "в промежутке без слов не должно остаться кусков: \(clips.map { ($0.start, $0.end) })")
         #expect(clips.allSatisfy { $0.duration >= 0.3 })
     }
 
@@ -111,10 +114,11 @@ struct ShortsDraftFactoryTests {
                 sourceID: media.id, text: "дальше", start: 2.6 + Double(index) * 0.6,
                 end: 3.1 + Double(index) * 0.6, confidence: 1)
         }
-        let spoken = [
-            TranscriptWord(sourceID: media.id, text: "скажу", start: 1.0, end: 1.5, confidence: 1),
-            TranscriptWord(sourceID: media.id, text: "возможно", start: 2.0, end: 2.5, confidence: 1),
-        ] + tail
+        let spoken =
+            [
+                TranscriptWord(sourceID: media.id, text: "скажу", start: 1.0, end: 1.5, confidence: 1),
+                TranscriptWord(sourceID: media.id, text: "возможно", start: 2.0, end: 2.5, confidence: 1),
+            ] + tail
         // Слово «возможно» звучит позже, чем его отметило распознавание: тишина до 2.15 с.
         let peaks = (0..<2000).map { index -> Float in
             let time = Double(index) / 100
@@ -135,10 +139,11 @@ struct ShortsDraftFactoryTests {
                 end: 3.1 + Double(index) * 0.6, confidence: 1)
         }
         // Распознавание растянуло «возможно» на тишину 1.5–2.15 с внутри слова.
-        let spoken = [
-            TranscriptWord(sourceID: media.id, text: "скажу", start: 1.0, end: 1.5, confidence: 1),
-            TranscriptWord(sourceID: media.id, text: "возможно", start: 1.55, end: 2.5, confidence: 1),
-        ] + tail
+        let spoken =
+            [
+                TranscriptWord(sourceID: media.id, text: "скажу", start: 1.0, end: 1.5, confidence: 1),
+                TranscriptWord(sourceID: media.id, text: "возможно", start: 1.55, end: 2.5, confidence: 1),
+            ] + tail
         let peaks = (0..<2000).map { index -> Float in
             let time = Double(index) / 100
             return time >= 1.5 && time < 2.15 ? 0.0005 : 0.3
@@ -159,10 +164,11 @@ struct ShortsDraftFactoryTests {
                 sourceID: media.id, text: "дальше", start: 6.8 + Double(index) * 0.6,
                 end: 7.3 + Double(index) * 0.6, confidence: 1)
         }
-        let spoken = [
-            TranscriptWord(sourceID: media.id, text: "наоборот.", start: 1.0, end: 1.8, confidence: 1),
-            TranscriptWord(sourceID: media.id, text: "Но", start: 6.3, end: 6.6, confidence: 1),
-        ] + tail
+        let spoken =
+            [
+                TranscriptWord(sourceID: media.id, text: "наоборот.", start: 1.0, end: 1.8, confidence: 1),
+                TranscriptWord(sourceID: media.id, text: "Но", start: 6.3, end: 6.6, confidence: 1),
+            ] + tail
         // «Но» сказано тихо: по громкости оно неотличимо от тишины 1.8–6.8 с.
         let peaks = (0..<2500).map { index -> Float in
             let time = Double(index) / 100
@@ -172,7 +178,9 @@ struct ShortsDraftFactoryTests {
             [ShortsDraftFactory.Piece(from: 1, to: spoken.count)], words: spoken, trimPauses: true, peaks: peaks)
         let texts = TranscriptTimelineMapper.make(clips: clips, transcripts: spoken).words.map(\.text)
         #expect(texts.prefix(2) == ["наоборот.", "Но"])
-        #expect(!clips.contains { $0.start < 4 && $0.end > 4 }, "мёртвый воздух 2–6 с должен вырезаться: \(clips.map { ($0.start, $0.end) })")
+        #expect(
+            !clips.contains { $0.start < 4 && $0.end > 4 },
+            "мёртвый воздух 2–6 с должен вырезаться: \(clips.map { ($0.start, $0.end) })")
     }
 
     @Test("a piece over several project clips never brings back what the user cut")
@@ -189,7 +197,9 @@ struct ShortsDraftFactoryTests {
         let clips = try ShortsDraftFactory.clips(
             for: [ShortsDraftFactory.Piece(from: 1, to: 2)], map: map, clips: project, peaksFor: { _ in [] },
             sourceDuration: { _ in 12 }, thresholdDB: -40, trimPauses: false, removeFillers: false)
-        #expect(!clips.contains { $0.start < 5.4 && $0.end > 5.0 }, "вырезанное вернулось: \(clips.map { ($0.start, $0.end) })")
+        #expect(
+            !clips.contains { $0.start < 5.4 && $0.end > 5.0 },
+            "вырезанное вернулось: \(clips.map { ($0.start, $0.end) })")
         for (a, b) in zip(clips, clips.dropFirst()) { #expect(b.start >= a.end) }
     }
 

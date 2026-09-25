@@ -360,7 +360,8 @@ final class EditorController: ExportPreparing {
     /// наездами, хуком и субтитрами.
     private func prepareShortsExport() async throws -> PreparedExport {
         let directories = repository.directories
-        let sources = Array(Dictionary(project.clips.map { ($0.source.id, $0.source) }, uniquingKeysWith: { a, _ in a }).values)
+        let sources = Array(
+            Dictionary(project.clips.map { ($0.source.id, $0.source) }, uniquingKeysWith: { a, _ in a }).values)
         let words = try await transcriptStore.correctedCachedWords(for: sources, glossaryURL: directories.glossary)
         let plan = try await ShortsRenderer.plan(
             project: project, words: words ?? [], faces: FaceTrackStore(cacheDir: directories.faceTracks),

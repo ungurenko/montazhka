@@ -325,7 +325,8 @@ private struct AgentMCPServer {
                 return .failure(
                     command: "make_shorts", code: "INVALID_REQUEST",
                     message: "Не удалось разобрать запрос: \(error.localizedDescription)",
-                    recovery: "Нужны projectId, timeline из montazhka_transcript и shorts: [{title, pieces: [{from, to}]}].")
+                    recovery:
+                        "Нужны projectId, timeline из montazhka_transcript и shorts: [{title, pieces: [{from, to}]}].")
             }
             // Пустой список не запускает фоновую задачу: сразу объясняем, что делать.
             guard !request.shorts.isEmpty else { return await service.makeShorts(request) }

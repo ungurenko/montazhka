@@ -135,9 +135,12 @@ enum ShortsDraftFactory {
         }
         sentences.append(current)
         let wanted = max(1, Int(total / 15))
-        return sentences
+        return
+            sentences
             .filter { $0.count >= 4 && ($0.first?.timelineStart ?? 0) >= notBefore }
-            .sorted { ($0.last!.timelineEnd - $0.first!.timelineStart) > ($1.last!.timelineEnd - $1.first!.timelineStart) }
+            .sorted {
+                ($0.last!.timelineEnd - $0.first!.timelineStart) > ($1.last!.timelineEnd - $1.first!.timelineStart)
+            }
             .prefix(wanted)
             .sorted { $0.first!.timelineStart < $1.first!.timelineStart }
             .map {
@@ -150,7 +153,8 @@ enum ShortsDraftFactory {
     /// Музыка черновика: трек по id, по настроению или без музыки.
     static func music(track: String?, mood: String?, variant: Int) -> MusicSettings {
         if track == "none" { return MusicSettings(enabled: false) }
-        let chosen = track.flatMap(MusicLibrary.track(id:)) ?? MusicLibrary.pick(mood: mood ?? "neutral", variant: variant)
+        let chosen =
+            track.flatMap(MusicLibrary.track(id:)) ?? MusicLibrary.pick(mood: mood ?? "neutral", variant: variant)
         guard let chosen else { return MusicSettings(enabled: false) }
         return MusicSettings(enabled: true, trackID: chosen.id, volume: musicVolume, eqEnabled: true, ducking: true)
     }
@@ -184,7 +188,8 @@ enum ShortsDraftFactory {
     /// промежутка отодвигаются к краям соседних слов. Слово целиком внутри
     /// промежутка (сказано тихо, громкость приняла его за тишину) остаётся
     /// островком, а тишина вокруг него вырезается. Промежутки короче 0,1 с не режутся.
-    private static func keepingWordsWhole(_ segments: [ShortsSegment], words: [MappedTranscriptWord]) -> [ShortsSegment] {
+    private static func keepingWordsWhole(_ segments: [ShortsSegment], words: [MappedTranscriptWord]) -> [ShortsSegment]
+    {
         let minimumCut = 0.1
         var result: [ShortsSegment] = []
         /// Продолжает последний кусок до `end` или начинает новый с `start`.
@@ -208,7 +213,9 @@ enum ShortsDraftFactory {
             }
             result[result.count - 1] = ShortsSegment(start: last.start, end: max(last.end, min(gapStart, segment.end)))
             let islands = words.filter { $0.sourceStart >= gapStart && $0.sourceEnd <= gapEnd }
-            for word in islands.sorted(by: { $0.sourceStart < $1.sourceStart }) { add(word.sourceStart, word.sourceEnd) }
+            for word in islands.sorted(by: { $0.sourceStart < $1.sourceStart }) {
+                add(word.sourceStart, word.sourceEnd)
+            }
             add(max(gapEnd, result[result.count - 1].end), segment.end)
         }
         guard let first = result.first, let last = result.last else { return result }
@@ -228,8 +235,10 @@ enum ShortsDraftFactory {
     ) -> [ShortsSegment] {
         let kept = segments.filter { segment in
             segment.duration >= ShortsLimits.minSegmentDuration
-                || words.contains { ($0.sourceStart + $0.sourceEnd) / 2 >= segment.start
-                    && ($0.sourceStart + $0.sourceEnd) / 2 <= segment.end }
+                || words.contains {
+                    ($0.sourceStart + $0.sourceEnd) / 2 >= segment.start
+                        && ($0.sourceStart + $0.sourceEnd) / 2 <= segment.end
+                }
         }
         return kept.isEmpty ? segments : kept
     }

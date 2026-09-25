@@ -107,7 +107,8 @@ enum ShortsCameraPlanner {
     /// `normalized` — поворот дорожки, приведённый к началу координат.
     static func transform(crop: CGRect, into region: CGRect, normalized: CGAffineTransform) -> CGAffineTransform {
         let scale = region.width / max(1, crop.width)
-        return normalized
+        return
+            normalized
             .concatenating(CGAffineTransform(translationX: -crop.minX, y: -crop.minY))
             .concatenating(CGAffineTransform(scaleX: scale, y: scale))
             .concatenating(CGAffineTransform(translationX: region.minX, y: region.minY))

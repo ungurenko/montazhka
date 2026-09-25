@@ -153,7 +153,8 @@ extension TranscriptStore {
         let glossary = Glossary.load(from: glossaryURL)
         var words: [TranscriptWord] = []
         for source in sources {
-            let fixes = TranscriptCorrections.load(from: TranscriptCorrections.url(forTranscript: cacheURL(for: source)))
+            let fixes = TranscriptCorrections.load(
+                from: TranscriptCorrections.url(forTranscript: cacheURL(for: source)))
             words += TranscriptCorrections.apply(fixes, to: glossary.apply(to: try await ensure(source: source)))
         }
         return words

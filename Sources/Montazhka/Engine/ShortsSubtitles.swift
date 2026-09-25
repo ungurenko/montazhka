@@ -395,7 +395,8 @@ enum ShortsSubtitleCueBuilder {
     /// клипа завершает фразу, поэтому порядок клипов после перестановки не важен.
     /// `notBefore` — субтитры не показываются, пока на экране хук.
     static func make(mapped words: [MappedTranscriptWord], notBefore: Double) -> [ShortsSubtitleCue] {
-        let placed = words
+        let placed =
+            words
             .filter { $0.timelineStart >= notBefore && $0.timelineEnd > $0.timelineStart }
             .sorted { $0.timelineStart < $1.timelineStart }
             .compactMap { word -> (ShortsSubtitleWord, AnyHashable)? in
@@ -595,7 +596,8 @@ enum ShortsSubtitleRenderer {
         }
         let textLayout = ShortsSubtitleTextWrapper.wrap(text, font: font, maxWidth: maxTextWidth())
         let verticalPadding = fontSize * ShortsSubtitleLayout.verticalPaddingScale
-        let height = ShortsSubtitleLayout.lineHeight(for: font) * CGFloat(textLayout.lineCount)
+        let height =
+            ShortsSubtitleLayout.lineHeight(for: font) * CGFloat(textLayout.lineCount)
             + verticalPadding * 2
         let width = renderSize.width * ShortsSubtitleLayout.widthRatio
         let frame = CGRect(

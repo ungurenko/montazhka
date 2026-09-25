@@ -16,14 +16,16 @@ struct FillerDetectorTests {
     @Test("a voiced gap between words is found")
     func findsHum() throws {
         let span = try #require(
-            FillerDetector.voicedSpan(from: 0.8, to: 1.6, peaks: peaks(seconds: 3, loud: [1.0...1.4]), thresholdDB: -40))
+            FillerDetector.voicedSpan(from: 0.8, to: 1.6, peaks: peaks(seconds: 3, loud: [1.0...1.4]), thresholdDB: -40)
+        )
         #expect(abs(span.lowerBound - 1.0) < 0.02)
         #expect(abs(span.upperBound - 1.4) < 0.03)
     }
 
     @Test("a quiet pause is not a filler")
     func silenceIsNotHum() {
-        #expect(FillerDetector.voicedSpan(from: 0.8, to: 1.6, peaks: peaks(seconds: 3, loud: []), thresholdDB: -40) == nil)
+        #expect(
+            FillerDetector.voicedSpan(from: 0.8, to: 1.6, peaks: peaks(seconds: 3, loud: []), thresholdDB: -40) == nil)
     }
 
     @Test("a click shorter than a quarter second is ignored")
@@ -54,7 +56,8 @@ struct FillerDetectorTests {
             TranscriptWord(sourceID: media.id, text: "начнём", start: 1.4, end: 2.0, confidence: 1),
         ]
         let cacheURL = await service.makeTranscriptStore().cacheURL(for: media)
-        try FileManager.default.createDirectory(at: cacheURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(
+            at: cacheURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         try JSONEncoder().encode(TranscriptDocument(words: spoken)).write(to: cacheURL)
 
         let transcript = await service.transcript(projectID: project.id, from: nil, to: nil)

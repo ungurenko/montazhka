@@ -126,42 +126,7 @@ enum ShortsSubtitleSelfTest {
             }
             check(everyVariantHasLayer, "все образы и размеры создают слой субтитров")
 
-            let canvas = CGSize(width: 360, height: 640)
-            let hook = ShortsHook(text: "Монтаж за минуту")
-            let hookStill = ShortsOverlaySnapshot.image(
-                at: 1, renderSize: canvas, cues: [], appearance: appearance, highlight: false, hook: hook)
-            let afterHook = ShortsOverlaySnapshot.image(
-                at: 5, renderSize: canvas, cues: [], appearance: appearance, highlight: false, hook: hook)
-            check(
-                hookStill.map { hasInk($0, rows: 0...0.3) } == true
-                    && afterHook.map { hasInk($0, rows: 0...0.3) } == false,
-                "хук виден сверху первые секунды и потом исчезает")
-            // Текст рисуется целиком для каждого образа: подпись без подложки видна,
-            // у хука из трёх строк есть третья строка.
-            var everyPresetDrawsText = true
-            for preset in ShortsSubtitlePreset.allCases where preset.appearance.background != .plate {
-                let phrase = ShortsSubtitleCue(
-                    words: [ShortsSubtitleWord(text: "Привет мир", start: 3, end: 4)], start: 3, end: 4)
-                let caption = ShortsOverlaySnapshot.image(
-                    at: 3.5, renderSize: canvas, cues: [phrase], appearance: preset.appearance,
-                    highlight: false, hook: nil)
-                let longHook = ShortsOverlaySnapshot.image(
-                    at: 1, renderSize: canvas, cues: [], appearance: preset.appearance, highlight: false,
-                    hook: ShortsHook(text: "Claude щедрее ChatGPT по лимитам?"))
-                if caption.map({ hasInk($0, rows: 0.5...1) }) != true
-                    || longHook.map({ hasInk($0, rows: 0.2...0.27) }) != true
-                {
-                    everyPresetDrawsText = false
-                }
-            }
-            check(everyPresetDrawsText, "текст подписи и все строки хука видны в каждом образе")
-            let cue = ShortsSubtitleCue(
-                words: [ShortsSubtitleWord(text: "Привет", start: 3, end: 4)], start: 3, end: 4)
-            let cueStill = ShortsOverlaySnapshot.image(
-                at: 3.5, renderSize: canvas, cues: [cue], appearance: appearance, highlight: true, hook: nil)
-            check(
-                cueStill.map { hasInk($0, rows: 0.6...1) && !hasInk($0, rows: 0...0.5) } == true,
-                "снимок надписей показывает фразу внизу кадра")
+            checkOverlayStills(appearance: appearance, check: check)
 
             let candidate = ShortCandidate(
                 id: UUID(), rank: 1, title: "Проверка субтитров", reason: "", hook: "",
@@ -228,50 +193,101 @@ enum ShortsSubtitleSelfTest {
                     check: check)
             }
 
-            // Черновик шортса: хук впечатан в верх вертикального MP4 и потом исчезает.
-            var draft = Project(name: "Шортс", clips: [Clip(sourceURL: source, start: 0, end: 4)])
-            draft.shorts = ShortsPresentation(
-                title: "Шортс", reason: "", layout: .fit, resolvedLayout: .fit,
-                hook: ShortsHook(text: "Монтаж за минуту"), subtitles: nil, zooms: [], exportPath: nil)
-            let plan = try await ShortsRenderer.plan(
-                project: draft, words: [], faces: FaceTrackStore(cacheDir: FileManager.default.temporaryDirectory),
-                quality: .compact)
-            try await ShortsRenderer.export(plan, quality: .compact, to: draftOutput) { _ in }
-            let draftAsset = AVURLAsset(url: draftOutput)
-            let draftTrack = try await draftAsset.loadTracks(withMediaType: .video).first
-            let draftSize = try await draftTrack?.load(.naturalSize) ?? .zero
-            let withHook = try image(at: 1, in: draftAsset)
-            let withoutHook = try image(at: 3.5, in: draftAsset)
-            check(
-                draftSize.height > draftSize.width && hasMeaningfulDifference(between: withoutHook, and: withHook),
-                "черновик шортса: вертикальный MP4 с хуком в первые секунды")
-
-            // Фраза видна только в своё время: между фразами внизу нет текста.
-            var timed = Project(name: "Шортс", clips: [Clip(sourceURL: source, start: 0, end: 4)])
-            let spokenID = timed.clips[0].source.id
-            timed.shorts = ShortsPresentation(
-                title: "Шортс", reason: "", layout: .fit, resolvedLayout: .fit, hook: nil,
-                subtitles: ShortsDraftSubtitles(appearance: ShortsSubtitlePreset.classic.appearance, highlight: false),
-                zooms: [], exportPath: nil)
-            let spoken = [
-                TranscriptWord(sourceID: spokenID, text: "Первая", start: 0.5, end: 1.2, confidence: 1),
-                TranscriptWord(sourceID: spokenID, text: "Вторая", start: 3.0, end: 3.6, confidence: 1),
-            ]
-            let timedPlan = try await ShortsRenderer.plan(
-                project: timed, words: spoken,
-                faces: FaceTrackStore(cacheDir: FileManager.default.temporaryDirectory), quality: .compact)
-            try await ShortsRenderer.export(timedPlan, quality: .compact, to: timedOutput) { _ in }
-            let timedAsset = AVURLAsset(url: timedOutput)
-            let duringPhrase = brightPixels(in: try image(at: 0.8, in: timedAsset), rows: 0.6...1)
-            let betweenPhrases = brightPixels(in: try image(at: 2.2, in: timedAsset), rows: 0.6...1)
-            check(
-                duringPhrase > 20 && betweenPhrases == 0,
-                "фраза видна только в своё время, между фразами кадр чистый")
+            try await checkDraftExports(
+                source: source, draftOutput: draftOutput, timedOutput: timedOutput, check: check)
         } catch {
             check(false, "экспорт MP4 с автоматическими субтитрами (\(error.localizedDescription))")
         }
 
         return failures
+    }
+
+    /// Неподвижные снимки надписей: хук сверху и только первые секунды, текст
+    /// каждого образа виден, фраза стоит внизу.
+    private static func checkOverlayStills(
+        appearance: ShortsSubtitleAppearance, check: (Bool, String) -> Void
+    ) {
+        let canvas = CGSize(width: 360, height: 640)
+        let hook = ShortsHook(text: "Монтаж за минуту")
+        let hookStill = ShortsOverlaySnapshot.image(
+            at: 1, renderSize: canvas, cues: [], appearance: appearance, highlight: false, hook: hook)
+        let afterHook = ShortsOverlaySnapshot.image(
+            at: 5, renderSize: canvas, cues: [], appearance: appearance, highlight: false, hook: hook)
+        check(
+            hookStill.map { hasInk($0, rows: 0...0.3) } == true
+                && afterHook.map { hasInk($0, rows: 0...0.3) } == false,
+            "хук виден сверху первые секунды и потом исчезает")
+        // Текст рисуется целиком для каждого образа: подпись без подложки видна,
+        // у хука из трёх строк есть третья строка.
+        var everyPresetDrawsText = true
+        for preset in ShortsSubtitlePreset.allCases where preset.appearance.background != .plate {
+            let phrase = ShortsSubtitleCue(
+                words: [ShortsSubtitleWord(text: "Привет мир", start: 3, end: 4)], start: 3, end: 4)
+            let caption = ShortsOverlaySnapshot.image(
+                at: 3.5, renderSize: canvas, cues: [phrase], appearance: preset.appearance,
+                highlight: false, hook: nil)
+            let longHook = ShortsOverlaySnapshot.image(
+                at: 1, renderSize: canvas, cues: [], appearance: preset.appearance, highlight: false,
+                hook: ShortsHook(text: "Claude щедрее ChatGPT по лимитам?"))
+            if caption.map({ hasInk($0, rows: 0.5...1) }) != true
+                || longHook.map({ hasInk($0, rows: 0.2...0.27) }) != true
+            {
+                everyPresetDrawsText = false
+            }
+        }
+        check(everyPresetDrawsText, "текст подписи и все строки хука видны в каждом образе")
+        let cue = ShortsSubtitleCue(
+            words: [ShortsSubtitleWord(text: "Привет", start: 3, end: 4)], start: 3, end: 4)
+        let cueStill = ShortsOverlaySnapshot.image(
+            at: 3.5, renderSize: canvas, cues: [cue], appearance: appearance, highlight: true, hook: nil)
+        check(
+            cueStill.map { hasInk($0, rows: 0.6...1) && !hasInk($0, rows: 0...0.5) } == true,
+            "снимок надписей показывает фразу внизу кадра")
+    }
+
+    /// Черновик шортса целиком: вертикальный MP4 с хуком, фраза только в своё время.
+    private static func checkDraftExports(
+        source: URL, draftOutput: URL, timedOutput: URL, check: (Bool, String) -> Void
+    ) async throws {
+        // Черновик шортса: хук впечатан в верх вертикального MP4 и потом исчезает.
+        var draft = Project(name: "Шортс", clips: [Clip(sourceURL: source, start: 0, end: 4)])
+        draft.shorts = ShortsPresentation(
+            title: "Шортс", reason: "", layout: .fit, resolvedLayout: .fit,
+            hook: ShortsHook(text: "Монтаж за минуту"), subtitles: nil, zooms: [], exportPath: nil)
+        let plan = try await ShortsRenderer.plan(
+            project: draft, words: [], faces: FaceTrackStore(cacheDir: FileManager.default.temporaryDirectory),
+            quality: .compact)
+        try await ShortsRenderer.export(plan, quality: .compact, to: draftOutput) { _ in }
+        let draftAsset = AVURLAsset(url: draftOutput)
+        let draftTrack = try await draftAsset.loadTracks(withMediaType: .video).first
+        let draftSize = try await draftTrack?.load(.naturalSize) ?? .zero
+        let withHook = try image(at: 1, in: draftAsset)
+        let withoutHook = try image(at: 3.5, in: draftAsset)
+        check(
+            draftSize.height > draftSize.width && hasMeaningfulDifference(between: withoutHook, and: withHook),
+            "черновик шортса: вертикальный MP4 с хуком в первые секунды")
+
+        // Фраза видна только в своё время: между фразами внизу нет текста.
+        var timed = Project(name: "Шортс", clips: [Clip(sourceURL: source, start: 0, end: 4)])
+        let spokenID = timed.clips[0].source.id
+        timed.shorts = ShortsPresentation(
+            title: "Шортс", reason: "", layout: .fit, resolvedLayout: .fit, hook: nil,
+            subtitles: ShortsDraftSubtitles(appearance: ShortsSubtitlePreset.classic.appearance, highlight: false),
+            zooms: [], exportPath: nil)
+        let spoken = [
+            TranscriptWord(sourceID: spokenID, text: "Первая", start: 0.5, end: 1.2, confidence: 1),
+            TranscriptWord(sourceID: spokenID, text: "Вторая", start: 3.0, end: 3.6, confidence: 1),
+        ]
+        let timedPlan = try await ShortsRenderer.plan(
+            project: timed, words: spoken,
+            faces: FaceTrackStore(cacheDir: FileManager.default.temporaryDirectory), quality: .compact)
+        try await ShortsRenderer.export(timedPlan, quality: .compact, to: timedOutput) { _ in }
+        let timedAsset = AVURLAsset(url: timedOutput)
+        let duringPhrase = brightPixels(in: try image(at: 0.8, in: timedAsset), rows: 0.6...1)
+        let betweenPhrases = brightPixels(in: try image(at: 2.2, in: timedAsset), rows: 0.6...1)
+        check(
+            duringPhrase > 20 && betweenPhrases == 0,
+            "фраза видна только в своё время, между фразами кадр чистый")
     }
 
     /// Сколько светлых пикселей (текст, даже полупрозрачный) в полосе `rows` (доли высоты, сверху вниз).

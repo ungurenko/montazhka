@@ -73,10 +73,13 @@ struct TranscriptCorrectionTests {
         let project = Project(name: "Термины", clips: [Clip(source: media, start: 0, end: 4)])
         try await service.store.save(project)
         let spoken = ["вот", "мой", "вайб", "кодинг"].enumerated().map { index, text in
-            TranscriptWord(sourceID: media.id, text: text, start: Double(index) * 0.8, end: Double(index) * 0.8 + 0.5, confidence: 1)
+            TranscriptWord(
+                sourceID: media.id, text: text, start: Double(index) * 0.8, end: Double(index) * 0.8 + 0.5,
+                confidence: 1)
         }
         let cacheURL = await service.makeTranscriptStore().cacheURL(for: media)
-        try FileManager.default.createDirectory(at: cacheURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(
+            at: cacheURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         try JSONEncoder().encode(TranscriptDocument(words: spoken)).write(to: cacheURL)
 
         var fix = AgentEditOperation(op: "fixWords")

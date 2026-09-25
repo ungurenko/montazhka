@@ -118,9 +118,12 @@ actor FaceTrackStore {
 
     /// Выборки по сетке `step` внутри `ranges` (секунды исходника, края включены).
     func samples(for source: URL, ranges: [ClosedRange<Double>]) async throws -> [FaceSample] {
-        let slots = Set(ranges.flatMap { range in
-            Int((max(0, range.lowerBound) / Self.step).rounded(.down))...Int((range.upperBound / Self.step).rounded(.up))
-        })
+        let slots = Set(
+            ranges.flatMap { range in
+                Int(
+                    (max(0, range.lowerBound) / Self.step).rounded(.down))...Int(
+                        (range.upperBound / Self.step).rounded(.up))
+            })
         let cacheURL = cacheURL(for: source)
         var cache = (try? JSONDecoder().decode(Cache.self, from: Data(contentsOf: cacheURL))) ?? Cache(samples: [:])
         let missing = slots.filter { cache.samples[$0] == nil }.sorted()
@@ -144,7 +147,9 @@ actor FaceTrackStore {
         generator.requestedTimeToleranceAfter = tolerance
 
         var result: [Int: CGRect?] = [:]
-        let times = slots.map { CMTime(seconds: min(Double($0) * Self.step, max(0, duration - 0.05)), preferredTimescale: 600) }
+        let times = slots.map {
+            CMTime(seconds: min(Double($0) * Self.step, max(0, duration - 0.05)), preferredTimescale: 600)
+        }
         for await item in generator.images(for: times) {
             try Task.checkCancellation()
             let slot = slots[times.firstIndex(of: item.requestedTime) ?? 0]

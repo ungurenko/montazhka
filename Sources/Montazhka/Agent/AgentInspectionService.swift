@@ -200,7 +200,8 @@ extension AgentService {
                         // Звук без слов: скорее всего «эээ». Время — на ленте.
                         let shift = word.timelineStart - word.sourceStart
                         lines.append(
-                            "--- звук без слов \(Self.format(hum.lowerBound + shift))–\(Self.format(hum.upperBound + shift)) ---")
+                            "--- звук без слов \(Self.format(hum.lowerBound + shift))–\(Self.format(hum.upperBound + shift)) ---"
+                        )
                     } else if gap >= 0.4 {
                         lines.append("--- пауза \(String(format: "%.1f", gap)) с ---")
                     }

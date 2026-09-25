@@ -147,7 +147,9 @@ extension AgentService {
                 "Длительность \(String(format: "%.1f", draft.totalDuration)) с — вне 12–60 с для Reels и Shorts.")
         }
         if draft.shorts?.resolvedLayout == .split,
-            plan.frameComposition.instructions.first.map({ ($0 as? AVVideoCompositionInstruction)?.layerInstructions.count }) == 1
+            plan.frameComposition.instructions.first.map({
+                ($0 as? AVVideoCompositionInstruction)?.layerInstructions.count
+            }) == 1
         {
             warnings.append("Лицо для раскладки «экран + лицо» не найдено — показан обычный кадр по лицу.")
         }

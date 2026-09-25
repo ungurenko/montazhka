@@ -78,8 +78,11 @@ enum ShortsRenderer {
             ? [] : ShortsSubtitleCueBuilder.make(mapped: mapped, notBefore: hook?.duration ?? 0)
         let appearance = shorts.subtitles?.appearance ?? ShortsSubtitleSettings.saved().appearance
         let highlight = shorts.subtitles?.highlight ?? false
+        guard let exportBase = frame.mutableCopy() as? AVMutableVideoComposition else {
+            throw ShortsVideoCompositionError.invalidVideoTrack
+        }
         let export = ShortsSubtitleRenderer.applying(
-            frame.mutableCopy() as! AVMutableVideoComposition, cues: cues, appearance: appearance,
+            exportBase, cues: cues, appearance: appearance,
             highlight: highlight, duration: project.totalDuration, hook: hook)
         return Plan(
             composition: rendered.composition, audioMix: rendered.audioMix, exportComposition: export,

@@ -33,7 +33,8 @@ struct AgentShortsTests {
         try FileManager.default.createDirectory(
             at: cacheURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         try JSONEncoder().encode(TranscriptDocument(words: words)).write(to: cacheURL)
-        return Fixture(root: root, service: service, project: project, timeline: AgentWordCuts.fingerprint(project.clips))
+        return Fixture(
+            root: root, service: service, project: project, timeline: AgentWordCuts.fingerprint(project.clips))
     }
 
     private func spec(_ pieces: [ShortsDraftFactory.Piece], zooms: [AgentWordRange]? = []) -> ShortsDraftFactory.Spec {
@@ -64,7 +65,8 @@ struct AgentShortsTests {
         #expect(draft.music.enabled && draft.music.ducking)
         #expect(draft.voiceEnhance.enabled)
         #expect(draft.shorts?.exportPath == output)
-        let track = try #require(try await AVURLAsset(url: URL(fileURLWithPath: output)).loadTracks(withMediaType: .video).first)
+        let track = try #require(
+            try await AVURLAsset(url: URL(fileURLWithPath: output)).loadTracks(withMediaType: .video).first)
         let size = try await track.load(.naturalSize)
         #expect(size.height > size.width)
     }
@@ -173,7 +175,8 @@ struct AgentShortsTests {
         var draft = fixture.project
         draft.shorts = ShortsPresentation(
             title: "Шортс", reason: "", layout: .auto, resolvedLayout: .split, hook: ShortsHook(text: "Хук"),
-            subtitles: nil, zooms: [ShortsZoom(sourceID: draft.clips[0].source.id, sourceStart: 2, sourceEnd: 4, scale: 1.08)],
+            subtitles: nil,
+            zooms: [ShortsZoom(sourceID: draft.clips[0].source.id, sourceStart: 2, sourceEnd: 4, scale: 1.08)],
             exportPath: "/tmp/x.mp4")
         draft.music = ShortsDraftFactory.music(track: nil, mood: "calm", variant: 0)
         try await fixture.service.store.save(draft)

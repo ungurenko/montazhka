@@ -1,6 +1,6 @@
 @preconcurrency import AVFoundation
-import CoreText
 import CoreImage
+import CoreText
 import Foundation
 import ImageIO
 import UniformTypeIdentifiers

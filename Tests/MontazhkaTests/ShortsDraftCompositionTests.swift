@@ -6,7 +6,8 @@ import Testing
 
 @Suite("Shorts draft video composition")
 struct ShortsDraftCompositionTests {
-    private func build(layout: ShortsDraftLayout) async throws -> (AVMutableComposition, AVMutableVideoComposition, URL) {
+    private func build(layout: ShortsDraftLayout) async throws -> (AVMutableComposition, AVMutableVideoComposition, URL)
+    {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let video = root.appendingPathComponent("talk.mov")
