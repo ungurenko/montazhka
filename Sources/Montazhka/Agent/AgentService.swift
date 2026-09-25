@@ -173,7 +173,17 @@ actor AgentService {
                 "modelPath": model.map { .string($0.path) } ?? .null,
                 "projectsDirectory": .string(store.projectsDir.path),
                 "catalogTokens": .number(Double(AgentToolCatalog.estimatedTokenCount)),
+                "music": .array(MusicLibrary.tracks.map(Self.musicData)),
             ])
+    }
+
+    /// Трек для выбора музыки агентом: id и то, что известно о настроении.
+    private static func musicData(_ track: MusicTrack) -> AgentJSONValue {
+        var data: [String: AgentJSONValue] = ["id": .string(track.id)]
+        if let mood = track.mood { data["mood"] = .string(mood) }
+        if let energy = track.energy { data["energy"] = .number(Double(energy)) }
+        if let bpm = track.bpm { data["bpm"] = .number(Double(bpm)) }
+        return .object(data)
     }
 
     func projects(id: UUID? = nil, offset: Int = 0, limit: Int = 20) async -> AgentResponse {

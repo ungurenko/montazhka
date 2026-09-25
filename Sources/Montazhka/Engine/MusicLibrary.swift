@@ -6,12 +6,41 @@ struct MusicTrack: Identifiable, Equatable {
     let id: String
     let title: String
     let url: URL
+    /// Настроение из manifest.json: calm, neutral, energetic, inspiring,
+    /// playful, tense, emotional. nil — трек не описан.
+    var mood: String? = nil
+    /// Энергия 1…5.
+    var energy: Int? = nil
+    var bpm: Int? = nil
+}
+
+/// Описание треков рядом с файлами: Music/manifest.json.
+private struct MusicManifest: Decodable {
+    struct Entry: Decodable {
+        let file: String
+        let mood: String?
+        let energy: Int?
+        let bpm: Int?
+    }
+
+    let tracks: [Entry]
 }
 
 /// Каталог встроенных мелодий: содержимое Contents/Resources/Music.
 /// Названия берутся из имён файлов (например «Спокойная 1.m4a»).
 enum MusicLibrary {
-    static let tracks: [MusicTrack] = loadTracks()
+    static let tracks: [MusicTrack] = musicDirectory().map(loadTracks(from:)) ?? []
+
+    /// Трек нужного настроения. `variant` перебирает подходящие по кругу,
+    /// чтобы соседние ролики звучали по-разному. Неизвестное настроение
+    /// берёт нейтральные треки, а если их нет — любые.
+    static func pick(mood: String, variant: Int, in tracks: [MusicTrack] = tracks) -> MusicTrack? {
+        let matching = tracks.filter { $0.mood == mood }
+        let neutral = tracks.filter { $0.mood == "neutral" }
+        let pool = !matching.isEmpty ? matching : (!neutral.isEmpty ? neutral : tracks)
+        guard !pool.isEmpty else { return nil }
+        return pool[abs(variant) % pool.count]
+    }
 
     static func track(id: String) -> MusicTrack? {
         tracks.first { $0.id == id }
@@ -19,8 +48,11 @@ enum MusicLibrary {
 
     private static let audioExtensions: Set<String> = ["m4a", "mp3", "aac", "wav", "aiff", "caf"]
 
-    private static func loadTracks() -> [MusicTrack] {
-        guard let dir = musicDirectory() else { return [] }
+    static func loadTracks(from dir: URL) -> [MusicTrack] {
+        let manifest = (try? Data(contentsOf: dir.appendingPathComponent("manifest.json")))
+            .flatMap { try? JSONDecoder().decode(MusicManifest.self, from: $0) }
+        let entries = Dictionary(
+            (manifest?.tracks ?? []).map { ($0.file, $0) }, uniquingKeysWith: { first, _ in first })
         let files =
             (try? FileManager.default.contentsOfDirectory(
                 at: dir, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]
@@ -30,7 +62,10 @@ enum MusicLibrary {
             .filter { audioExtensions.contains($0.pathExtension.lowercased()) }
             .map { url in
                 let name = url.deletingPathExtension().lastPathComponent
-                return MusicTrack(id: name, title: name, url: url)
+                let entry = entries[url.lastPathComponent]
+                return MusicTrack(
+                    id: name, title: name, url: url,
+                    mood: entry?.mood, energy: entry?.energy, bpm: entry?.bpm)
             }
             .sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
     }
