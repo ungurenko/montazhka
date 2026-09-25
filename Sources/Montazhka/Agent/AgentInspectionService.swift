@@ -179,6 +179,10 @@ extension AgentService {
                 $0.element.timelineEnd > lower && $0.element.timelineStart < upper
             }
             let page = inRange.prefix(Self.transcriptPageWords)
+            var peaksBySource: [UUID: [Float]] = [:]
+            for clip in project.clips where peaksBySource[clip.source.id] == nil {
+                peaksBySource[clip.source.id] = await waveforms.ensure(path: clip.sourcePath)
+            }
             var lines: [String] = []
             var previous: MappedTranscriptWord?
             for (number, word) in page {
@@ -187,7 +191,21 @@ extension AgentService {
                         lines.append("--- склейка \(Self.format(word.timelineStart)) ---")
                     }
                     let gap = word.timelineStart - previous.timelineEnd
-                    if gap >= 0.4 { lines.append("--- пауза \(String(format: "%.1f", gap)) с ---") }
+                    let hum =
+                        previous.clipID == word.clipID
+                        ? peaksBySource[word.sourceID].flatMap {
+                            FillerDetector.voicedSpan(
+                                from: previous.sourceEnd, to: word.sourceStart, peaks: $0,
+                                thresholdDB: project.detection.thresholdDB)
+                        } : nil
+                    if let hum {
+                        // Звук без слов: скорее всего «эээ». Время — на ленте.
+                        let shift = word.timelineStart - word.sourceStart
+                        lines.append(
+                            "--- звук без слов \(Self.format(hum.lowerBound + shift))–\(Self.format(hum.upperBound + shift)) ---")
+                    } else if gap >= 0.4 {
+                        lines.append("--- пауза \(String(format: "%.1f", gap)) с ---")
+                    }
                 }
                 // Пустое слово — хвост исправленного термина («клод код» → «Claude Code»).
                 let text = word.text.isEmpty ? "·" : word.text
