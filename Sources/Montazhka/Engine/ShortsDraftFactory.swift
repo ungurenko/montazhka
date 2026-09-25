@@ -78,6 +78,7 @@ enum ShortsDraftFactory {
                         }
                         segments = subtract(hums, from: segments)
                     }
+                    segments = keepingWordsWhole(segments, words: group)
                     result += segments.map { Clip(source: source, start: $0.start, end: $0.end) }
                 }
             } else if let start = piece.start, let end = piece.end, end > start {
@@ -164,6 +165,25 @@ enum ShortsDraftFactory {
             let upper = min(to, start + clip.duration)
             guard upper > lower else { return nil }
             return Clip(source: clip.source, start: clip.start + lower - start, end: clip.start + upper - start)
+        }
+    }
+
+    /// Граница куска, попавшая внутрь слова (по разметке распознавания),
+    /// отодвигается к краю слова: иначе слово выпадет из субтитров и номеров,
+    /// хотя в звуке оно есть. Соседний кусок при этом не перекрывается.
+    private static func keepingWordsWhole(_ segments: [ShortsSegment], words: [MappedTranscriptWord]) -> [ShortsSegment] {
+        segments.enumerated().map { index, segment in
+            let previousEnd = index > 0 ? segments[index - 1].end : -Double.infinity
+            let nextStart = index + 1 < segments.count ? segments[index + 1].start : Double.infinity
+            var start = segment.start
+            var end = segment.end
+            if let word = words.first(where: { $0.sourceStart < start && $0.sourceEnd > start }) {
+                start = max(previousEnd, word.sourceStart)
+            }
+            if let word = words.first(where: { $0.sourceStart < end && $0.sourceEnd > end }) {
+                end = min(nextStart, word.sourceEnd)
+            }
+            return ShortsSegment(start: start, end: end)
         }
     }
 

@@ -1,5 +1,6 @@
 @preconcurrency import AVFoundation
 import Foundation
+import ImageIO
 import Testing
 
 @testable import MontazhkaKit
@@ -12,11 +13,14 @@ struct ShortsRendererTests {
         let project: Project
     }
 
-    private func fixture(hook: String? = "Монтаж за минуту") async throws -> Fixture {
+    private func fixture(
+        hook: String? = "Монтаж за минуту", codec: AVVideoCodecType = .h264
+    ) async throws -> Fixture {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let video = root.appendingPathComponent("talk.mov")
-        try await TestVideoFactory.make(segments: [(duration: 5, loud: true)], to: video)
+        try await TestVideoFactory.make(
+            segments: [(duration: 5, loud: true)], videoLuma: 150, codec: codec, to: video)
         let media = MediaReference(url: video)
         var project = Project(
             name: "Шортс", clips: [Clip(source: media, start: 0.5, end: 2), Clip(source: media, start: 3, end: 4.5)])
@@ -65,9 +69,9 @@ struct ShortsRendererTests {
         #expect(again.ok, "повторный экспорт черновика перезаписывает его файл")
     }
 
-    @Test("frames of a draft show the vertical result")
-    func framesAreVertical() async throws {
-        let fixture = try await fixture()
+    @Test("frames of a draft show the vertical result", arguments: [AVVideoCodecType.h264, .hevc])
+    func framesAreVertical(codec: AVVideoCodecType) async throws {
+        let fixture = try await fixture(codec: codec)
         defer { try? FileManager.default.removeItem(at: fixture.root) }
         let response = await fixture.service.frames(
             AgentFramesRequest(
@@ -80,6 +84,28 @@ struct ShortsRendererTests {
             return
         }
         #expect(height > width)
+        guard case .string(let path)? = response.data?["imagePath"],
+            let source = CGImageSourceCreateWithURL(URL(fileURLWithPath: path) as CFURL, nil),
+            let sheet = CGImageSourceCreateImageAtIndex(source, 0, nil)
+        else {
+            Issue.record("сетка кадров не читается")
+            return
+        }
+        #expect(brightness(of: sheet, atX: 0.5, y: 0.5) > 60, "кадр черновика не должен быть чёрным")
+    }
+
+    /// Яркость пикселя 0…255 в точке (доли ширины и высоты).
+    private func brightness(of image: CGImage, atX x: Double, y: Double) -> Int {
+        guard
+            let context = CGContext(
+                data: nil, width: image.width, height: image.height, bitsPerComponent: 8, bytesPerRow: image.width * 4,
+                space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue),
+            let data = context.data
+        else { return 0 }
+        context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+        let pixels = data.bindMemory(to: UInt8.self, capacity: image.width * image.height * 4)
+        let offset = (Int(Double(image.height) * y) * image.width + Int(Double(image.width) * x)) * 4
+        return (Int(pixels[offset]) + Int(pixels[offset + 1]) + Int(pixels[offset + 2])) / 3
     }
 }
 

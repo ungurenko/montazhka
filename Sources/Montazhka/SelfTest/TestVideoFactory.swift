@@ -8,11 +8,13 @@ enum TestVideoFactory {
     static func make(
         segments: [(duration: Double, loud: Bool)],
         videoLuma: UInt8 = 0,
+        codec: AVVideoCodecType = .h264,
         to url: URL
     ) async throws {
         try await make(
             segments: segments.map { ($0.duration, $0.loud ? 0.4 : 0.0) },
             videoLuma: videoLuma,
+            codec: codec,
             to: url)
     }
 
@@ -22,6 +24,7 @@ enum TestVideoFactory {
         segments: [(duration: Double, amplitude: Double)],
         toneFrequency: Double = 220,
         videoLuma: UInt8 = 0,
+        codec: AVVideoCodecType = .h264,
         to url: URL
     ) async throws {
         try? FileManager.default.removeItem(at: url)
@@ -31,7 +34,7 @@ enum TestVideoFactory {
         let videoInput = AVAssetWriterInput(
             mediaType: .video,
             outputSettings: [
-                AVVideoCodecKey: AVVideoCodecType.h264,
+                AVVideoCodecKey: codec,
                 AVVideoWidthKey: 320,
                 AVVideoHeightKey: 180,
             ])

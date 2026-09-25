@@ -1,5 +1,6 @@
 @preconcurrency import AVFoundation
 import CoreText
+import CoreImage
 import Foundation
 import ImageIO
 import UniformTypeIdentifiers
@@ -26,6 +27,31 @@ enum FrameSheetRenderer {
     private static let labelHeight = 28.0
 
     /// `labels` — подписи к кадрам (по умолчанию время из `times`).
+    /// Кадр через ту же сборку, что и экспорт (чтение с видеокомпозицией).
+    /// AVAssetImageGenerator с видеокомпозицией отдаёт на части роликов с iPhone
+    /// (HEVC, 60 к/с) чёрные кадры, а чтение показывает ровно то, что попадёт в MP4.
+    private static func readFrame(
+        asset: AVAsset, videoComposition: AVVideoComposition?, at time: Double
+    ) async -> CGImage? {
+        guard let reader = try? AVAssetReader(asset: asset),
+            let tracks = try? await asset.loadTracks(withMediaType: .video), !tracks.isEmpty
+        else { return nil }
+        let output = AVAssetReaderVideoCompositionOutput(
+            videoTracks: tracks, videoSettings: [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA])
+        output.videoComposition = videoComposition
+        guard reader.canAdd(output) else { return nil }
+        reader.add(output)
+        reader.timeRange = CMTimeRange(
+            start: CMTime(seconds: max(0, time), preferredTimescale: 600), duration: CMTime(value: 1, timescale: 5))
+        guard reader.startReading() else { return nil }
+        defer { reader.cancelReading() }
+        guard let sample = output.copyNextSampleBuffer(), let buffer = CMSampleBufferGetImageBuffer(sample) else {
+            return nil
+        }
+        let image = CIImage(cvPixelBuffer: buffer)
+        return CIContext().createCGImage(image, from: image.extent)
+    }
+
     /// Кадр с надписями поверх: надписи рисуются в размер кадра.
     private static func composite(_ frame: CGImage, _ overlay: CGImage) -> CGImage? {
         let rect = CGRect(x: 0, y: 0, width: frame.width, height: frame.height)
@@ -58,7 +84,10 @@ enum FrameSheetRenderer {
 
         var images: [CGImage?] = []
         for time in times {
-            let image = try? await generator.image(at: CMTime(seconds: max(0, time), preferredTimescale: 600)).image
+            let image =
+                videoComposition == nil
+                ? try? await generator.image(at: CMTime(seconds: max(0, time), preferredTimescale: 600)).image
+                : await readFrame(asset: asset, videoComposition: videoComposition, at: time)
             images.append(image.map { frame in overlayAt?(time).flatMap { composite(frame, $0) } ?? frame })
         }
         guard let sample = images.compactMap({ $0 }).first else { throw FrameSheetError.noVideo }

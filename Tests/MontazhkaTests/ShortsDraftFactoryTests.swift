@@ -78,6 +78,30 @@ struct ShortsDraftFactoryTests {
         #expect(result[1].start >= spoken[3].start - 0.1)
     }
 
+    @Test("a pause cut never slices a word as the transcript sees it")
+    func cutsKeepWordsWhole() throws {
+        // Длинный кусок: паузы режутся, только если ролик остаётся длиннее 12 секунд.
+        let tail = (0..<24).map { index in
+            TranscriptWord(
+                sourceID: media.id, text: "дальше", start: 2.6 + Double(index) * 0.6,
+                end: 3.1 + Double(index) * 0.6, confidence: 1)
+        }
+        let spoken = [
+            TranscriptWord(sourceID: media.id, text: "скажу", start: 1.0, end: 1.5, confidence: 1),
+            TranscriptWord(sourceID: media.id, text: "возможно", start: 2.0, end: 2.5, confidence: 1),
+        ] + tail
+        // Слово «возможно» звучит позже, чем его отметило распознавание: тишина до 2.15 с.
+        let peaks = (0..<2000).map { index -> Float in
+            let time = Double(index) / 100
+            return time >= 1.5 && time < 2.15 ? 0.0005 : 0.3
+        }
+        let clips = try draft(
+            [ShortsDraftFactory.Piece(from: 1, to: spoken.count)], words: spoken, trimPauses: true, peaks: peaks)
+        let draftMap = TranscriptTimelineMapper.make(clips: clips, transcripts: spoken).words
+        #expect(clips.count == 2, "пауза 1.5–2.15 должна вырезаться")
+        #expect(draftMap.prefix(2).map(\.text) == ["скажу", "возможно"])
+    }
+
     @Test("zooms are pinned to source time of the chosen words")
     func zoomSpans() throws {
         let spoken = words(10)
