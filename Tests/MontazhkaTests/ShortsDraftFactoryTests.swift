@@ -22,13 +22,13 @@ struct ShortsDraftFactoryTests {
 
     private func draft(
         _ pieces: [ShortsDraftFactory.Piece], words: [TranscriptWord], trimPauses: Bool = false,
-        peaks: [Float] = []
+        peaks: [Float] = [], removeFillers: Bool = false
     ) throws -> [Clip] {
         let clips = [Clip(source: media, start: 0, end: 100)]
         let map = TranscriptTimelineMapper.make(clips: clips, transcripts: words).words
         return try ShortsDraftFactory.clips(
             for: pieces, map: map, clips: clips, peaksFor: { _ in peaks }, sourceDuration: { _ in 100 },
-            thresholdDB: -40, trimPauses: trimPauses, removeFillers: false)
+            thresholdDB: -40, trimPauses: trimPauses, removeFillers: removeFillers)
     }
 
     @Test("a word range becomes a clip around those words")
@@ -74,8 +74,33 @@ struct ShortsDraftFactoryTests {
             for: [ShortsDraftFactory.Piece(from: 1, to: 6)], map: map, clips: clips, peaksFor: { _ in loud },
             sourceDuration: { _ in 100 }, thresholdDB: -40, trimPauses: false, removeFillers: true)
         #expect(result.count == 2)
-        #expect(result[0].end <= spoken[2].end + 0.1)
-        #expect(result[1].start >= spoken[3].start - 0.1)
+        #expect(result[0].end <= spoken[2].end + 0.15)
+        #expect(result[1].start >= spoken[3].start - 0.15)
+    }
+
+    @Test("a hum takes the dead air around it too, and no word-less blips remain")
+    func humGapIsCleared() throws {
+        // «наоборот» — долгая тишина — короткий звук «эээ» — снова тишина — «Но».
+        let tail = (0..<24).map { index in
+            TranscriptWord(
+                sourceID: media.id, text: "дальше", start: 7.0 + Double(index) * 0.6,
+                end: 7.5 + Double(index) * 0.6, confidence: 1)
+        }
+        let spoken = [
+            TranscriptWord(sourceID: media.id, text: "наоборот.", start: 1.0, end: 1.8, confidence: 1),
+            TranscriptWord(sourceID: media.id, text: "Но", start: 6.3, end: 6.6, confidence: 1),
+        ] + tail
+        let peaks = (0..<2500).map { index -> Float in
+            let time = Double(index) / 100
+            let silent = (time >= 1.8 && time < 4.4) || (time >= 5.0 && time < 6.3)
+            return silent ? 0.0005 : 0.3
+        }
+        let clips = try draft(
+            [ShortsDraftFactory.Piece(from: 1, to: spoken.count)], words: spoken, trimPauses: true, peaks: peaks,
+            removeFillers: true)
+        let gap = clips.filter { $0.end > 1.8 && $0.start < 6.3 }
+        #expect(gap.allSatisfy { $0.start <= 1.8 || $0.start >= 6.1 }, "в промежутке без слов не должно остаться кусков: \(clips.map { ($0.start, $0.end) })")
+        #expect(clips.allSatisfy { $0.duration >= 0.3 })
     }
 
     @Test("a pause cut never slices a word as the transcript sees it")

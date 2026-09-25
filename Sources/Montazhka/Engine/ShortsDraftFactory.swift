@@ -71,14 +71,20 @@ enum ShortsDraftFactory {
                             start: boundary.start, end: boundary.end, peaks: peaks, thresholdDB: thresholdDB)
                         : [ShortsSegment(start: boundary.start, end: boundary.end)]
                     if removeFillers {
+                        // Пауза с «эээ» — мёртвый воздух целиком: убираем весь промежуток
+                        // между словами, оставив «воздух» у самих слов.
+                        let air = ShortsLimits.pausePaddingMS / 1000
                         let hums = zip(group, group.dropFirst()).compactMap { a, b -> ClosedRange<Double>? in
-                            FillerDetector.voicedSpan(
-                                from: a.sourceEnd, to: b.sourceStart, peaks: peaks, thresholdDB: thresholdDB
-                            ).flatMap { FillerDetector.isLikelyFiller($0) ? $0 : nil }
+                            guard
+                                let span = FillerDetector.voicedSpan(
+                                    from: a.sourceEnd, to: b.sourceStart, peaks: peaks, thresholdDB: thresholdDB),
+                                FillerDetector.isLikelyFiller(span), b.sourceStart - air > a.sourceEnd + air
+                            else { return nil }
+                            return (a.sourceEnd + air)...(b.sourceStart - air)
                         }
                         segments = subtract(hums, from: segments)
                     }
-                    segments = keepingWordsWhole(segments, words: group)
+                    segments = droppingWordlessBlips(keepingWordsWhole(segments, words: group), words: group)
                     result += segments.map { Clip(source: source, start: $0.start, end: $0.end) }
                 }
             } else if let start = piece.start, let end = piece.end, end > start {
@@ -206,6 +212,19 @@ enum ShortsDraftFactory {
             result[result.count - 1] = ShortsSegment(start: result[result.count - 1].start, end: word.sourceEnd)
         }
         return result
+    }
+
+    /// Обрывок короче `ShortsLimits.minSegmentDuration`, в котором нет ни
+    /// одного слова, — щелчок или вдох между склейками: он только дёргает монтаж.
+    private static func droppingWordlessBlips(
+        _ segments: [ShortsSegment], words: [MappedTranscriptWord]
+    ) -> [ShortsSegment] {
+        let kept = segments.filter { segment in
+            segment.duration >= ShortsLimits.minSegmentDuration
+                || words.contains { ($0.sourceStart + $0.sourceEnd) / 2 >= segment.start
+                    && ($0.sourceStart + $0.sourceEnd) / 2 <= segment.end }
+        }
+        return kept.isEmpty ? segments : kept
     }
 
     private static func subtract(_ holes: [ClosedRange<Double>], from segments: [ShortsSegment]) -> [ShortsSegment] {
