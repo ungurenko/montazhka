@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "tracks": [
+    { "file": "Спокойная 1.m4a", "mood": "calm", "energy": 1 },
+    { "file": "Спокойная 2.m4a", "mood": "calm", "energy": 2 },
+    { "file": "Нейтральная 1.m4a", "mood": "neutral", "energy": 2 },
+    { "file": "Энергичная 1.m4a", "mood": "energetic", "energy": 4 },
+    { "file": "Энергичная 2.m4a", "mood": "energetic", "energy": 5, "source": "Kie.ai Suno V4_5, 2026-09-25" },
+    { "file": "Энергичная 3.m4a", "mood": "energetic", "energy": 5, "source": "Kie.ai Suno V4_5, 2026-09-25" },
+    { "file": "Вдохновляющая 1.m4a", "mood": "inspiring", "energy": 3, "source": "Kie.ai Suno V4_5, 2026-09-25" },
+    { "file": "Вдохновляющая 2.m4a", "mood": "inspiring", "energy": 3, "source": "Kie.ai Suno V4_5, 2026-09-25" },
+    { "file": "Игривая 1.m4a", "mood": "playful", "energy": 4, "source": "Kie.ai Suno V4_5, 2026-09-25" },
+    { "file": "Игривая 2.m4a", "mood": "playful", "energy": 4, "source": "Kie.ai Suno V4_5, 2026-09-25" },
+    { "file": "Напряжённая 1.m4a", "mood": "tense", "energy": 3, "source": "Kie.ai Suno V4_5, 2026-09-25" },
+    { "file": "Напряжённая 2.m4a", "mood": "tense", "energy": 3, "source": "Kie.ai Suno V4_5, 2026-09-25" },
+    { "file": "Трогательная 1.m4a", "mood": "emotional", "energy": 1, "source": "Kie.ai Suno V4_5, 2026-09-25" },
+    { "file": "Трогательная 2.m4a", "mood": "emotional", "energy": 1, "source": "Kie.ai Suno V4_5, 2026-09-25" }
+  ]
+}
