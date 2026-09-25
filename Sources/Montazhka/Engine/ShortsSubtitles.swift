@@ -388,6 +388,27 @@ enum ShortsSubtitleCueBuilder {
                     segment: segment)
             }
 
+        return group(placed.map { ($0.word, $0.segment) })
+    }
+
+    /// Фразы для черновика шортса: слова уже разложены по ленте. Граница
+    /// клипа завершает фразу, поэтому порядок клипов после перестановки не важен.
+    /// `notBefore` — субтитры не показываются, пока на экране хук.
+    static func make(mapped words: [MappedTranscriptWord], notBefore: Double) -> [ShortsSubtitleCue] {
+        let placed = words
+            .filter { $0.timelineStart >= notBefore && $0.timelineEnd > $0.timelineStart }
+            .sorted { $0.timelineStart < $1.timelineStart }
+            .compactMap { word -> (ShortsSubtitleWord, AnyHashable)? in
+                let text = word.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !text.isEmpty else { return nil }
+                return (ShortsSubtitleWord(text: text, start: word.timelineStart, end: word.timelineEnd), word.clipID)
+            }
+        return group(placed)
+    }
+
+    /// Собирает слова в короткие фразы. `segment` — кусок ролика: фраза
+    /// никогда не переходит через склейку.
+    private static func group(_ placed: [(word: ShortsSubtitleWord, segment: AnyHashable)]) -> [ShortsSubtitleCue] {
         guard !placed.isEmpty else { return [] }
 
         var cues: [ShortsSubtitleCue] = []
@@ -495,9 +516,10 @@ enum ShortsSubtitleRenderer {
         cues: [ShortsSubtitleCue],
         appearance: ShortsSubtitleAppearance,
         highlight: Bool,
-        duration: Double
+        duration: Double,
+        hook: ShortsHook? = nil
     ) -> AVMutableVideoComposition {
-        guard !cues.isEmpty,
+        guard !cues.isEmpty || hook != nil,
             duration > 0,
             composition.renderSize.width > 0,
             composition.renderSize.height > 0
@@ -509,21 +531,11 @@ enum ShortsSubtitleRenderer {
 
         let videoLayer = CALayer()
         videoLayer.frame = parentLayer.bounds
-        let subtitleLayer = CALayer()
-        subtitleLayer.frame = parentLayer.bounds
-
         parentLayer.addSublayer(videoLayer)
-        parentLayer.addSublayer(subtitleLayer)
-
-        for cue in cues {
-            subtitleLayer.addSublayer(
-                captionLayer(
-                    for: cue,
-                    renderSize: renderSize,
-                    appearance: appearance,
-                    highlight: highlight,
-                    duration: duration))
-        }
+        parentLayer.addSublayer(
+            overlayLayer(
+                renderSize: renderSize, cues: cues, appearance: appearance,
+                highlight: highlight, duration: duration, hook: hook))
 
         composition.animationTool = AVVideoCompositionCoreAnimationTool(
             postProcessingAsVideoLayer: videoLayer,
@@ -531,39 +543,87 @@ enum ShortsSubtitleRenderer {
         return composition
     }
 
-    private static func captionLayer(
-        for cue: ShortsSubtitleCue,
+    /// Все надписи ролика одним слоем: хук и фразы с анимацией видимости.
+    /// Этот же слой рисует неподвижный снимок для агента.
+    static func overlayLayer(
         renderSize: CGSize,
+        cues: [ShortsSubtitleCue],
         appearance: ShortsSubtitleAppearance,
         highlight: Bool,
+        duration: Double,
+        hook: ShortsHook?
+    ) -> CALayer {
+        let overlay = CALayer()
+        overlay.frame = CGRect(origin: .zero, size: renderSize)
+        for cue in cues {
+            overlay.addSublayer(
+                captionLayer(
+                    for: cue,
+                    renderSize: renderSize,
+                    appearance: appearance,
+                    highlight: highlight,
+                    duration: duration))
+        }
+        if let hook, !hook.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            overlay.addSublayer(
+                hookLayer(hook, renderSize: renderSize, appearance: appearance, duration: duration))
+        }
+        return overlay
+    }
+
+    /// Хук: крупно, сверху, в фирменном стиле субтитров; плавно гаснет.
+    private static func hookLayer(
+        _ hook: ShortsHook,
+        renderSize: CGSize,
+        appearance: ShortsSubtitleAppearance,
         duration: Double
     ) -> CALayer {
-        let font = ShortsSubtitleLayout.fittingFont(
-            text: cue.text, appearance: appearance, canvasSize: renderSize)
-        let fontSize = font.pointSize
-        let horizontalPadding = fontSize * ShortsSubtitleLayout.horizontalPaddingScale
+        let text = hook.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        var fontSize = appearance.baseFontSize(canvasSize: renderSize) * hookScale
+        let maxTextWidth = { ShortsSubtitleLayout.textWidth(fontSize: fontSize, canvasSize: renderSize) }
+        var font = appearance.font.font(ofSize: fontSize)
+        for _ in 0...4 where ShortsSubtitleTextWrapper.wrap(text, font: font, maxWidth: maxTextWidth()).lineCount > 3 {
+            fontSize *= 0.88
+            font = appearance.font.font(ofSize: fontSize)
+        }
+        let textLayout = ShortsSubtitleTextWrapper.wrap(text, font: font, maxWidth: maxTextWidth())
         let verticalPadding = fontSize * ShortsSubtitleLayout.verticalPaddingScale
+        let height = fontSize * ShortsSubtitleLayout.lineHeightScale * CGFloat(textLayout.lineCount)
+            + verticalPadding * 2
         let width = renderSize.width * ShortsSubtitleLayout.widthRatio
-        let maxTextWidth = ShortsSubtitleLayout.textWidth(
-            fontSize: fontSize, canvasSize: renderSize)
-        let textLayout = ShortsSubtitleTextWrapper.wrap(
-            cue.text, font: font, maxWidth: maxTextWidth)
-        let lineHeight = fontSize * ShortsSubtitleLayout.lineHeightScale
-        let height = lineHeight * CGFloat(textLayout.lineCount) + verticalPadding * 2
-        let bottomMargin = ShortsSubtitleLayout.bottomMargin(
-            appearance: appearance, canvasSize: renderSize)
-
-        let container = CALayer()
-        container.frame = CGRect(
+        let frame = CGRect(
             x: (renderSize.width - width) / 2,
-            y: bottomMargin,
-            width: width,
-            height: height)
+            y: renderSize.height * (1 - hookTopRatio) - height,
+            width: width, height: height)
+        var style = appearance
+        if style.background == .none { style.background = .shadow }
+        let block = textBlock(textLayout, font: font, appearance: style, frame: frame)
+        addVisibilityAnimation(to: block.container, start: 0, end: hook.duration, duration: duration, fadeOut: 0.3)
+        return block.container
+    }
+
+    /// Хук крупнее субтитров во столько раз.
+    static let hookScale: CGFloat = 1.7
+    /// Верхний край хука — эта доля высоты кадра от верха.
+    static let hookTopRatio: CGFloat = 0.05
+
+    /// Подложка и текст одной надписи в заданной рамке. Общая часть хука и фраз.
+    private static func textBlock(
+        _ textLayout: ShortsSubtitleTextLayout,
+        font: NSFont,
+        appearance: ShortsSubtitleAppearance,
+        frame: CGRect
+    ) -> (container: CALayer, textLayer: CALayer, textFrame: CGRect) {
+        let fontSize = font.pointSize
+        let container = CALayer()
+        container.frame = frame
         container.masksToBounds = false
         container.opacity = 0
         container.contentsScale = 2
 
-        let textFrame = container.bounds.insetBy(dx: horizontalPadding, dy: verticalPadding)
+        let textFrame = container.bounds.insetBy(
+            dx: fontSize * ShortsSubtitleLayout.horizontalPaddingScale,
+            dy: fontSize * ShortsSubtitleLayout.verticalPaddingScale)
         let textLayer = CALayer()
         textLayer.frame = textFrame
         textLayer.contentsScale = 2
@@ -590,6 +650,35 @@ enum ShortsSubtitleRenderer {
         }
 
         container.addSublayer(textLayer)
+        return (container, textLayer, textFrame)
+    }
+
+    private static func captionLayer(
+        for cue: ShortsSubtitleCue,
+        renderSize: CGSize,
+        appearance: ShortsSubtitleAppearance,
+        highlight: Bool,
+        duration: Double
+    ) -> CALayer {
+        let font = ShortsSubtitleLayout.fittingFont(
+            text: cue.text, appearance: appearance, canvasSize: renderSize)
+        let fontSize = font.pointSize
+        let verticalPadding = fontSize * ShortsSubtitleLayout.verticalPaddingScale
+        let width = renderSize.width * ShortsSubtitleLayout.widthRatio
+        let maxTextWidth = ShortsSubtitleLayout.textWidth(
+            fontSize: fontSize, canvasSize: renderSize)
+        let textLayout = ShortsSubtitleTextWrapper.wrap(
+            cue.text, font: font, maxWidth: maxTextWidth)
+        let lineHeight = fontSize * ShortsSubtitleLayout.lineHeightScale
+        let height = lineHeight * CGFloat(textLayout.lineCount) + verticalPadding * 2
+        let bottomMargin = ShortsSubtitleLayout.bottomMargin(
+            appearance: appearance, canvasSize: renderSize)
+
+        let block = textBlock(
+            textLayout, font: font, appearance: appearance,
+            frame: CGRect(x: (renderSize.width - width) / 2, y: bottomMargin, width: width, height: height))
+        let container = block.container
+        let textFrame = block.textFrame
 
         // Звучащее слово перекрашивается: поверх кладётся кусок той же фразы,
         // отрисованной вторым цветом, обрезанный по слову через contentsRect.
@@ -602,7 +691,7 @@ enum ShortsSubtitleRenderer {
                 color: appearance.highlightColor.nsColor,
                 outlineWidth: appearance.background == .outline
                     ? fontSize * ShortsSubtitleLayout.outlineWidthScale : 0,
-                size: textLayer.bounds.size)
+                size: block.textLayer.bounds.size)
         {
             let overlay = CALayer()
             overlay.frame = textFrame
@@ -721,18 +810,27 @@ enum ShortsSubtitleRenderer {
         return context.makeImage()
     }
 
+    /// Ключи, под которыми слой помнит своё окно видимости: по ним
+    /// неподвижный снимок решает, что показать, без проигрывания анимации.
+    static let visibleFromKey = "montazhkaVisibleFrom"
+    static let visibleToKey = "montazhkaVisibleTo"
+
     private static func addVisibilityAnimation(
         to layer: CALayer,
         start visibleFrom: Double,
         end visibleTo: Double,
-        duration: Double
+        duration: Double,
+        fadeOut: Double = 0
     ) {
+        layer.setValue(visibleFrom, forKey: visibleFromKey)
+        layer.setValue(visibleTo, forKey: visibleToKey)
         let start = min(0.9999, max(0, visibleFrom / duration))
         let end = min(1, max(start + 0.0001, visibleTo / duration))
+        let fadeStart = max(start, end - fadeOut / duration)
         let animation = CAKeyframeAnimation(keyPath: "opacity")
-        animation.values = [0, 1, 1, 0]
+        animation.values = [0, 1, 1, 0, 0]
         animation.keyTimes = [
-            NSNumber(value: 0), NSNumber(value: start),
+            NSNumber(value: 0), NSNumber(value: start), NSNumber(value: fadeStart),
             NSNumber(value: end), NSNumber(value: 1),
         ]
         animation.duration = duration
@@ -740,6 +838,45 @@ enum ShortsSubtitleRenderer {
         animation.isRemovedOnCompletion = false
         animation.fillMode = .both
         layer.add(animation, forKey: "shorts-subtitle-visibility")
+    }
+}
+
+/// Неподвижный снимок надписей в заданный момент — для сетки кадров агента.
+/// AVAssetImageGenerator не умеет Core Animation, поэтому надписи рисуются
+/// отдельно тем же слоем, что и в экспорте, и кладутся поверх кадра.
+enum ShortsOverlaySnapshot {
+    static func image(
+        at time: Double,
+        renderSize: CGSize,
+        cues: [ShortsSubtitleCue],
+        appearance: ShortsSubtitleAppearance,
+        highlight: Bool,
+        hook: ShortsHook?
+    ) -> CGImage? {
+        let duration = max(time + 1, hook?.duration ?? 0, cues.map(\.end).max() ?? 0)
+        let layer = ShortsSubtitleRenderer.overlayLayer(
+            renderSize: renderSize, cues: cues, appearance: appearance,
+            highlight: highlight, duration: duration, hook: hook)
+        freeze(layer, at: time)
+        guard
+            let context = CGContext(
+                data: nil, width: Int(renderSize.width), height: Int(renderSize.height),
+                bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+        else { return nil }
+        layer.render(in: context)
+        return context.makeImage()
+    }
+
+    /// Снимает анимации и оставляет видимым только то, что видно в `time`.
+    private static func freeze(_ layer: CALayer, at time: Double) {
+        if let from = layer.value(forKey: ShortsSubtitleRenderer.visibleFromKey) as? Double,
+            let to = layer.value(forKey: ShortsSubtitleRenderer.visibleToKey) as? Double
+        {
+            layer.opacity = time >= from && time < to ? 1 : 0
+        }
+        layer.removeAllAnimations()
+        for sublayer in layer.sublayers ?? [] { freeze(sublayer, at: time) }
     }
 }
 

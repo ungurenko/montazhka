@@ -120,6 +120,24 @@ enum ShortsSubtitleSelfTest {
             }
             check(everyVariantHasLayer, "все образы и размеры создают слой субтитров")
 
+            let canvas = CGSize(width: 360, height: 640)
+            let hook = ShortsHook(text: "Монтаж за минуту")
+            let hookStill = ShortsOverlaySnapshot.image(
+                at: 1, renderSize: canvas, cues: [], appearance: appearance, highlight: false, hook: hook)
+            let afterHook = ShortsOverlaySnapshot.image(
+                at: 5, renderSize: canvas, cues: [], appearance: appearance, highlight: false, hook: hook)
+            check(
+                hookStill.map { hasInk($0, rows: 0...0.3) } == true
+                    && afterHook.map { hasInk($0, rows: 0...0.3) } == false,
+                "хук виден сверху первые секунды и потом исчезает")
+            let cue = ShortsSubtitleCue(
+                words: [ShortsSubtitleWord(text: "Привет", start: 3, end: 4)], start: 3, end: 4)
+            let cueStill = ShortsOverlaySnapshot.image(
+                at: 3.5, renderSize: canvas, cues: [cue], appearance: appearance, highlight: true, hook: nil)
+            check(
+                cueStill.map { hasInk($0, rows: 0.6...1) && !hasInk($0, rows: 0...0.5) } == true,
+                "снимок надписей показывает фразу внизу кадра")
+
             let candidate = ShortCandidate(
                 id: UUID(), rank: 1, title: "Проверка субтитров", reason: "", hook: "",
                 pattern: "", excerpt: "", start: 1, end: 3, confidence: 1,
@@ -189,6 +207,26 @@ enum ShortsSubtitleSelfTest {
         }
 
         return failures
+    }
+
+    /// Есть ли непрозрачные пиксели в полосе `rows` (доли высоты, сверху вниз).
+    private static func hasInk(_ image: CGImage, rows: ClosedRange<Double>) -> Bool {
+        let width = image.width
+        let height = image.height
+        guard
+            let context = CGContext(
+                data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
+                space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue),
+            let data = context.data
+        else { return false }
+        context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+        let pixels = data.bindMemory(to: UInt8.self, capacity: width * height * 4)
+        let from = Int(Double(height) * rows.lowerBound)
+        let to = max(from, Int(Double(height) * rows.upperBound) - 1)
+        for y in from...to {
+            for x in stride(from: 0, to: width, by: 2) where pixels[(y * width + x) * 4 + 3] > 0 { return true }
+        }
+        return false
     }
 
     private static func checkVerticalFitExport(
