@@ -502,6 +502,13 @@ enum ShortsSubtitleLayout {
         return appearance.font.font(ofSize: size)
     }
 
+    /// Высота строки: не меньше настоящей высоты шрифта. У системного шрифта и
+    /// Avenir строка выше 1.14 кегля — строку, которая не влезла по высоте,
+    /// CoreText молча не рисует, и субтитры пропадали целиком.
+    static func lineHeight(for font: NSFont) -> CGFloat {
+        max(font.pointSize * lineHeightScale, ceil(font.ascender - font.descender + font.leading))
+    }
+
     /// Ширина, доступная самому тексту: безопасная зона минус боковые отступы
     /// подложки.
     static func textWidth(fontSize: CGFloat, canvasSize: CGSize) -> CGFloat {
@@ -588,7 +595,7 @@ enum ShortsSubtitleRenderer {
         }
         let textLayout = ShortsSubtitleTextWrapper.wrap(text, font: font, maxWidth: maxTextWidth())
         let verticalPadding = fontSize * ShortsSubtitleLayout.verticalPaddingScale
-        let height = fontSize * ShortsSubtitleLayout.lineHeightScale * CGFloat(textLayout.lineCount)
+        let height = ShortsSubtitleLayout.lineHeight(for: font) * CGFloat(textLayout.lineCount)
             + verticalPadding * 2
         let width = renderSize.width * ShortsSubtitleLayout.widthRatio
         let frame = CGRect(
@@ -669,7 +676,7 @@ enum ShortsSubtitleRenderer {
             fontSize: fontSize, canvasSize: renderSize)
         let textLayout = ShortsSubtitleTextWrapper.wrap(
             cue.text, font: font, maxWidth: maxTextWidth)
-        let lineHeight = fontSize * ShortsSubtitleLayout.lineHeightScale
+        let lineHeight = ShortsSubtitleLayout.lineHeight(for: font)
         let height = lineHeight * CGFloat(textLayout.lineCount) + verticalPadding * 2
         let bottomMargin = ShortsSubtitleLayout.bottomMargin(
             appearance: appearance, canvasSize: renderSize)
@@ -796,8 +803,16 @@ enum ShortsSubtitleRenderer {
         }
         let attributedText = NSAttributedString(string: text, attributes: attributes)
         let framesetter = CTFramesetterCreateWithAttributedString(attributedText)
+        // Рамка по высоте самого текста, по центру картинки: строка, не
+        // влезшая в рамку, CoreText не рисует вовсе — лучше чуть выйти за край.
+        let textHeight = ceil(
+            CTFramesetterSuggestFrameSizeWithConstraints(
+                framesetter, CFRange(location: 0, length: attributedText.length), nil,
+                CGSize(width: CGFloat(width), height: .greatestFiniteMagnitude), nil
+            ).height)
+        let frameHeight = max(CGFloat(height), textHeight)
         let path = CGPath(
-            rect: CGRect(x: 0, y: 0, width: CGFloat(width), height: CGFloat(height)),
+            rect: CGRect(x: 0, y: (CGFloat(height) - frameHeight) / 2, width: CGFloat(width), height: frameHeight),
             transform: nil)
         let frame = CTFramesetterCreateFrame(
             framesetter,

@@ -133,6 +133,25 @@ enum ShortsSubtitleSelfTest {
                 hookStill.map { hasInk($0, rows: 0...0.3) } == true
                     && afterHook.map { hasInk($0, rows: 0...0.3) } == false,
                 "хук виден сверху первые секунды и потом исчезает")
+            // Текст рисуется целиком для каждого образа: подпись без подложки видна,
+            // у хука из трёх строк есть третья строка.
+            var everyPresetDrawsText = true
+            for preset in ShortsSubtitlePreset.allCases where preset.appearance.background != .plate {
+                let phrase = ShortsSubtitleCue(
+                    words: [ShortsSubtitleWord(text: "Привет мир", start: 3, end: 4)], start: 3, end: 4)
+                let caption = ShortsOverlaySnapshot.image(
+                    at: 3.5, renderSize: canvas, cues: [phrase], appearance: preset.appearance,
+                    highlight: false, hook: nil)
+                let longHook = ShortsOverlaySnapshot.image(
+                    at: 1, renderSize: canvas, cues: [], appearance: preset.appearance, highlight: false,
+                    hook: ShortsHook(text: "Claude щедрее ChatGPT по лимитам?"))
+                if caption.map({ hasInk($0, rows: 0.5...1) }) != true
+                    || longHook.map({ hasInk($0, rows: 0.2...0.27) }) != true
+                {
+                    everyPresetDrawsText = false
+                }
+            }
+            check(everyPresetDrawsText, "текст подписи и все строки хука видны в каждом образе")
             let cue = ShortsSubtitleCue(
                 words: [ShortsSubtitleWord(text: "Привет", start: 3, end: 4)], start: 3, end: 4)
             let cueStill = ShortsOverlaySnapshot.image(
