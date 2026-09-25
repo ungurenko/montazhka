@@ -108,9 +108,17 @@ enum TestVideoFactory {
         // иначе он ждёт второй поток и всё замирает.
         let videoIO = VideoFeedIO(input: videoInput, adaptor: adaptor, frame: frame, writer: writer)
         let audioIO = AudioFeedIO(input: audioInput, sample: audioSample)
-        async let videoDone: Void = feedVideo(io: videoIO, totalDuration: totalDuration)
-        async let audioDone: Void = feedAudio(io: audioIO)
-        _ = await (videoDone, audioDone)
+        async let videoDone = feedVideo(io: videoIO, totalDuration: totalDuration)
+        async let audioDone = feedAudio(io: audioIO)
+        let (videoFed, audioFed) = await (videoDone, audioDone)
+        // Писатель иногда перестаёт звать колбэк насоса, и ожидание длилось бы
+        // вечно. Лучше громко упасть: зависший прогон тестов ничего не объясняет.
+        guard videoFed, audioFed else {
+            writer.cancelWriting()
+            throw NSError(
+                domain: "test", code: 6,
+                userInfo: [NSLocalizedDescriptionKey: "Запись тестового видео зависла: \(url.lastPathComponent)"])
+        }
 
         await writer.finishWriting()
         guard writer.status == .completed else { throw writer.error ?? NSError(domain: "test", code: 5) }
@@ -136,17 +144,26 @@ enum TestVideoFactory {
         var finished = false
     }
 
-    private static func feedVideo(io: VideoFeedIO, totalDuration: Double) async {
+    /// Сколько ждать колбэка писателя, прежде чем признать запись зависшей.
+    private static let feedTimeout: DispatchTimeInterval = .seconds(30)
+
+    /// true — всё скормлено; false — писатель замолчал дольше `feedTimeout`.
+    private static func feedVideo(io: VideoFeedIO, totalDuration: Double) async -> Bool {
         let queue = DispatchQueue(label: "selftest.video")
-        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+        return await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
             let state = FeedState()
+            queue.asyncAfter(deadline: .now() + feedTimeout) {
+                guard !state.finished else { return }
+                state.finished = true
+                continuation.resume(returning: false)
+            }
             io.input.requestMediaDataWhenReady(on: queue) {
                 while io.input.isReadyForMoreMediaData {
+                    guard !state.finished else { return }
                     if state.frameTime >= totalDuration || io.writer.status != .writing {
-                        guard !state.finished else { return }
                         state.finished = true
                         io.input.markAsFinished()
-                        continuation.resume()
+                        continuation.resume(returning: true)
                         return
                     }
                     io.adaptor.append(
@@ -160,16 +177,21 @@ enum TestVideoFactory {
         }
     }
 
-    private static func feedAudio(io: AudioFeedIO) async {
+    private static func feedAudio(io: AudioFeedIO) async -> Bool {
         let queue = DispatchQueue(label: "selftest.audio")
-        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+        return await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
             let state = FeedState()
+            queue.asyncAfter(deadline: .now() + feedTimeout) {
+                guard !state.finished else { return }
+                state.finished = true
+                continuation.resume(returning: false)
+            }
             io.input.requestMediaDataWhenReady(on: queue) {
                 guard io.input.isReadyForMoreMediaData, !state.finished else { return }
                 state.finished = true
                 io.input.append(io.sample)
                 io.input.markAsFinished()
-                continuation.resume()
+                continuation.resume(returning: true)
             }
         }
     }

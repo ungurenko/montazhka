@@ -6,7 +6,7 @@ import Testing
 
 @Suite("Shorts draft video composition")
 struct ShortsDraftCompositionTests {
-    private func build(layout: ShortsDraftLayout) async throws -> (AVMutableComposition, AVMutableVideoComposition) {
+    private func build(layout: ShortsDraftLayout) async throws -> (AVMutableComposition, AVMutableVideoComposition, URL) {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let video = root.appendingPathComponent("talk.mov")
@@ -20,12 +20,13 @@ struct ShortsDraftCompositionTests {
             centre: { _, _ in CGPoint(x: 0.5, y: 0.4) }, zooms: [zoom],
             faceBox: CGRect(x: 0.8, y: 0.7, width: 0.1, height: 0.18),
             canvas: CGSize(width: 180, height: 320))
-        return (built.composition, videoComposition)
+        return (built.composition, videoComposition, root)
     }
 
     @Test("a face draft renders one moving picture on a 9:16 canvas")
     func faceComposition() async throws {
-        let (composition, video) = try await build(layout: .face)
+        let (composition, video, root) = try await build(layout: .face)
+        defer { try? FileManager.default.removeItem(at: root) }
         #expect(video.renderSize == CGSize(width: 180, height: 320))
         let instruction = try #require(video.instructions.first as? AVVideoCompositionInstruction)
         #expect(instruction.layerInstructions.count == 1)
@@ -34,7 +35,8 @@ struct ShortsDraftCompositionTests {
 
     @Test("a split draft uses two copies of the picture")
     func splitComposition() async throws {
-        let (composition, video) = try await build(layout: .split)
+        let (composition, video, root) = try await build(layout: .split)
+        defer { try? FileManager.default.removeItem(at: root) }
         #expect(composition.tracks(withMediaType: .video).count == 2)
         let instruction = try #require(video.instructions.first as? AVVideoCompositionInstruction)
         #expect(instruction.layerInstructions.count == 2)
@@ -42,7 +44,8 @@ struct ShortsDraftCompositionTests {
 
     @Test("the draft exports to a vertical MP4 of the right length")
     func exportsVertical() async throws {
-        let (composition, video) = try await build(layout: .face)
+        let (composition, video, root) = try await build(layout: .face)
+        defer { try? FileManager.default.removeItem(at: root) }
         let output = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).mp4")
         defer { try? FileManager.default.removeItem(at: output) }
         try await Transcoder.exportWithOfflineComposition(
