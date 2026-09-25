@@ -323,6 +323,7 @@ extension AgentService {
             "clips": clipsData(project, limit: shown),
             "warnings": .array(warnings.map { .string($0) }),
         ]
+        if project.shorts != nil { data["shorts"] = Self.shortsData(project) }
         if shown < project.clips.count {
             data["more"] = .string("Показаны первые \(shown) клипов. Остальные — montazhka_inspect с offset=\(shown).")
         }

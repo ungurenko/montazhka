@@ -163,6 +163,10 @@ extension AgentService {
             var source = try await store.load(id: id)
             source.id = UUID(); source.name = request.name ?? "\(source.name) — AI-черновик"
             source.createdAt = Date(); source.updatedAt = Date()
+            // У копии черновика шортса свой MP4: иначе её экспорт перезаписал бы ролик оригинала.
+            if let path = source.shorts?.exportPath {
+                source.shorts?.exportPath = ShortsExporter.copyURL(for: URL(fileURLWithPath: path)).path
+            }
             return source
         }
         guard !paths.isEmpty else {

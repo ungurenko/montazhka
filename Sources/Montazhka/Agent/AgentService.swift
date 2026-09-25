@@ -265,8 +265,40 @@ actor AgentService {
                                 "time": .number($0), "from": .number(max(0, $0 - 1.5)), "to": .number($0 + 1.5),
                             ])
                         }),
+                    "shorts": Self.shortsData(project),
                 ])
         } catch { return failure("inspect", error) }
+    }
+
+    /// Оформление черновика шортса для агента; у обычного проекта — null.
+    /// Наезды показаны во времени ленты: вырезанные части наезда не видны.
+    static func shortsData(_ project: Project) -> AgentJSONValue {
+        guard let shorts = project.shorts else { return .null }
+        let starts = TimelineEditOps.starts(of: project.clips)
+        let zooms: [AgentJSONValue] = shorts.zooms.compactMap { zoom in
+            let spans = zip(project.clips, starts).compactMap { clip, start -> (Double, Double)? in
+                guard clip.source.id == zoom.sourceID else { return nil }
+                let from = max(zoom.sourceStart, clip.start)
+                let to = min(zoom.sourceEnd, clip.end)
+                return to > from ? (start + from - clip.start, start + to - clip.start) : nil
+            }
+            guard let first = spans.first, let last = spans.last else { return nil }
+            return .object([
+                "timelineStart": .number(rounded(first.0)), "timelineEnd": .number(rounded(last.1)),
+                "scale": .number(zoom.scale),
+            ])
+        }
+        return .object([
+            "title": .string(shorts.title),
+            "hook": shorts.hook.map { .string($0.text) } ?? .null,
+            "layout": .string(shorts.resolvedLayout.rawValue),
+            "subtitles": .bool(shorts.subtitles != nil),
+            "zooms": .array(zooms),
+            "music": project.music.enabled
+                ? .object(["track": .string(project.music.trackID ?? ""), "volume": .number(project.music.volume)])
+                : .null,
+            "exportPath": shorts.exportPath.map { .string($0) } ?? .null,
+        ])
     }
 
     func resource(uri: String, offset: Int? = nil, limit: Int? = nil) async throws -> String {

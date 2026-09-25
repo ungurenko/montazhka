@@ -175,6 +175,24 @@ struct ShortsDraftFactoryTests {
         #expect(!clips.contains { $0.start < 4 && $0.end > 4 }, "мёртвый воздух 2–6 с должен вырезаться: \(clips.map { ($0.start, $0.end) })")
     }
 
+    @Test("a piece over several project clips never brings back what the user cut")
+    func respectsProjectCuts() throws {
+        // Пользователь вырезал оговорку 5.0–5.4: в проекте два клипа подряд по исходнику.
+        let project = [Clip(source: media, start: 0, end: 5.0), Clip(source: media, start: 5.4, end: 12)]
+        let spoken = [
+            TranscriptWord(sourceID: media.id, text: "раз", start: 4.0, end: 4.9, confidence: 1),
+            TranscriptWord(sourceID: media.id, text: "оговорка", start: 5.0, end: 5.4, confidence: 1),
+            TranscriptWord(sourceID: media.id, text: "два", start: 5.45, end: 6.0, confidence: 1),
+        ]
+        let map = TranscriptTimelineMapper.make(clips: project, transcripts: spoken).words
+        #expect(map.map(\.text) == ["раз", "два"])
+        let clips = try ShortsDraftFactory.clips(
+            for: [ShortsDraftFactory.Piece(from: 1, to: 2)], map: map, clips: project, peaksFor: { _ in [] },
+            sourceDuration: { _ in 12 }, thresholdDB: -40, trimPauses: false, removeFillers: false)
+        #expect(!clips.contains { $0.start < 5.4 && $0.end > 5.0 }, "вырезанное вернулось: \(clips.map { ($0.start, $0.end) })")
+        for (a, b) in zip(clips, clips.dropFirst()) { #expect(b.start >= a.end) }
+    }
+
     @Test("zooms are pinned to source time of the chosen words")
     func zoomSpans() throws {
         let spoken = words(10)

@@ -127,6 +127,11 @@ struct AgentShortsTests {
         let response = await fixture.service.applyEdits(
             projectID: project.id, operations: [hook, layout, subtitles, music, zoom])
         #expect(response.ok, "\(String(describing: response.error))")
+        guard case .object(let shown)? = response.data?["shorts"] else {
+            Issue.record("apply_edits не показывает оформление черновика")
+            return
+        }
+        #expect(shown["hook"] == .string("Стало"))
         let changed = try await fixture.service.store.load(id: project.id)
         #expect(changed.shorts?.hook?.text == "Стало")
         #expect(changed.shorts?.resolvedLayout == .split)
@@ -137,6 +142,56 @@ struct AgentShortsTests {
         _ = await fixture.service.applyEdits(projectID: project.id, operations: [AgentEditOperation(op: "undo")])
         let restored = try await fixture.service.store.load(id: project.id)
         #expect(restored.shorts?.hook?.text == "Было")
+    }
+
+    @Test("a copy of a draft gets its own MP4 path and never overwrites the original")
+    func copiedDraftHasOwnOutput() async throws {
+        let fixture = try await fixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        var draft = fixture.project
+        let original = fixture.root.appendingPathComponent("draft.mp4").path
+        draft.shorts = ShortsPresentation(
+            title: "Шортс", reason: "", layout: .fit, resolvedLayout: .fit, hook: nil, subtitles: nil,
+            zooms: [], exportPath: original)
+        try await fixture.service.store.save(draft)
+
+        let response = await fixture.service.edit(
+            AgentEditRequest(sourcePaths: [], projectID: draft.id, removePauses: false, enhanceVoice: false))
+        guard case .string(let id)? = response.data?["projectId"], let copyID = UUID(uuidString: id) else {
+            Issue.record("копия не создана: \(String(describing: response.error))")
+            return
+        }
+        let copy = try await fixture.service.store.load(id: copyID)
+        #expect(copy.shorts != nil)
+        #expect(copy.shorts?.exportPath != original)
+    }
+
+    @Test("inspect shows the draft's styling to the agent")
+    func inspectShowsShorts() async throws {
+        let fixture = try await fixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        var draft = fixture.project
+        draft.shorts = ShortsPresentation(
+            title: "Шортс", reason: "", layout: .auto, resolvedLayout: .split, hook: ShortsHook(text: "Хук"),
+            subtitles: nil, zooms: [ShortsZoom(sourceID: draft.clips[0].source.id, sourceStart: 2, sourceEnd: 4, scale: 1.08)],
+            exportPath: "/tmp/x.mp4")
+        draft.music = ShortsDraftFactory.music(track: nil, mood: "calm", variant: 0)
+        try await fixture.service.store.save(draft)
+        let response = await fixture.service.inspect(projectID: draft.id)
+        guard case .object(let shorts)? = response.data?["shorts"] else {
+            Issue.record("в inspect нет блока shorts")
+            return
+        }
+        #expect(shorts["hook"] == .string("Хук"))
+        #expect(shorts["layout"] == .string("split"))
+        #expect(shorts["subtitles"] == .bool(false))
+        #expect(shorts["exportPath"] == .string("/tmp/x.mp4"))
+        guard case .array(let zooms)? = shorts["zooms"], case .object(let zoom)? = zooms.first else {
+            Issue.record("нет наездов")
+            return
+        }
+        #expect(zoom["timelineStart"] == .number(2))
+        #expect(shorts["music"] != nil)
     }
 
     @Test("styling ops refuse a regular project")

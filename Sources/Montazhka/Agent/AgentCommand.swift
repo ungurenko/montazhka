@@ -503,7 +503,8 @@ enum AgentDocumentation {
            в кадре, хук читается, субтитры не перекрыты), `aroundCuts=true`, `montazhka_audio`. Правки
            черновика — `apply_edits`: deleteWords, setHook{text}, setLayout{layout}, setSubtitles{on},
            zoom{words,timeline}, clearZooms, setMusic{track,volume}; затем `montazhka_export projectId` —
-           файл черновика перезапишется.
+           файл черновика перезапишется. Текущее оформление (хук, раскладка, наезды во времени ленты, музыка,
+           путь MP4) — блок `shorts` в `montazhka_inspect` и в ответе `apply_edits`.
         8. Отчёт пользователю: ролики, пути к MP4, длительности, что вырезано и почему.
 
         Исходные видео не перезаписываются; существующий результат требует `overwrite=true`.

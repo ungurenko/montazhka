@@ -59,12 +59,17 @@ enum ShortsDraftFactory {
                     guard let first = group.first, let last = group.last, let source = sources[first.sourceID]
                     else { continue }
                     let peaks = peaksFor(source.resolvedURL?.path ?? source.lastKnownPath) ?? []
-                    let boundary =
+                    let resolved =
                         ShortsBoundaryResolver.resolve(
                             first: first, last: last, peaks: peaks,
                             sourceDuration: sourceDuration(first.sourceID), thresholdDB: thresholdDB)
                         ?? ShortsBoundaryResolver.Boundary(
                             start: max(0, first.sourceStart - 0.1), end: last.sourceEnd + 0.1)
+                    // Не выходим за клип проекта: за его краями то, что пользователь уже вырезал.
+                    let owner = clips.first { $0.id == first.clipID }
+                    let boundary = ShortsBoundaryResolver.Boundary(
+                        start: max(resolved.start, owner?.start ?? resolved.start),
+                        end: min(resolved.end, owner?.end ?? resolved.end))
                     var segments =
                         trimPauses && !peaks.isEmpty
                         ? ShortsSegmentPlanner.segments(
