@@ -19,8 +19,12 @@ struct AgentEditOperation: Codable, Sendable {
     var start: Double?
     var end: Double?
     var steps: Int?
+    /// `deleteWords`: номера слов и отпечаток ленты из `montazhka_transcript`.
+    var words: [AgentWordRange]?
+    var timeline: String?
 
     var isUndo: Bool { op == "undo" }
+    var isWordDelete: Bool { op == "deleteWords" }
 
     init(op: String, steps: Int? = nil) {
         self.op = op
@@ -86,29 +90,48 @@ extension AgentService {
                 return try await editResponse(project, warnings: [])
             }
 
-            let ops = try operations.map { try $0.timelineOp() }
+            // Правки по словам превращаются в delete по ходу пачки: номера слов
+            // считаются по ленте на момент операции. Остальные проверяем сразу.
+            let prepared = try operations.map { $0.isWordDelete ? nil : try $0.timelineOp() }
             var durations: [String: Double] = [:]
             let paths = Set(project.clips.map(\.sourcePath)).union(
-                ops.compactMap {
-                    if case .insert(let path, _, _, _) = $0 { path } else { nil }
+                prepared.compactMap {
+                    if case .insert(let path, _, _, _)? = $0 { path } else { nil }
                 })
             for path in paths {
                 guard FileManager.default.fileExists(atPath: path) else { throw AgentServiceError.missingFile(path) }
                 durations[path] = try await AVURLAsset(url: URL(fileURLWithPath: path)).load(.duration).seconds
             }
 
-            let transcript = try? await cachedTimelineTranscript(for: project)
-            let sourceWords = transcript.map { map in
-                Dictionary(grouping: map.words, by: \.sourceID)
+            let transcriptWords = try? await cachedTranscriptWords(for: project)
+            let sourceWords = transcriptWords.map { words in
+                Dictionary(
+                    grouping: TranscriptTimelineMapper.make(clips: project.clips, transcripts: words).words,
+                    by: \.sourceID)
             }
             var warnings: [String] = []
+            let previousIDs = Set(project.clips.map(\.id))
             var clips = project.clips
-            for (index, op) in ops.enumerated() {
-                if let sourceWords {
-                    warnings += Self.wordSplitWarnings(op, index: index, clips: clips, sourceWords: sourceWords)
+            for (index, operation) in operations.enumerated() {
+                let op: TimelineEditOp
+                if let ready = prepared[index] {
+                    op = ready
+                    if let sourceWords {
+                        warnings += Self.wordSplitWarnings(op, index: index, clips: clips, sourceWords: sourceWords)
+                    }
+                } else {
+                    let cuts = try await wordCuts(
+                        operation, clips: clips, transcript: transcriptWords,
+                        thresholdDB: project.detection.thresholdDB)
+                    op = .delete(ranges: cuts.map(\.range))
+                    warnings += cuts.filter { !$0.inSilence }.map {
+                        "Операция \(index + 1), слова #\($0.words.lowerBound)–\($0.words.upperBound): рядом нет тишины, "
+                            + "рез по границе слова. Проверьте склейку montazhka_audio и montazhka_frames."
+                    }
                 }
                 clips = try TimelineEditOps.apply([op], to: clips, sourceDurations: durations)
             }
+            warnings += Self.fragmentWarnings(clips, previousIDs: previousIDs)
             try await revisions.push(project)
             project.clips = clips
             project.updatedAt = Date()
@@ -118,18 +141,46 @@ extension AgentService {
                 await revisions.drop(projectID: projectID, steps: 1)
                 throw error
             }
-            if transcript == nil {
+            if transcriptWords == nil {
                 warnings.append("Расшифровки нет в кэше — резы посреди слов не проверялись.")
             }
             return try await editResponse(project, warnings: warnings)
         } catch { return failure("apply_edits", error) }
     }
 
+    /// `deleteWords` → резы по ленте. Номера слов верны только для той ленты,
+    /// по которой агент читал расшифровку, — это проверяет отпечаток `timeline`.
+    private func wordCuts(
+        _ operation: AgentEditOperation, clips: [Clip], transcript: [TranscriptWord]?, thresholdDB: Double
+    ) async throws -> [AgentWordCut] {
+        guard let transcript else {
+            throw AgentServiceError.invalidInput(
+                "Для deleteWords нужна расшифровка: вызовите montazhka_transcript и дождитесь её.")
+        }
+        guard let ranges = operation.words, !ranges.isEmpty else {
+            throw AgentServiceError.invalidInput("Операции deleteWords нужно поле words: [{from, to}].")
+        }
+        guard let timeline = operation.timeline else {
+            throw AgentServiceError.invalidInput(
+                "Операции deleteWords нужно поле timeline из ответа montazhka_transcript.")
+        }
+        guard timeline == AgentWordCuts.fingerprint(clips) else {
+            throw AgentServiceError.invalidInput(
+                "Лента изменилась после чтения расшифровки, номера слов устарели. Вызовите montazhka_transcript "
+                    + "заново и возьмите новые номера и timeline. Несколько диапазонов — в одном deleteWords.")
+        }
+        for path in Set(clips.map(\.sourcePath)) { _ = await waveforms.ensure(path: path) }
+        let map = TranscriptTimelineMapper.make(clips: clips, transcripts: transcript)
+        return try AgentWordCuts.timelineRanges(
+            ranges, map: map, clips: clips, peaksFor: { self.waveforms.peaks(for: $0) },
+            thresholdDB: thresholdDB)
+    }
+
     /// Лента проекта для агента: номера клипов, их место на ленте и в исходнике.
-    func clipsData(_ project: Project, limit: Int = 200) -> AgentJSONValue {
+    func clipsData(_ project: Project, offset: Int = 0, limit: Int = 200) -> AgentJSONValue {
         let starts = TimelineEditOps.starts(of: project.clips)
         return .array(
-            zip(project.clips, starts).prefix(limit).enumerated().map { index, pair in
+            Array(zip(project.clips, starts).enumerated()).dropFirst(offset).prefix(limit).map { index, pair in
                 let (clip, start) = pair
                 return .object([
                     "clip": .number(Double(index)),
@@ -143,16 +194,34 @@ extension AgentService {
     }
 
     private func editResponse(_ project: Project, warnings: [String]) async throws -> AgentResponse {
-        .success(
-            command: "apply_edits",
-            data: [
-                "projectId": .string(project.id.uuidString),
-                "revision": .number(Double(await revisions.revision(of: project.id))),
-                "duration": .number(Self.rounded(project.totalDuration)),
-                "clipCount": .number(Double(project.clips.count)),
-                "clips": clipsData(project, limit: 50),
-                "warnings": .array(warnings.map { .string($0) }),
-            ])
+        let shown = min(Self.editResponseClips, project.clips.count)
+        var data: [String: AgentJSONValue] = [
+            "projectId": .string(project.id.uuidString),
+            "revision": .number(Double(await revisions.revision(of: project.id))),
+            "duration": .number(Self.rounded(project.totalDuration)),
+            "clipCount": .number(Double(project.clips.count)),
+            "clipsShown": .number(Double(shown)),
+            "clips": clipsData(project, limit: shown),
+            "warnings": .array(warnings.map { .string($0) }),
+        ]
+        if shown < project.clips.count {
+            data["more"] = .string("Показаны первые \(shown) клипов. Остальные — montazhka_inspect с offset=\(shown).")
+        }
+        return .success(command: "apply_edits", data: data)
+    }
+
+    private static let editResponseClips = 50
+    /// Короче этого новый кусок почти наверняка обрывок слова или щелчок.
+    private static let fragmentThreshold = 0.25
+
+    /// Предупреждает о коротких кусках, которые появились в этой правке.
+    /// Сам движок их не удаляет: короткое «да» — тоже законный клип.
+    static func fragmentWarnings(_ clips: [Clip], previousIDs: Set<UUID>) -> [String] {
+        clips.enumerated().compactMap { index, clip in
+            guard !previousIDs.contains(clip.id), clip.duration < fragmentThreshold else { return nil }
+            return "Клип \(index) длится \(String(format: "%.2f", clip.duration)) с — похоже на обрывок. "
+                + "Проверьте его в montazhka_transcript и удалите, если он лишний."
+        }
     }
 
     /// Предупреждает, если точка реза на ленте попадает внутрь слова.

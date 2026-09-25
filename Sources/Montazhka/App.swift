@@ -78,6 +78,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.appearance = NSAppearance(named: .aqua)
         // Запуск из терминала (swift run) не выводит окно вперёд — активируем сами.
         NSApp.activate(ignoringOtherApps: true)
+        if !UITestMode.isActive { AgentIntegrationInstaller.refreshSkillsIfInstalled() }
     }
 
     /// Пользователь вернулся в окно — значок о готовой работе он уже увидел.

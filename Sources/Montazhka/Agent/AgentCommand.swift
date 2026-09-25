@@ -76,12 +76,14 @@ enum AgentCommand {
             guard let id = value("--id", in: args).flatMap(UUID.init(uuidString:)) else {
                 return .failure(command: "get_job", code: "INVALID_JOB_ID", message: "Укажите --id задачи.")
             }
-            return await service.job(id: id)
+            return await service.job(id: id, waitSeconds: number("--wait", in: args) ?? 0)
         case "inspect":
             guard let id = value("--project", in: args).flatMap(UUID.init(uuidString:)) else {
                 return .failure(command: "inspect", code: "INVALID_PROJECT_ID", message: "Укажите --project.")
             }
-            return await service.inspect(projectID: id)
+            return await service.inspect(
+                projectID: id, offset: value("--offset", in: args).flatMap(Int.init) ?? 0,
+                limit: value("--limit", in: args).flatMap(Int.init) ?? 200)
         case "export":
             guard let id = value("--project", in: args).flatMap(UUID.init(uuidString:)) else {
                 return .failure(command: "export", code: "INVALID_PROJECT_ID", message: "Укажите --project.")
@@ -105,6 +107,7 @@ enum AgentCommand {
             }
             return await service.transcriptOrStartJob(
                 projectID: id, from: number("--from", in: args), to: number("--to", in: args),
+                query: value("--query", in: args),
                 confirmModelDownload: args.contains("--confirm-model-download"))
         case "frames":
             return await service.frames(
@@ -198,10 +201,16 @@ enum AgentCommand {
 
 private struct AgentMCPServer {
     private let service = AgentService()
+    private let startedStamp = AgentBuildInfo.executableStamp()
+
+    /// Приложение переустановили, пока сервер работал.
+    private var isStale: Bool {
+        AgentBuildInfo.executableStamp() != startedStamp
+    }
 
     func run() async throws {
         let server = Server(
-            name: "Montazhka", version: "1.0.0",
+            name: "Montazhka", version: AgentBuildInfo.version,
             instructions:
                 "Локальный монтаж видео. Сначала вызовите montazhka_doctor и прочитайте montazhka://guide. "
                 + "Финальный экспорт — когда пользователь поручил сделать готовый файл.",
@@ -220,7 +229,12 @@ private struct AgentMCPServer {
                 })
         }
         await server.withMethodHandler(CallTool.self) { request in
-            let response = await call(name: request.name, arguments: request.arguments ?? [:])
+            var response = await call(name: request.name, arguments: request.arguments ?? [:])
+            let stale = isStale
+            if request.name == "montazhka_doctor", response.data != nil {
+                response.data?["serverStale"] = .bool(stale)
+            }
+            if stale { response = response.addingWarning(AgentBuildInfo.staleWarning) }
             let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
             let text = (try? String(decoding: encoder.encode(response), as: UTF8.self)) ?? "{}"
             var content: [Tool.Content] = [.text(text: text, annotations: nil, _meta: nil)]
@@ -275,13 +289,14 @@ private struct AgentMCPServer {
             guard let id = arguments["jobId"]?.stringValue.flatMap(UUID.init(uuidString:)) else {
                 return .failure(command: "get_job", code: "INVALID_JOB_ID", message: "Нужен jobId.")
             }
-            return await service.job(id: id)
+            return await service.job(id: id, waitSeconds: Self.double(arguments["waitSeconds"]) ?? 0)
         case "montazhka_inspect":
             guard let id = arguments["projectId"]?.stringValue.flatMap(UUID.init(uuidString:)) else {
                 return .failure(command: "inspect", code: "INVALID_PROJECT_ID", message: "Нужен projectId.")
             }
             return await service.inspect(
-                projectID: id, around: arguments["cuts"]?.arrayValue?.compactMap(Self.double) ?? [])
+                projectID: id, around: arguments["cuts"]?.arrayValue?.compactMap(Self.double) ?? [],
+                offset: arguments["offset"]?.intValue ?? 0, limit: arguments["limit"]?.intValue ?? 200)
         case "montazhka_export":
             guard let id = arguments["projectId"]?.stringValue.flatMap(UUID.init(uuidString:)) else {
                 return .failure(command: "export", code: "INVALID_PROJECT_ID", message: "Нужен projectId.")
@@ -316,6 +331,7 @@ private struct AgentMCPServer {
             }
             return await service.transcriptOrStartJob(
                 projectID: id, from: Self.double(arguments["from"]), to: Self.double(arguments["to"]),
+                query: arguments["query"]?.stringValue,
                 confirmModelDownload: arguments["confirmModelDownload"]?.boolValue ?? false)
         case "montazhka_frames":
             return await service.frames(
@@ -416,20 +432,27 @@ enum AgentDocumentation {
         `clean-speech` бережно убирает длинные паузы, улучшает голос и не включает музыку.
         `dynamic` делает паузы короче. `shorts` готовит пять роликов 9:16 с субтитрами.
         `aiMode=built-in` использует настройки ИИ приложения; `aiMode=external` отдаёт расшифровку агенту.
-        Долгие операции возвращают `jobId`; состояние читает `montazhka_get_job`.
-        Большие материалы доступны через `montazhka://runs/{jobId}/{artifact}`.
+        Долгие операции возвращают `jobId`; ждите их `montazhka_get_job waitSeconds=25` — вызов
+        сам дождётся смены этапа. Большие материалы — `montazhka://runs/{jobId}/{artifact}`.
+        Поле `warnings` в ответе читайте всегда: там, например, просьба перезапустить сессию.
 
         ## Самостоятельный монтаж
         Все инструменты ниже работают во времени ленты проекта (секунды итогового ролика).
-        1. `montazhka_edit_video` (паузы убраны) → `montazhka_inspect`: клипы с номерами и временем.
-        2. `montazhka_transcript`: слова `начало конец слово`, отметки пауз и склеек. Если расшифровки
-           нет, вызов запускает её в фоне и возвращает `jobId` — дождитесь его и вызовите снова.
+        1. `montazhka_edit_video` (паузы убраны) → `montazhka_inspect`: клипы с номерами и временем
+           (до 200 за вызов, дальше `offset=nextOffset`).
+        2. `montazhka_transcript`: строки `#номер начало конец слово`, отметки пауз и склеек,
+           отпечаток ленты `timeline`. `query="фраза"` находит, где она звучит. Если расшифровки нет,
+           вызов запускает её в фоне и возвращает `jobId` — дождитесь его и вызовите снова.
         3. `montazhka_frames`: сетка кадров картинкой. Узкий `from/to` — приближение к моменту.
            `montazhka_audio`: громкость по отрезкам и тишины.
-        4. `montazhka_apply_edits` пачкой: delete, split, move, trim, insert (вставка куска другого
-           исходника для сборки из нескольких файлов). Операции идут по порядку; диапазоны одного
-           delete считаются по ленте до операции. Ответ содержит новую ленту и предупреждения о резах
-           посреди слова. Ошибка — `{"op":"undo"}` отдельным вызовом.
+        4. Слова режьте по номерам: `{"op":"deleteWords","words":[{"from":120,"to":135}],"timeline":"…"}` —
+           все диапазоны в одном deleteWords, номера и timeline из последнего transcript; рез ляжет
+           в тишину между словами. После любой правки номера слов и клипов меняются: для следующего
+           deleteWords заново вызовите transcript. Остальное — `montazhka_apply_edits` по времени ленты:
+           delete, split, move, trim, insert (кусок другого исходника). Операции идут по порядку, каждая
+           видит ленту после предыдущей; диапазоны одного delete считаются по ленте до него. Ответ
+           предупреждает о резах посреди слова и обрывках короче 0,25 с. Ошибка — `{"op":"undo"}`
+           отдельным вызовом.
         5. После правок: `montazhka_frames aroundCuts=true` (скачки картинки) и `montazhka_audio` у склеек.
         6. Если пользователь поручил сделать готовый файл, это согласие на финал:
            `montazhka_export final=true confirmFinal=true quality=high`.
@@ -449,8 +472,9 @@ enum AgentDocumentation {
         # Монтажка
         Сначала вызови `montazhka_doctor` и прочитай ресурс `montazhka://guide` — там полный порядок монтажа.
         Для обычной речи используй профиль `clean-speech`, для энергичного ролика — `dynamic`, для вертикальных клипов — `shorts`.
-        Решения о резах принимай по расшифровке (`montazhka_transcript`), сомнительные места проверяй кадрами
-        (`montazhka_frames`) и громкостью (`montazhka_audio`), правь через `montazhka_apply_edits`.
+        Решения о резах принимай по расшифровке (`montazhka_transcript`, поиск фразы — `query`), слова режь
+        по номерам операцией `deleteWords`, сомнительные места проверяй кадрами (`montazhka_frames`)
+        и громкостью (`montazhka_audio`), правь через `montazhka_apply_edits`. Читай `warnings` в ответах.
         После правок посмотри кадры у склеек. Если пользователь поручил готовый файл — делай финальный
         экспорт сам и проверь готовый MP4 теми же инструментами. Исходники не перезаписывай.
         """

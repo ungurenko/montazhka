@@ -23,4 +23,13 @@ protocol ProjectRepository: Sendable {
 
     /// Синхронный финальный снимок для системного завершения приложения.
     func saveBeforeTermination(_ project: Project) throws
+
+    /// Отметка версии файла проекта на диске. Меняется при каждой записи —
+    /// и своей, и чужой (агент правит проект из другого процесса).
+    /// nil — файла ещё нет или хранилище не на диске.
+    func diskStamp(of id: UUID) -> Date?
+}
+
+extension ProjectRepository {
+    func diskStamp(of id: UUID) -> Date? { nil }
 }

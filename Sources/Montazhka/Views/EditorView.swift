@@ -269,9 +269,32 @@ struct EditorView: View {
             }
             playerStatusOverlay
         }
+        .overlay(alignment: .top) { externalChangeBanner }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onDrop(of: [.fileURL], isTargeted: nil) { providers in
             handleDrop(providers)
+        }
+    }
+
+    @ViewBuilder
+    private var externalChangeBanner: some View {
+        if let notice = controller.externalChangeNotice {
+            StatusBanner(
+                kind: .info, title: notice.title, hint: notice.hint,
+                actions: [
+                    .init(title: "Вернуть как было", accessibilityIdentifier: "editor.externalChange.undo") {
+                        controller.undo()
+                    },
+                    .init(title: "Понятно", accessibilityIdentifier: "editor.externalChange.dismiss") {
+                        controller.dismissExternalChangeNotice()
+                    },
+                ]
+            )
+            .background(Theme.card, in: RoundedRectangle(cornerRadius: Theme.radiusSmall, style: .continuous))
+            .elevation(.raised)
+            .frame(maxWidth: 480)
+            .padding(Theme.Spacing.snug)
+            .transition(.opacity)
         }
     }
 

@@ -15,6 +15,37 @@ struct PauseCandidate: Identifiable, Equatable {
 }
 
 enum SilenceDetector {
+    /// Совсем короткие вырезки не имеют смысла.
+    static let minimumCut = 0.15
+    /// Сколько тишины оставлять у слова, если пауза его задевает.
+    static let wordAir = 0.04
+
+    /// Паузы ищутся по громкости, и тихое слово (шёпот, затухающий конец фразы)
+    /// может попасть внутрь «тишины». Если расшифровка есть, вырезку сужаем
+    /// или делим так, чтобы слова остались целыми. Времена — секунды ленты.
+    static func sparingWords(
+        _ pauses: [PauseCandidate], words: [(start: Double, end: Double)]
+    ) -> [PauseCandidate] {
+        pauses.flatMap { pause -> [PauseCandidate] in
+            var pieces = [(from: pause.start, to: pause.end)]
+            for word in words where word.end > pause.start && word.start < pause.end {
+                let keepFrom = word.start - wordAir
+                let keepTo = word.end + wordAir
+                pieces = pieces.flatMap { piece -> [(from: Double, to: Double)] in
+                    guard keepTo > piece.from, keepFrom < piece.to else { return [piece] }
+                    return [(piece.from, min(piece.to, keepFrom)), (max(piece.from, keepTo), piece.to)]
+                        .filter { $0.to - $0.from >= minimumCut }
+                }
+            }
+            return pieces.map { piece in
+                var result = pause
+                result.start = piece.from
+                result.end = piece.to
+                return result
+            }
+        }
+    }
+
     /// Ищет тихие участки внутри каждого клипа по заранее посчитанным пикам
     /// громкости. Результат — в секундах ленты.
     static func findPauses(
@@ -55,7 +86,7 @@ enum SilenceDetector {
         let wps = WaveformStore.windowsPerSecond
         let threshold = Float(pow(10.0, settings.thresholdDB / 20.0))
         let padding = settings.paddingMS / 1000.0
-        let minCut = 0.15  // совсем короткие вырезки не имеют смысла
+        let minCut = minimumCut
 
         let first = max(0, Int(from * wps))
         let last = min(peaks.count, Int(to * wps))

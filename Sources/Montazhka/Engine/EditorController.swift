@@ -26,6 +26,30 @@ enum ProjectSaveStatus: Equatable {
     case failed(UserFacingError)
 }
 
+/// Почему лента поменялась без действий в окне.
+enum ExternalChangeNotice: Equatable {
+    /// Агент изменил проект, в окне правок не ждало.
+    case agentChanged
+    /// Агент изменил проект, пока правка окна ждала записи, — она не сохранилась.
+    case agentChangedDuringEdit
+
+    var title: String {
+        switch self {
+        case .agentChanged: "Агент изменил проект — лента обновлена"
+        case .agentChangedDuringEdit: "Агент изменил проект во время вашей правки"
+        }
+    }
+
+    var hint: String {
+        switch self {
+        case .agentChanged:
+            "Вернуть прежнюю версию можно кнопкой «Вернуть как было» или ⌘Z."
+        case .agentChangedDuringEdit:
+            "Ваша последняя правка не сохранилась. «Вернуть как было» вернёт вашу версию вместе с ней."
+        }
+    }
+}
+
 enum PreviewState: Equatable {
     case empty
     case preparing
@@ -91,6 +115,8 @@ final class EditorController: ExportPreparing {
     }
     var missingSources: [MediaReference] { mediaAvailability.missingSources }
     var saveStatus: ProjectSaveStatus { saveCoordinator.status }
+    /// Проект перечитан после правки агента — окно говорит, что лента поменялась не сама.
+    private(set) var externalChangeNotice: ExternalChangeNotice?
     private(set) var renderWarnings: [CompositionWarning] = []
     private(set) var previewState: PreviewState = .empty
     private(set) var clipImportState: ClipImportState = .idle
@@ -138,6 +164,8 @@ final class EditorController: ExportPreparing {
     @ObservationIgnored private var smartEditSnapshotID: String?
     @ObservationIgnored private var previewTask: Task<Void, Never>?
     @ObservationIgnored private var clipImportTask: Task<Void, Never>?
+    @ObservationIgnored private var diskWatchTask: Task<Void, Never>?
+    @ObservationIgnored private var isReloadingFromDisk = false
 
     var duration: Double { project.totalDuration }
     var timelineSelection: TimelineSelection? {
@@ -203,6 +231,7 @@ final class EditorController: ExportPreparing {
 
         checkMissingFiles()
         attachObservers()
+        watchDiskChanges()
         rebuildAndSeek(to: 0)
         warmUpWaveforms()
         // Первый показ — с исходным звуком; улучшенный подменится, когда будет готов
@@ -224,6 +253,7 @@ final class EditorController: ExportPreparing {
         clipImportState = .idle
         previewTask?.cancel()
         clipImportTask?.cancel()
+        diskWatchTask?.cancel()
         seekTask?.cancel()
         enhanceDebounce?.cancel()
         enhanceRenderTask?.cancel()
@@ -486,6 +516,7 @@ final class EditorController: ExportPreparing {
     }
 
     private func afterEdit(seekTo time: Double?) {
+        externalChangeNotice = nil
         candidates = []
         cancelSmartEdit()
         clearSelection()
@@ -507,6 +538,13 @@ final class EditorController: ExportPreparing {
     }
 
     private func restoreProject(_ snapshot: Project) {
+        externalChangeNotice = nil
+        showProject(snapshot)
+        scheduleSave()
+    }
+
+    /// Показывает другую версию проекта целиком: ленту, звук, предпросмотр.
+    private func showProject(_ snapshot: Project) {
         project = snapshot
         mediaAccess.synchronize(uniqueMediaSources(in: project.clips))
         checkMissingFiles()
@@ -514,7 +552,6 @@ final class EditorController: ExportPreparing {
         candidates = []
         cancelSmartEdit()
         clearSelection()
-        scheduleSave()
         updateUndoFlags()
         if project.voiceEnhance.enabled {
             refreshEnhancedAudio()
@@ -1053,6 +1090,57 @@ final class EditorController: ExportPreparing {
             player.removeTimeObserver(previewBoundary)
             self.previewBoundary = nil
         }
+    }
+
+    // MARK: - Правки снаружи
+
+    /// Агент правит проект из другого процесса. Окно раз в секунду сверяет
+    /// версию файла и подхватывает чужую правку, а не затирает её своей записью.
+    private func watchDiskChanges() {
+        saveCoordinator.adoptDiskStamp(for: project.id)
+        saveCoordinator.onExternalChange = { [weak self] in
+            Task { await self?.reloadChangedProject(lostLocalEdit: true) }
+        }
+        diskWatchTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(1))
+                guard let self else { return }
+                guard self.saveCoordinator.diskChangedElsewhere(for: self.project.id) else { continue }
+                await self.reloadChangedProject(lostLocalEdit: self.saveCoordinator.hasPendingSave)
+            }
+        }
+    }
+
+    /// Перечитывает проект с диска. Прежняя версия окна уходит в историю,
+    /// поэтому «Отменить» возвращает её.
+    func reloadChangedProject(lostLocalEdit: Bool) async {
+        guard !isReloadingFromDisk else { return }
+        isReloadingFromDisk = true
+        defer { isReloadingFromDisk = false }
+        saveCoordinator.cancelPending()
+        let fresh: Project
+        do {
+            fresh = try await repository.load(id: project.id)
+        } catch {
+            Logger.persistence.error("Не удалось перечитать изменённый проект: \(error.localizedDescription)")
+            return
+        }
+        saveCoordinator.adoptDiskStamp(for: fresh.id)
+        finishCoalescedEdit()
+        projectEditor.recordCurrent()
+        let edits: [ProjectEdit] = [
+            .replaceClips(fresh.clips), .rename(fresh.name), .updateDetection(fresh.detection),
+            .updateVoice(fresh.voiceEnhance), .updateMusic(fresh.music),
+        ]
+        for edit in edits {
+            projectEditor.apply(edit, recordHistory: false)
+        }
+        showProject(projectEditor.project)
+        externalChangeNotice = lostLocalEdit ? .agentChangedDuringEdit : .agentChanged
+    }
+
+    func dismissExternalChangeNotice() {
+        externalChangeNotice = nil
     }
 
     // MARK: - Сохранение

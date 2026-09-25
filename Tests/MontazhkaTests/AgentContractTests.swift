@@ -82,6 +82,16 @@ struct AgentContractTests {
         #expect(object["data"] != nil)
     }
 
+    @Test("CLI edit requests accept the MCP spelling projectId")
+    func editRequestProjectIDSpellings() throws {
+        let id = UUID()
+        for key in ["projectID", "projectId"] {
+            let request = try JSONDecoder().decode(
+                AgentEditRequest.self, from: Data(#"{"\#(key)":"\#(id.uuidString)"}"#.utf8))
+            #expect(request.projectID == id)
+        }
+    }
+
     @Test("Partial edit requests keep safe defaults")
     func partialEditRequest() throws {
         let request = try JSONDecoder().decode(

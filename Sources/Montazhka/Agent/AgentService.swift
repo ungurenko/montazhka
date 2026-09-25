@@ -51,7 +51,10 @@ struct AgentEditRequest: Codable, Sendable {
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         sourcePaths = try values.decodeIfPresent([String].self, forKey: .sourcePaths) ?? []
-        projectID = try values.decodeIfPresent(UUID.self, forKey: .projectID)
+        // В MCP поле называется projectId — принимаем и его, чтобы JSON для CLI был тем же.
+        projectID =
+            try values.decodeIfPresent(UUID.self, forKey: .projectID)
+            ?? values.decodeIfPresent(UUID.self, forKey: .projectId)
         name = try values.decodeIfPresent(String.self, forKey: .name)
         profile = try values.decodeIfPresent(AgentEditProfile.self, forKey: .profile) ?? .cleanSpeech
         cuts = try values.decodeIfPresent([AgentSourceCut].self, forKey: .cuts) ?? []
@@ -65,7 +68,7 @@ struct AgentEditRequest: Codable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case sourcePaths, projectID, name, profile, cuts, removePauses, enhanceVoice
+        case sourcePaths, projectID, projectId, name, profile, cuts, removePauses, enhanceVoice
         case musicPath, aiMode, smartEdit, confirmModelDownload
     }
 
@@ -163,6 +166,7 @@ actor AgentService {
             command: "doctor",
             data: [
                 "ready": .bool(writable),
+                "version": .string(AgentBuildInfo.version),
                 "architecture": .string(Self.architecture),
                 "transcriptionSupported": .bool(Self.architecture == "arm64"),
                 "modelReady": .bool(model != nil),
@@ -196,9 +200,21 @@ actor AgentService {
         } catch { return failure("get_projects", error) }
     }
 
-    func job(id: UUID) async -> AgentResponse {
+    static let maxJobWaitSeconds = 30.0
+
+    /// `waitSeconds` > 0: не отвечать сразу, а подождать, пока у идущей задачи
+    /// сменится статус или этап (но не дольше 30 секунд). Так агент тратит один
+    /// вызов вместо серии опросов.
+    func job(id: UUID, waitSeconds: Double = 0) async -> AgentResponse {
         do {
-            let run = try await runs.load(id: id)
+            var run = try await runs.load(id: id)
+            let deadline = Date().addingTimeInterval(min(Self.maxJobWaitSeconds, max(0, waitSeconds)))
+            let started = (status: run.status, stage: run.stage)
+            while run.status == .pending || run.status == .running, Date() < deadline {
+                try await Task.sleep(for: .milliseconds(500))
+                run = try await runs.load(id: id)
+                if run.status != started.status || run.stage != started.stage { break }
+            }
             let artifacts = Dictionary(
                 uniqueKeysWithValues: run.artifacts.keys.sorted().map {
                     ($0, AgentJSONValue.string("montazhka://runs/\(id.uuidString)/\($0)"))
@@ -215,10 +231,14 @@ actor AgentService {
         } catch { return failure("get_job", error) }
     }
 
-    func inspect(projectID: UUID, around cuts: [Double] = []) async -> AgentResponse {
+    func inspect(
+        projectID: UUID, around cuts: [Double] = [], offset: Int = 0, limit: Int = 200
+    ) async -> AgentResponse {
         do {
             let project = try await store.load(id: projectID)
             let missing = Set(project.clips.map(\.sourcePath)).filter { !FileManager.default.fileExists(atPath: $0) }
+            let start = min(max(0, offset), project.clips.count)
+            let end = min(project.clips.count, start + min(500, max(1, limit)))
             return .success(
                 command: "inspect",
                 data: [
@@ -226,7 +246,9 @@ actor AgentService {
                     "clipCount": .number(Double(project.clips.count)),
                     "missingFiles": .array(missing.sorted().map { .string($0) }),
                     "revision": .number(Double(await revisions.revision(of: project.id))),
-                    "clips": clipsData(project),
+                    "clips": clipsData(project, offset: start, limit: end - start),
+                    "offset": .number(Double(start)),
+                    "nextOffset": end < project.clips.count ? .number(Double(end)) : .null,
                     "cutChecks": .array(
                         cuts.prefix(50).map {
                             .object([

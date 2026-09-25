@@ -89,6 +89,25 @@ enum AgentIntegrationInstaller {
         return AgentIntegrationStatus(installed: false, message: "AI-агенты отключены")
     }
 
+    /// Новая версия приложения несёт новую инструкцию для агентов. Если агенты
+    /// уже подключены, скилл обновляется при запуске — без повторного подключения.
+    /// Возвращает, сколько файлов скилла переписано.
+    @discardableResult
+    static func refreshSkillsIfInstalled(home: URL = FileManager.default.homeDirectoryForCurrentUser) -> Int {
+        guard FileManager.default.fileExists(atPath: home.appendingPathComponent(".local/bin/montazhka").path)
+        else { return 0 }
+        var refreshed = 0
+        for path in [".codex/skills/montazhka/SKILL.md", ".claude/skills/montazhka/SKILL.md"] {
+            let url = home.appendingPathComponent(path)
+            guard let current = try? String(contentsOf: url, encoding: .utf8),
+                current != AgentDocumentation.skill,
+                (try? installSkill(at: url)) != nil
+            else { continue }
+            refreshed += 1
+        }
+        return refreshed
+    }
+
     private static func installSkill(at url: URL) throws {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data(AgentDocumentation.skill.utf8).write(to: url, options: .atomic)

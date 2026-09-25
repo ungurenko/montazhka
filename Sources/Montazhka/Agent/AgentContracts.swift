@@ -56,11 +56,19 @@ struct AgentResponse: Codable, Equatable, Sendable {
     let apiVersion: String
     let ok: Bool
     let command: String
-    let data: [String: AgentJSONValue]?
+    var data: [String: AgentJSONValue]?
     let error: AgentErrorPayload?
+    /// Что агенту стоит знать помимо результата (например, что сервер устарел).
+    var warnings: [String]?
 
     static func success(command: String, data: [String: AgentJSONValue]) -> AgentResponse {
         AgentResponse(apiVersion: "1", ok: true, command: command, data: data, error: nil)
+    }
+
+    func addingWarning(_ text: String) -> AgentResponse {
+        var copy = self
+        copy.warnings = (warnings ?? []) + [text]
+        return copy
     }
 
     static func failure(
@@ -102,12 +110,15 @@ enum AgentToolCatalog {
             "montazhka_edit_project", "Применить точные резы и настройки к копии проекта.",
             properties: editProjectProperties, required: ["projectId"], destructive: true),
         tool(
-            "montazhka_get_job", "Получить короткий статус фоновой задачи.", properties: ["jobId": string],
+            "montazhka_get_job",
+            "Статус фоновой задачи. waitSeconds (до 30) — дождаться смены статуса или этапа вместо частых опросов.",
+            properties: ["jobId": string, "waitSeconds": number],
             required: ["jobId"], readOnly: true),
         tool(
-            "montazhka_inspect", "Лента проекта: клипы с временем ленты и исходника, ревизия, зоны склеек.",
+            "montazhka_inspect",
+            "Лента проекта: клипы с временем ленты и исходника, ревизия. До 200 клипов за вызов, дальше — nextOffset.",
             properties: [
-                "projectId": string, "cuts": array(number),
+                "projectId": string, "cuts": array(number), "offset": integer, "limit": integer,
             ], required: ["projectId"], readOnly: true),
         tool(
             "montazhka_export", "Создать черновой или подтверждённый финальный MP4.",
@@ -118,9 +129,11 @@ enum AgentToolCatalog {
             ], required: ["projectId"], destructive: true),
         tool(
             "montazhka_transcript",
-            "Слова с временем ленты, паузы и склейки. Если расшифровки нет — запускает её в фоне и даёт jobId.",
+            "Слова `#номер начало конец текст` во времени ленты, паузы, склейки и отпечаток timeline. "
+                + "query — найти фразу. Нет расшифровки — запускает её в фоне и даёт jobId.",
             properties: [
-                "projectId": string, "from": number, "to": number, "confirmModelDownload": boolean,
+                "projectId": string, "from": number, "to": number, "query": string,
+                "confirmModelDownload": boolean,
             ], required: ["projectId"], readOnly: true),
         tool(
             "montazhka_frames",
@@ -137,7 +150,8 @@ enum AgentToolCatalog {
             ], readOnly: true),
         tool(
             "montazhka_apply_edits",
-            "Правки ленты по порядку, время ленты: delete{ranges[{from,to}]}, split{at}, move{clip,to}, "
+            "Правки ленты по порядку. deleteWords{words[{from,to}],timeline} — по номерам слов из transcript, "
+                + "рез в тишине между словами. Время ленты: delete{ranges[{from,to}]}, split{at}, move{clip,to}, "
                 + "trim{clip,edge,seconds}, insert{sourcePath,start,end,at}. undo{steps} — отдельным вызовом.",
             properties: ["projectId": string, "operations": array(operation)],
             required: ["projectId", "operations"], destructive: true),
@@ -188,7 +202,7 @@ enum AgentToolCatalog {
     private static let operation = AgentJSONValue.object([
         "type": "object",
         "properties": .object([
-            "op": enumStrings(["delete", "split", "move", "trim", "insert", "undo"]),
+            "op": enumStrings(["deleteWords", "delete", "split", "move", "trim", "insert", "undo"]),
             "ranges": array(
                 .object([
                     "type": "object", "properties": .object(["from": number, "to": number]),
@@ -196,6 +210,12 @@ enum AgentToolCatalog {
                 ])),
             "at": number, "clip": integer, "to": integer, "edge": enumStrings(["start", "end"]),
             "seconds": number, "sourcePath": string, "start": number, "end": number, "steps": integer,
+            "words": array(
+                .object([
+                    "type": "object", "properties": .object(["from": integer, "to": integer]),
+                    "required": .array([.string("from"), .string("to")]),
+                ])),
+            "timeline": string,
         ]),
         "required": .array([.string("op")]),
     ])

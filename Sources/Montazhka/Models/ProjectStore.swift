@@ -195,6 +195,11 @@ final class ProjectStore: ProjectRepository, Sendable {
         try ioQueue.sync { try saveOnQueue(project) }
     }
 
+    func diskStamp(of id: UUID) -> Date? {
+        let attributes = try? FileManager.default.attributesOfItem(atPath: fileURL(for: id).path)
+        return attributes?[.modificationDate] as? Date
+    }
+
     private func perform<T: Sendable>(_ operation: @escaping @Sendable () throws -> T) async throws -> T {
         try await withCheckedThrowingContinuation { continuation in
             ioQueue.async {

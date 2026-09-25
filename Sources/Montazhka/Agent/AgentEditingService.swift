@@ -186,8 +186,13 @@ extension AgentService {
             ? DetectionSettings(thresholdDB: -38, minPauseDuration: 0.55, paddingMS: 110)
             : DetectionSettings()
         for source in Set(result.clips.map(\.sourcePath)) { _ = await waveforms.ensure(path: source) }
-        let pauses = SilenceDetector.findPauses(
+        var pauses = SilenceDetector.findPauses(
             clips: result.clips, peaksFor: { self.waveforms.peaks(for: $0) }, settings: result.detection)
+        if let words = try? await cachedTranscriptWords(for: result) {
+            let mapped = TranscriptTimelineMapper.make(clips: result.clips, transcripts: words).words
+            pauses = SilenceDetector.sparingWords(
+                pauses, words: mapped.map { (start: $0.timelineStart, end: $0.timelineEnd) })
+        }
         for pause in pauses.sorted(by: { $0.start > $1.start }) {
             result.clips = TimelineOps.removingRange(clips: result.clips, start: pause.start, end: pause.end)
         }

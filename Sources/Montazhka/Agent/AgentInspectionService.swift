@@ -133,9 +133,9 @@ extension AgentService {
 
     // MARK: - Расшифровка
 
-    /// Слова во времени ленты. Если какой-то исходник ещё не расшифрован,
-    /// возвращает nil — расшифровку нужно запустить фоновой задачей.
-    func cachedTimelineTranscript(for project: Project) async throws -> TranscriptTimelineMap? {
+    /// Слова исходников проекта (время исходника). Если какой-то исходник ещё
+    /// не расшифрован, возвращает nil — расшифровку нужно запустить фоновой задачей.
+    func cachedTranscriptWords(for project: Project) async throws -> [TranscriptWord]? {
         let transcriptStore = makeTranscriptStore()
         let sources = uniqueSources(project.clips)
         for source in sources {
@@ -144,10 +144,17 @@ extension AgentService {
         }
         var words: [TranscriptWord] = []
         for source in sources { words += try await transcriptStore.ensure(source: source) }
-        return TranscriptTimelineMapper.make(clips: project.clips, transcripts: words)
+        return words
     }
 
-    func transcript(projectID: UUID, from: Double?, to: Double?) async -> AgentResponse {
+    /// Слова во времени ленты.
+    func cachedTimelineTranscript(for project: Project) async throws -> TranscriptTimelineMap? {
+        try await cachedTranscriptWords(for: project).map {
+            TranscriptTimelineMapper.make(clips: project.clips, transcripts: $0)
+        }
+    }
+
+    func transcript(projectID: UUID, from: Double?, to: Double?, query: String? = nil) async -> AgentResponse {
         do {
             let project = try await store.load(id: projectID)
             guard let map = try await cachedTimelineTranscript(for: project) else {
@@ -156,13 +163,19 @@ extension AgentService {
                     message: "Расшифровка этого проекта ещё не готова.",
                     recovery: "montazhka_transcript сам запускает её в фоне; дождитесь задачи в montazhka_get_job.")
             }
+            let timeline = AgentWordCuts.fingerprint(project.clips)
+            if let query, !query.trimmingCharacters(in: .whitespaces).isEmpty {
+                return transcriptSearch(query, map: map, projectID: project.id, timeline: timeline)
+            }
             let lower = from ?? 0
             let upper = to ?? project.totalDuration
-            let inRange = map.words.filter { $0.timelineEnd > lower && $0.timelineStart < upper }
+            let inRange = map.words.enumerated().filter {
+                $0.element.timelineEnd > lower && $0.element.timelineStart < upper
+            }
             let page = inRange.prefix(Self.transcriptPageWords)
             var lines: [String] = []
             var previous: MappedTranscriptWord?
-            for word in page {
+            for (number, word) in page {
                 if let previous {
                     if previous.clipID != word.clipID {
                         lines.append("--- склейка \(Self.format(word.timelineStart)) ---")
@@ -170,15 +183,17 @@ extension AgentService {
                     let gap = word.timelineStart - previous.timelineEnd
                     if gap >= 0.4 { lines.append("--- пауза \(String(format: "%.1f", gap)) с ---") }
                 }
-                lines.append("\(Self.format(word.timelineStart)) \(Self.format(word.timelineEnd)) \(word.text)")
+                lines.append(
+                    "#\(number + 1) \(Self.format(word.timelineStart)) \(Self.format(word.timelineEnd)) \(word.text)")
                 previous = word
             }
-            let next = inRange.count > page.count ? inRange[page.count].timelineStart : nil
+            let next = inRange.count > page.count ? inRange[page.count].element.timelineStart : nil
             return .success(
                 command: "transcript",
                 data: [
                     "projectId": .string(project.id.uuidString),
-                    "format": "начало конец слово (секунды ленты)",
+                    "format": "#номер начало конец слово (секунды ленты)",
+                    "timeline": .string(timeline),
                     "wordCount": .number(Double(page.count)),
                     "text": .string(lines.joined(separator: "\n")),
                     "nextFrom": next.map { .number(Self.rounded($0)) } ?? .null,
@@ -186,12 +201,42 @@ extension AgentService {
         } catch { return failure("transcript", error) }
     }
 
+    static let searchMatchLimit = 30
+    private static let searchContextWords = 6
+
+    /// Где в ролике звучит фраза: номера слов для deleteWords, время ленты и контекст.
+    private func transcriptSearch(
+        _ query: String, map: TranscriptTimelineMap, projectID: UUID, timeline: String
+    ) -> AgentResponse {
+        let words = map.words
+        let found = TranscriptSearch.matches(of: query, in: words.map(\.text))
+        let matches = found.prefix(Self.searchMatchLimit).map { range -> AgentJSONValue in
+            let before = words[max(0, range.lowerBound - Self.searchContextWords)..<range.lowerBound].map(\.text)
+            let after = words[(range.upperBound + 1)..<min(words.count, range.upperBound + 1 + Self.searchContextWords)]
+                .map(\.text)
+            let hit = words[range].map(\.text).joined(separator: " ")
+            return .object([
+                "from": .number(Double(range.lowerBound + 1)), "to": .number(Double(range.upperBound + 1)),
+                "start": .number(Self.rounded(words[range.lowerBound].timelineStart)),
+                "end": .number(Self.rounded(words[range.upperBound].timelineEnd)),
+                "text": .string((before + ["[\(hit)]"] + after).joined(separator: " ")),
+            ])
+        }
+        return .success(
+            command: "transcript",
+            data: [
+                "projectId": .string(projectID.uuidString), "query": .string(query),
+                "timeline": .string(timeline), "matchCount": .number(Double(found.count)),
+                "matches": .array(Array(matches)),
+            ])
+    }
+
     /// Точка входа инструмента: готовая расшифровка сразу, иначе фоновая задача.
     /// Расшифровка длинного ролика идёт минутами — дольше, чем живёт один вызов.
     func transcriptOrStartJob(
-        projectID: UUID, from: Double?, to: Double?, confirmModelDownload: Bool
+        projectID: UUID, from: Double?, to: Double?, query: String? = nil, confirmModelDownload: Bool
     ) async -> AgentResponse {
-        let response = await transcript(projectID: projectID, from: from, to: to)
+        let response = await transcript(projectID: projectID, from: from, to: to, query: query)
         guard response.error?.code == "TRANSCRIPT_NOT_READY" else { return response }
         if let refusal = await refusalIfModelNeedsDownload(command: "transcript", confirmed: confirmModelDownload) {
             return refusal

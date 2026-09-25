@@ -65,6 +65,11 @@ fi
 if [ -n "${MONTAZHKA_BUILD_NUMBER:-}" ]; then
   /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $MONTAZHKA_BUILD_NUMBER" "$app_staging/Contents/Info.plist"
 fi
+# Коммит сборки: агент видит в montazhka_doctor, какой именно код ему отвечает.
+if commit=$(git rev-parse --short HEAD 2>/dev/null); then
+  git diff --quiet HEAD 2>/dev/null || commit="$commit-dirty"
+  /usr/libexec/PlistBuddy -c "Add :MontazhkaCommit string $commit" "$app_staging/Contents/Info.plist"
+fi
 
 if [ -d Resources/App ]; then
   ditto Resources/App "$app_staging/Contents/Resources"
