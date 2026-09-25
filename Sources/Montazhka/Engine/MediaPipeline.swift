@@ -10,6 +10,8 @@ struct MediaRenderRequest: Sendable {
     let project: Project
     let mode: MediaRenderMode
     let readyEnhancedAudio: [String: URL]
+    /// Участки речи на ленте — для приглушения музыки, если оно включено.
+    var speechRanges: [TimelineRange] = []
 }
 
 struct MediaRenderResult: @unchecked Sendable {
@@ -50,7 +52,8 @@ actor MediaPipeline {
             }
         }
 
-        let music = await resolveMusic(settings: request.project.music, warnings: &warnings)
+        var music = await resolveMusic(settings: request.project.music, warnings: &warnings)
+        if request.project.music.ducking { music?.speech = request.speechRanges }
         let built = await CompositionBuilder.buildResult(
             clips: request.project.clips,
             enhancedAudio: request.project.voiceEnhance.enabled ? enhanced : [:],

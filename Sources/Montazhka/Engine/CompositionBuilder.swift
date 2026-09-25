@@ -1,10 +1,12 @@
 @preconcurrency import AVFoundation
 import Foundation
 
-/// Фоновая музыка для склейки: файл и громкость 0…1.
+/// Фоновая музыка для склейки: файл и громкость 0…1. `speech` — участки
+/// речи на ленте: под ними музыка приглушается. Пусто — ровный уровень.
 struct MusicInput {
     let url: URL
     let volume: Float
+    var speech: [TimelineRange] = []
 }
 
 enum CompositionWarning: Equatable {
@@ -285,7 +287,7 @@ enum CompositionBuilder {
     }
 
     /// Вставляет мелодию по кругу на всю длительность и строит микс:
-    /// плавный вход в начале, ровный тихий уровень, затухание в конце.
+    /// плавный вход в начале, тихий уровень (под речью — ещё тише), затухание в конце.
     private static func addMusicTrack(
         _ music: MusicInput,
         to composition: AVMutableComposition,
@@ -312,22 +314,17 @@ enum CompositionBuilder {
             cursor = cursor + piece.duration
         }
 
-        let total = totalDuration.seconds
-        let level = max(0, min(1, music.volume))
-        let fadeIn = min(1.0, total / 4)
-        let fadeOut = min(3.0, total / 3)
+        let points = MusicDucking.envelope(
+            speech: music.speech, total: totalDuration.seconds, level: Double(max(0, min(1, music.volume))))
         let params = AVMutableAudioMixInputParameters(track: musicTrack)
-        params.setVolumeRamp(
-            fromStartVolume: 0, toEndVolume: level,
-            timeRange: CMTimeRange(
-                start: .zero,
-                duration: CMTime(seconds: fadeIn, preferredTimescale: 600)))
-        params.setVolume(level, at: CMTime(seconds: fadeIn, preferredTimescale: 600))
-        params.setVolumeRamp(
-            fromStartVolume: level, toEndVolume: 0,
-            timeRange: CMTimeRange(
-                start: CMTime(seconds: total - fadeOut, preferredTimescale: 600),
-                duration: CMTime(seconds: fadeOut, preferredTimescale: 600)))
+        params.setVolume(Float(points.first?.volume ?? 0), at: .zero)
+        for (a, b) in zip(points, points.dropFirst()) where b.time > a.time {
+            params.setVolumeRamp(
+                fromStartVolume: Float(a.volume), toEndVolume: Float(b.volume),
+                timeRange: CMTimeRange(
+                    start: CMTime(seconds: a.time, preferredTimescale: 600),
+                    end: CMTime(seconds: b.time, preferredTimescale: 600)))
+        }
         return params
     }
 }
