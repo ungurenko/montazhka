@@ -1130,7 +1130,7 @@ final class EditorController: ExportPreparing {
         projectEditor.recordCurrent()
         let edits: [ProjectEdit] = [
             .replaceClips(fresh.clips), .rename(fresh.name), .updateDetection(fresh.detection),
-            .updateVoice(fresh.voiceEnhance), .updateMusic(fresh.music),
+            .updateVoice(fresh.voiceEnhance), .updateMusic(fresh.music), .updateShorts(fresh.shorts),
         ]
         for edit in edits {
             projectEditor.apply(edit, recordHistory: false)

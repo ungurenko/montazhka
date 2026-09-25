@@ -6,7 +6,7 @@ cd "$(dirname "$0")/.."
 source scripts/swift-env.sh
 
 if [ -d "$developer_dir/Platforms/MacOSX.platform" ]; then
-  swift test
+  swift test "$@"
   exit 0
 fi
 
@@ -30,4 +30,5 @@ swift test \
   -Xswiftc -F -Xswiftc "$frameworks_dir" \
   -Xlinker -F -Xlinker "$frameworks_dir" \
   -Xlinker -rpath -Xlinker "$frameworks_dir" \
-  -Xlinker -rpath -Xlinker "$testing_lib_dir"
+  -Xlinker -rpath -Xlinker "$testing_lib_dir" \
+  "$@"

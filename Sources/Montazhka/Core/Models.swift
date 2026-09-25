@@ -164,17 +164,20 @@ public struct MusicSettings: Codable, Equatable, Sendable {
     }
     public var volume: Double
     public var eqEnabled: Bool
+    /// Музыка сама стихает под речью.
+    public var ducking: Bool
 
     public init(
         enabled: Bool = false, trackID: String? = nil,
         customMedia: MediaReference? = nil, volume: Double = 18,
-        eqEnabled: Bool = true
+        eqEnabled: Bool = true, ducking: Bool = false
     ) {
         self.enabled = enabled
         self.trackID = trackID
         self.customMedia = customMedia
         self.volume = volume
         self.eqEnabled = eqEnabled
+        self.ducking = ducking
     }
 
     public func differsOnlyByVolume(from other: MusicSettings) -> Bool {
@@ -186,7 +189,7 @@ public struct MusicSettings: Codable, Equatable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case enabled, trackID, customMedia, customPath, volume, eqEnabled
+        case enabled, trackID, customMedia, customPath, volume, eqEnabled, ducking
     }
 
     public init(from decoder: Decoder) throws {
@@ -199,6 +202,7 @@ public struct MusicSettings: Codable, Equatable, Sendable {
         }
         volume = try c.decodeIfPresent(Double.self, forKey: .volume) ?? 18
         eqEnabled = try c.decodeIfPresent(Bool.self, forKey: .eqEnabled) ?? true
+        ducking = try c.decodeIfPresent(Bool.self, forKey: .ducking) ?? false
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -209,11 +213,12 @@ public struct MusicSettings: Codable, Equatable, Sendable {
         try c.encodeIfPresent(customPath, forKey: .customPath)
         try c.encode(volume, forKey: .volume)
         try c.encode(eqEnabled, forKey: .eqEnabled)
+        try c.encode(ducking, forKey: .ducking)
     }
 }
 
 public struct Project: Identifiable, Codable, Equatable, Sendable {
-    public static let currentSchemaVersion = 1
+    public static let currentSchemaVersion = 2
 
     public var id: UUID
     public var schemaVersion: Int
@@ -224,6 +229,8 @@ public struct Project: Identifiable, Codable, Equatable, Sendable {
     public var detection: DetectionSettings
     public var voiceEnhance: VoiceEnhanceSettings
     public var music: MusicSettings
+    /// Оформление черновика шортса; nil — обычный проект.
+    var shorts: ShortsPresentation?
     public var totalDuration: Double { clips.reduce(0) { $0 + $1.duration } }
 
     public init(
@@ -245,7 +252,7 @@ public struct Project: Identifiable, Codable, Equatable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, schemaVersion, name, clips, createdAt, updatedAt, detection, voiceEnhance, music
+        case id, schemaVersion, name, clips, createdAt, updatedAt, detection, voiceEnhance, music, shorts
     }
 
     public init(from decoder: Decoder) throws {
@@ -279,6 +286,7 @@ public struct Project: Identifiable, Codable, Equatable, Sendable {
         detection = try c.decodeIfPresent(DetectionSettings.self, forKey: .detection) ?? DetectionSettings()
         voiceEnhance = try c.decodeIfPresent(VoiceEnhanceSettings.self, forKey: .voiceEnhance) ?? VoiceEnhanceSettings()
         music = try c.decodeIfPresent(MusicSettings.self, forKey: .music) ?? MusicSettings()
+        shorts = try c.decodeIfPresent(ShortsPresentation.self, forKey: .shorts)
     }
 }
 

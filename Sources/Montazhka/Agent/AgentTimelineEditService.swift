@@ -84,6 +84,8 @@ extension AgentService {
                 let steps = operations[0].steps ?? 1
                 let restored = try await revisions.snapshot(projectID: projectID, steps: steps)
                 project.clips = restored.clips
+                project.shorts = restored.shorts
+                project.music = restored.music
                 project.updatedAt = Date()
                 try await store.save(project)
                 await revisions.drop(projectID: projectID, steps: steps)

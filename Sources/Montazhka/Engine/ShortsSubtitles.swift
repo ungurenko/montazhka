@@ -7,7 +7,7 @@ import QuartzCore
 /// Шрифт субтитров. Четыре подобранных гарнитуры: все есть в macOS, все знают
 /// кириллицу и читаются на экране телефона. Если гарнитуры в системе не
 /// оказалось, молча берём системную — лучше другой шрифт, чем пустые квадраты.
-enum ShortsSubtitleFont: String, CaseIterable, Identifiable, Sendable {
+enum ShortsSubtitleFont: String, Codable, CaseIterable, Identifiable, Sendable {
     case system
     case grotesque
     case rounded
@@ -44,7 +44,7 @@ enum ShortsSubtitleFont: String, CaseIterable, Identifiable, Sendable {
 
 /// Палитра цветов субтитров. Набор, а не свободная пипетка: каждый цвет
 /// проверен на читаемость поверх видео.
-enum ShortsSubtitleColor: String, CaseIterable, Identifiable, Sendable {
+enum ShortsSubtitleColor: String, Codable, CaseIterable, Identifiable, Sendable {
     case white
     case black
     case yellow
@@ -78,7 +78,7 @@ enum ShortsSubtitleColor: String, CaseIterable, Identifiable, Sendable {
 }
 
 /// Что держит текст читаемым поверх любого кадра.
-enum ShortsSubtitleBackground: String, CaseIterable, Identifiable, Sendable {
+enum ShortsSubtitleBackground: String, Codable, CaseIterable, Identifiable, Sendable {
     case shadow
     case plate
     case outline
@@ -97,7 +97,7 @@ enum ShortsSubtitleBackground: String, CaseIterable, Identifiable, Sendable {
 }
 
 /// На какой высоте кадра стоит строка субтитров.
-enum ShortsSubtitlePosition: String, CaseIterable, Identifiable, Sendable {
+enum ShortsSubtitlePosition: String, Codable, CaseIterable, Identifiable, Sendable {
     case low
     case middle
     case high
@@ -126,7 +126,7 @@ enum ShortsSubtitlePosition: String, CaseIterable, Identifiable, Sendable {
 
 /// Размер текста субтитров. Масштаб считается от короткой стороны кадра,
 /// поэтому надпись остаётся читаемой и в горизонтальном, и в вертикальном видео.
-enum ShortsSubtitleSize: String, CaseIterable, Identifiable, Sendable {
+enum ShortsSubtitleSize: String, Codable, CaseIterable, Identifiable, Sendable {
     case small
     case medium
     case large
@@ -194,7 +194,7 @@ enum ShortsSubtitlePreset: String, CaseIterable, Identifiable, Sendable {
 /// Всё, что нужно знать обоим рендерам о внешнем виде субтитров: и слою
 /// предпросмотра, и запеканию в MP4. Один источник правды — превью не может
 /// разойтись с готовым файлом.
-struct ShortsSubtitleAppearance: Equatable, Sendable {
+struct ShortsSubtitleAppearance: Codable, Equatable, Sendable {
     var font: ShortsSubtitleFont
     var size: ShortsSubtitleSize
     var textColor: ShortsSubtitleColor
