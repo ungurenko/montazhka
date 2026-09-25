@@ -82,6 +82,15 @@ struct ShortsCameraTests {
         #expect(CGRect(origin: .zero, size: landscape).insetBy(dx: -0.5, dy: -0.5).contains(plan.faceCrop))
     }
 
+    @Test("a small crop around a corner webcam sits on the face, not on the frame middle")
+    func smallCropFollowsFaceVertically() {
+        let keys = ShortsCameraPlanner.keys(
+            clips: [Clip(source: source, start: 0, end: 1)], display: landscape, layout: .face,
+            centre: centre(0.85, 0.8), zooms: [], aspect: 1, base: CGSize(width: 200, height: 200))
+        #expect(abs(keys[0].rect.midY - 0.8 * 1080) < 1)
+        #expect(abs(keys[0].rect.midX - 0.85 * 1920) < 1)
+    }
+
     @Test("the transform maps the crop exactly onto the canvas region")
     func transformMapsCrop() {
         let crop = CGRect(x: 600, y: 0, width: 607.5, height: 1080)

@@ -30,7 +30,7 @@ enum ShortsCameraPlanner {
     /// Сверху оставляем полосу под хук и интерфейс Reels.
     static let splitTopInset = 0.1
     /// Рамка лица в нижней половине в столько раз больше самого лица.
-    static let faceMargin = 2.2
+    static let faceMargin = 2.8
 
     static func keys(
         clips: [Clip], display: CGSize, layout: ShortsDraftLayout, centre: Centre,
@@ -38,6 +38,8 @@ enum ShortsCameraPlanner {
     ) -> [Key] {
         let baseSize = base ?? baseCrop(display: display, layout: layout, aspect: aspect)
         let clamps = layout != .fit
+        // Рамка ниже кадра (вокруг веб-камеры в углу) стоит на лице и по вертикали.
+        let followsVertically = baseSize.height < display.height - 0.5
         var keys: [Key] = []
         var timelineStart = 0.0
         for (index, clip) in clips.enumerated() {
@@ -50,7 +52,9 @@ enum ShortsCameraPlanner {
                 let point = centre(clip.source.id, sourceTime)
                 var rect = CGRect(
                     x: point.x * display.width - size.width / 2,
-                    y: centreY(point.y, layout: layout, scale: scale, display: display) - size.height / 2,
+                    y: (followsVertically
+                        ? point.y * display.height
+                        : centreY(point.y, layout: layout, scale: scale, display: display)) - size.height / 2,
                     width: size.width, height: size.height)
                 if layout == .fit { rect.origin.x = (display.width - size.width) / 2 }
                 if clamps { rect = clamp(rect, inside: display) }
