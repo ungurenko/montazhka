@@ -103,12 +103,18 @@ enum CompositionBuilder {
         return (result.composition, result.audioMix)
     }
 
+    /// `videoCopies` — сколько одинаковых видеодорожек положить: раскладке
+    /// «экран + лицо» нужны две, чтобы показать одну картинку в двух местах.
     static func buildResult(
         clips: [Clip],
         enhancedAudio: [String: URL] = [:],
-        music: MusicInput? = nil
+        music: MusicInput? = nil,
+        videoCopies: Int = 1
     ) async -> CompositionBuildResult {
         let composition = AVMutableComposition()
+        let extraVideoTracks = (1..<max(1, videoCopies)).compactMap { _ in
+            composition.addMutableTrack(withMediaType: .video, preferredTrackID: kCMPersistentTrackID_Invalid)
+        }
         guard
             let videoTrack = composition.addMutableTrack(
                 withMediaType: .video,
@@ -157,8 +163,10 @@ enum CompositionBuilder {
             if let video = source.video {
                 do {
                     try videoTrack.insertTimeRange(range, of: video, at: cursor)
+                    for copy in extraVideoTracks { try copy.insertTimeRange(range, of: video, at: cursor) }
                     if !transformSet, let transform = source.transform {
                         videoTrack.preferredTransform = transform
+                        for copy in extraVideoTracks { copy.preferredTransform = transform }
                         transformSet = true
                     }
                 } catch {
