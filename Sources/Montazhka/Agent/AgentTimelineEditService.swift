@@ -22,9 +22,14 @@ struct AgentEditOperation: Codable, Sendable {
     /// `deleteWords`: номера слов и отпечаток ленты из `montazhka_transcript`.
     var words: [AgentWordRange]?
     var timeline: String?
+    /// `fixWords`: правильный текст и «запомнить в словаре».
+    var text: String?
+    var remember: Bool?
 
     var isUndo: Bool { op == "undo" }
     var isWordDelete: Bool { op == "deleteWords" }
+    /// Операции, которые меняют не ленту, а текст расшифровки или оформление.
+    var isProjectOp: Bool { op == "fixWords" }
 
     init(op: String, steps: Int? = nil) {
         self.op = op
@@ -94,7 +99,7 @@ extension AgentService {
 
             // Правки по словам превращаются в delete по ходу пачки: номера слов
             // считаются по ленте на момент операции. Остальные проверяем сразу.
-            let prepared = try operations.map { $0.isWordDelete ? nil : try $0.timelineOp() }
+            let prepared = try operations.map { $0.isWordDelete || $0.isProjectOp ? nil : try $0.timelineOp() }
             var durations: [String: Double] = [:]
             let paths = Set(project.clips.map(\.sourcePath)).union(
                 prepared.compactMap {
@@ -115,6 +120,10 @@ extension AgentService {
             let previousIDs = Set(project.clips.map(\.id))
             var clips = project.clips
             for (index, operation) in operations.enumerated() {
+                if operation.isProjectOp {
+                    try await fixWords(operation, clips: clips)
+                    continue
+                }
                 let op: TimelineEditOp
                 if let ready = prepared[index] {
                     op = ready
@@ -176,6 +185,51 @@ extension AgentService {
         return try AgentWordCuts.timelineRanges(
             ranges, map: map, clips: clips, peaksFor: { self.waveforms.peaks(for: $0) },
             thresholdDB: thresholdDB)
+    }
+
+    /// `fixWords`: слова #from…#to становятся одним словом `text` (остальные
+    /// скрываются). Исправление хранится у исходника, а не в проекте, поэтому
+    /// видно во всех его проектах и не откатывается `undo` — только новым fixWords.
+    private func fixWords(_ operation: AgentEditOperation, clips: [Clip]) async throws {
+        guard let range = operation.words?.first, operation.words?.count == 1, range.from <= range.to else {
+            throw AgentServiceError.invalidInput("fixWords: нужен один диапазон words: [{from, to}].")
+        }
+        guard let text = operation.text?.trimmingCharacters(in: .whitespaces), !text.isEmpty else {
+            throw AgentServiceError.invalidInput("fixWords: нужно поле text — правильное написание.")
+        }
+        guard operation.timeline == AgentWordCuts.fingerprint(clips) else {
+            throw AgentServiceError.invalidInput(
+                "fixWords: лента изменилась после чтения расшифровки. Вызовите montazhka_transcript заново.")
+        }
+        let project = Project(name: "", clips: clips)
+        guard let words = try await cachedTranscriptWords(for: project) else {
+            throw AgentServiceError.invalidInput("Для fixWords нужна расшифровка: вызовите montazhka_transcript.")
+        }
+        let mapped = TranscriptTimelineMapper.make(clips: clips, transcripts: words).words
+        guard range.from >= 1, range.to <= mapped.count else {
+            throw AgentServiceError.invalidInput("fixWords: в расшифровке только \(mapped.count) слов.")
+        }
+        let chosen = Array(mapped[(range.from - 1)...(range.to - 1)])
+        guard let sourceID = chosen.first?.sourceID, chosen.allSatisfy({ $0.sourceID == sourceID }),
+            let source = clips.first(where: { $0.source.id == sourceID })?.source
+        else { throw AgentServiceError.invalidInput("fixWords: слова должны быть из одного исходника.") }
+
+        let transcriptStore = makeTranscriptStore()
+        let raw = try await transcriptStore.ensure(source: source)
+        let fixesURL = TranscriptCorrections.url(forTranscript: await transcriptStore.cacheURL(for: source))
+        var fixes = TranscriptCorrections.load(from: fixesURL)
+        let indices = chosen.compactMap { word in raw.firstIndex { abs($0.start - word.sourceStart) < 0.0005 } }
+        guard indices.count == chosen.count else {
+            throw AgentServiceError.invalidInput("fixWords: не удалось сопоставить слова с расшифровкой.")
+        }
+        for (offset, index) in indices.enumerated() { fixes[index] = offset == 0 ? text : "" }
+        try TranscriptCorrections.save(fixes, to: fixesURL)
+
+        if operation.remember == true {
+            var glossary = Glossary.load(from: store.glossaryURL)
+            glossary.remember(original: indices.map { raw[$0].text }, replacement: text)
+            try glossary.save(to: store.glossaryURL)
+        }
     }
 
     /// Лента проекта для агента: номера клипов, их место на ленте и в исходнике.

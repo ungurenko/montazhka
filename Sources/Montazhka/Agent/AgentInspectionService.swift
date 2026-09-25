@@ -142,8 +142,14 @@ extension AgentService {
             let cached = await transcriptStore.cacheURL(for: source)
             guard FileManager.default.fileExists(atPath: cached.path) else { return nil }
         }
+        let glossary = Glossary.load(from: store.glossaryURL)
         var words: [TranscriptWord] = []
-        for source in sources { words += try await transcriptStore.ensure(source: source) }
+        for source in sources {
+            let raw = try await transcriptStore.ensure(source: source)
+            let fixes = TranscriptCorrections.load(
+                from: TranscriptCorrections.url(forTranscript: await transcriptStore.cacheURL(for: source)))
+            words += TranscriptCorrections.apply(fixes, to: glossary.apply(to: raw))
+        }
         return words
     }
 
@@ -183,8 +189,10 @@ extension AgentService {
                     let gap = word.timelineStart - previous.timelineEnd
                     if gap >= 0.4 { lines.append("--- пауза \(String(format: "%.1f", gap)) с ---") }
                 }
+                // Пустое слово — хвост исправленного термина («клод код» → «Claude Code»).
+                let text = word.text.isEmpty ? "·" : word.text
                 lines.append(
-                    "#\(number + 1) \(Self.format(word.timelineStart)) \(Self.format(word.timelineEnd)) \(word.text)")
+                    "#\(number + 1) \(Self.format(word.timelineStart)) \(Self.format(word.timelineEnd)) \(text)")
                 previous = word
             }
             let next = inRange.count > page.count ? inRange[page.count].element.timelineStart : nil
