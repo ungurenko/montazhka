@@ -30,6 +30,8 @@ private struct MusicManifest: Decodable {
 /// Названия берутся из имён файлов (например «Спокойная 1.m4a»).
 enum MusicLibrary {
     static let tracks: [MusicTrack] = musicDirectory().map(loadTracks(from:)) ?? []
+    /// Настроения, которыми описаны треки в manifest.json.
+    static let moods = ["calm", "neutral", "energetic", "inspiring", "playful", "tense", "emotional"]
 
     /// Трек нужного настроения. `variant` перебирает подходящие по кругу,
     /// чтобы соседние ролики звучали по-разному. Неизвестное настроение

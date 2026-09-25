@@ -94,13 +94,18 @@ enum AgentCommand {
                 final: args.contains("--final"), confirmFinal: args.contains("--confirm-final"),
                 overwrite: args.contains("--overwrite"))
         case "make-shorts":
-            guard let input = value("--input", in: args) else {
-                return .failure(command: "make_shorts", code: "MISSING_INPUT", message: "Укажите --input.")
+            guard let path = value("--request", in: args) else {
+                return .failure(
+                    command: "make_shorts", code: "MISSING_INPUT",
+                    message: "Укажите --request <файл JSON>: {projectId, timeline, shorts: [...]}.")
             }
-            return await service.makeShorts(
-                sourcePath: input,
-                confirmModelDownload: args.contains("--confirm-model-download"),
-                trimPauses: !args.contains("--keep-pauses"))
+            do {
+                let request = try JSONDecoder().decode(
+                    AgentShortsRequest.self, from: Data(contentsOf: URL(fileURLWithPath: path)))
+                return await service.makeShorts(request)
+            } catch {
+                return .failure(command: "make_shorts", code: "INVALID_REQUEST", message: error.localizedDescription)
+            }
         case "transcript":
             guard let id = value("--project", in: args).flatMap(UUID.init(uuidString:)) else {
                 return .failure(command: "transcript", code: "INVALID_PROJECT_ID", message: "Укажите --project.")
@@ -313,15 +318,19 @@ private struct AgentMCPServer {
                 return .failure(command: "export", code: "JOB_START_FAILED", message: error.localizedDescription)
             }
         case "montazhka_make_shorts":
-            guard let path = arguments["sourcePath"]?.stringValue else {
-                return .failure(command: "make_shorts", code: "MISSING_INPUT", message: "Нужен sourcePath.")
-            }
+            let request: AgentShortsRequest
             do {
-                return try await AgentBackgroundJob.submit(
-                    .shorts(
-                        sourcePath: path,
-                        confirmModelDownload: arguments["confirmModelDownload"]?.boolValue ?? false,
-                        trimPauses: arguments["trimPauses"]?.boolValue ?? true))
+                request = try JSONDecoder().decode(AgentShortsRequest.self, from: JSONEncoder().encode(arguments))
+            } catch {
+                return .failure(
+                    command: "make_shorts", code: "INVALID_REQUEST",
+                    message: "Не удалось разобрать запрос: \(error.localizedDescription)",
+                    recovery: "Нужны projectId, timeline из montazhka_transcript и shorts: [{title, pieces: [{from, to}]}].")
+            }
+            // Пустой список не запускает фоновую задачу: сразу объясняем, что делать.
+            guard !request.shorts.isEmpty else { return await service.makeShorts(request) }
+            do {
+                return try await AgentBackgroundJob.submit(.shorts(request))
             } catch {
                 return .failure(command: "make_shorts", code: "JOB_START_FAILED", message: error.localizedDescription)
             }

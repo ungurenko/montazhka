@@ -22,14 +22,20 @@ struct AgentEditOperation: Codable, Sendable {
     /// `deleteWords`: номера слов и отпечаток ленты из `montazhka_transcript`.
     var words: [AgentWordRange]?
     var timeline: String?
-    /// `fixWords`: правильный текст и «запомнить в словаре».
+    /// `fixWords`: правильный текст и «запомнить в словаре»; `setHook`: текст хука.
     var text: String?
     var remember: Bool?
+    /// Оформление черновика шортса: `setLayout`, `setSubtitles`, `setMusic`.
+    var layout: String?
+    var on: Bool?
+    var track: String?
+    var volume: Double?
 
     var isUndo: Bool { op == "undo" }
     var isWordDelete: Bool { op == "deleteWords" }
     /// Операции, которые меняют не ленту, а текст расшифровки или оформление.
-    var isProjectOp: Bool { op == "fixWords" }
+    var isProjectOp: Bool { op == "fixWords" || Self.draftOps.contains(op) }
+    static let draftOps: Set<String> = ["setHook", "setLayout", "setSubtitles", "zoom", "clearZooms", "setMusic"]
 
     init(op: String, steps: Int? = nil) {
         self.op = op
@@ -81,6 +87,7 @@ extension AgentService {
             let lock = try AgentProjectLock(projectID: projectID, directory: store.projectsDir)
             defer { withExtendedLifetime(lock) {} }
             var project = try await store.load(id: projectID)
+            let original = project
 
             if operations.contains(where: \.isUndo) {
                 guard operations.count == 1 else {
@@ -120,8 +127,12 @@ extension AgentService {
             let previousIDs = Set(project.clips.map(\.id))
             var clips = project.clips
             for (index, operation) in operations.enumerated() {
-                if operation.isProjectOp {
+                if operation.op == "fixWords" {
                     try await fixWords(operation, clips: clips)
+                    continue
+                }
+                if operation.isProjectOp {
+                    try applyDraftOp(operation, to: &project, clips: clips, words: transcriptWords)
                     continue
                 }
                 let op: TimelineEditOp
@@ -143,7 +154,7 @@ extension AgentService {
                 clips = try TimelineEditOps.apply([op], to: clips, sourceDurations: durations)
             }
             warnings += Self.fragmentWarnings(clips, previousIDs: previousIDs)
-            try await revisions.push(project)
+            try await revisions.push(original)
             project.clips = clips
             project.updatedAt = Date()
             do {
@@ -185,6 +196,58 @@ extension AgentService {
         return try AgentWordCuts.timelineRanges(
             ranges, map: map, clips: clips, peaksFor: { self.waveforms.peaks(for: $0) },
             thresholdDB: thresholdDB)
+    }
+
+    /// Оформление черновика шортса. Обычный проект такие правки не принимает.
+    private func applyDraftOp(
+        _ operation: AgentEditOperation, to project: inout Project, clips: [Clip], words: [TranscriptWord]?
+    ) throws {
+        guard var shorts = project.shorts else {
+            throw AgentServiceError.invalidInput(
+                "\(operation.op) работает только с черновиком шортса (его создаёт montazhka_make_shorts).")
+        }
+        switch operation.op {
+        case "setHook":
+            let text = operation.text?.trimmingCharacters(in: .whitespaces) ?? ""
+            shorts.hook = text.isEmpty ? nil : ShortsHook(text: text)
+        case "setLayout":
+            guard let layout = operation.layout.flatMap(ShortsDraftLayout.init(rawValue:)), layout != .auto else {
+                throw AgentServiceError.invalidInput("setLayout: layout — face, split или fit.")
+            }
+            shorts.layout = layout
+            shorts.resolvedLayout = layout
+        case "setSubtitles":
+            let saved = ShortsSubtitleSettings.saved()
+            shorts.subtitles =
+                operation.on == true
+                ? ShortsDraftSubtitles(appearance: saved.appearance, highlight: saved.highlightActiveWord) : nil
+        case "zoom":
+            guard let spans = operation.words, !spans.isEmpty, operation.timeline == AgentWordCuts.fingerprint(clips)
+            else {
+                throw AgentServiceError.invalidInput(
+                    "zoom: нужны words [{from, to}] и свежий timeline из montazhka_transcript.")
+            }
+            guard let words else { throw AgentServiceError.invalidInput("Для zoom нужна расшифровка.") }
+            let map = TranscriptTimelineMapper.make(clips: clips, transcripts: words).words
+            do {
+                shorts.zooms += try ShortsDraftFactory.zooms(spans, map: map)
+            } catch {
+                throw AgentServiceError.invalidInput(error.localizedDescription)
+            }
+        case "clearZooms":
+            shorts.zooms = []
+        case "setMusic":
+            if let track = operation.track {
+                guard track == "none" || MusicLibrary.track(id: track) != nil else {
+                    throw AgentServiceError.invalidInput("setMusic: нет трека «\(track)». Список — в montazhka_doctor.")
+                }
+                project.music = ShortsDraftFactory.music(track: track, mood: nil, variant: 0)
+            }
+            if let volume = operation.volume { project.music.volume = max(0, min(100, volume)) }
+        default:
+            throw AgentServiceError.invalidInput("Неизвестная операция: \(operation.op).")
+        }
+        project.shorts = shorts
     }
 
     /// `fixWords`: слова #from…#to становятся одним словом `text` (остальные

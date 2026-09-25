@@ -101,11 +101,15 @@ enum AgentToolCatalog {
             "montazhka_edit_video", "Запустить фоновый монтаж одного или нескольких видео.",
             properties: editVideoProperties, required: ["sourcePaths"], destructive: true),
         tool(
-            "montazhka_make_shorts", "Создать пять вертикальных роликов с субтитрами.",
+            "montazhka_make_shorts",
+            "Шортсы из моментов, которые выбрали вы (после согласования с пользователем): каждый — черновик-проект "
+                + "и вертикальный MP4. pieces — слова {from,to} или секунды ленты {start,end}. zooms: нет — сами, [] — без. "
+                + "music: id трека из doctor, none или по mood. Фоновая задача.",
             properties: [
-                "sourcePath": string, "confirmModelDownload": boolean,
-                "trimPauses": boolean,
-            ], required: ["sourcePath"], destructive: true),
+                "projectId": string, "timeline": string, "shorts": array(shortSpec),
+                "removeFillers": boolean, "trimPauses": boolean,
+                "quality": enumStrings(["compact", "medium", "high", "maximum"]),
+            ], required: ["projectId", "timeline", "shorts"], destructive: true),
         tool(
             "montazhka_edit_project", "Применить точные резы и настройки к копии проекта.",
             properties: editProjectProperties, required: ["projectId"], destructive: true),
@@ -152,7 +156,9 @@ enum AgentToolCatalog {
             "montazhka_apply_edits",
             "Правки ленты по порядку. deleteWords{words[{from,to}],timeline} — по номерам слов из transcript, "
                 + "рез в тишине между словами. Время ленты: delete{ranges[{from,to}]}, split{at}, move{clip,to}, "
-                + "trim{clip,edge,seconds}, insert{sourcePath,start,end,at}. undo{steps} — отдельным вызовом.",
+                + "trim{clip,edge,seconds}, insert{sourcePath,start,end,at}. fixWords{words,timeline,text,remember} — "
+                + "исправить распознанный текст. Черновик шортса: setHook{text}, setLayout{layout}, setSubtitles{on}, "
+                + "zoom{words,timeline}, clearZooms, setMusic{track,volume}. undo{steps} — отдельным вызовом.",
             properties: ["projectId": string, "operations": array(operation)],
             required: ["projectId", "operations"], destructive: true),
     ]
@@ -202,7 +208,10 @@ enum AgentToolCatalog {
     private static let operation = AgentJSONValue.object([
         "type": "object",
         "properties": .object([
-            "op": enumStrings(["deleteWords", "delete", "split", "move", "trim", "insert", "undo"]),
+            "op": enumStrings([
+                "deleteWords", "delete", "split", "move", "trim", "insert", "fixWords", "setHook", "setLayout",
+                "setSubtitles", "zoom", "clearZooms", "setMusic", "undo",
+            ]),
             "ranges": array(
                 .object([
                     "type": "object", "properties": .object(["from": number, "to": number]),
@@ -215,9 +224,28 @@ enum AgentToolCatalog {
                     "type": "object", "properties": .object(["from": integer, "to": integer]),
                     "required": .array([.string("from"), .string("to")]),
                 ])),
-            "timeline": string,
+            "timeline": string, "text": string, "remember": boolean,
+            "layout": enumStrings(["face", "split", "fit"]), "on": boolean, "track": string, "volume": number,
         ]),
         "required": .array([.string("op")]),
+    ])
+    private static let wordSpan = AgentJSONValue.object([
+        "type": "object", "properties": .object(["from": integer, "to": integer]),
+        "required": .array([.string("from"), .string("to")]),
+    ])
+    private static let shortSpec = AgentJSONValue.object([
+        "type": "object",
+        "properties": .object([
+            "title": string, "hook": string, "subtitles": boolean,
+            "pieces": array(
+                .object([
+                    "type": "object",
+                    "properties": .object(["from": integer, "to": integer, "start": number, "end": number]),
+                ])),
+            "layout": enumStrings(["auto", "face", "split", "fit"]), "zooms": array(wordSpan),
+            "music": string, "mood": enumStrings(MusicLibrary.moods),
+        ]),
+        "required": .array([.string("title"), .string("pieces")]),
     ])
     private static let commonEditProperties: [String: AgentJSONValue] = [
         "name": string,

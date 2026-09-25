@@ -1,0 +1,111 @@
+@preconcurrency import AVFoundation
+import Foundation
+import Testing
+
+@testable import MontazhkaKit
+
+@Suite("Shorts draft factory")
+struct ShortsDraftFactoryTests {
+    private let media = MediaReference(path: "/tmp/talk.mov")
+
+    /// Слова по полсекунды с паузой 0.1 с; после слова `longGapAfter` — пауза 1 с.
+    private func words(_ count: Int, longGapAfter: Int? = nil, texts: [String]? = nil) -> [TranscriptWord] {
+        var time = 1.0
+        return (0..<count).map { index in
+            let word = TranscriptWord(
+                sourceID: media.id, text: texts?[index] ?? "слово\(index + 1)", start: time, end: time + 0.5,
+                confidence: 1)
+            time += index + 1 == longGapAfter ? 1.5 : 0.6
+            return word
+        }
+    }
+
+    private func draft(
+        _ pieces: [ShortsDraftFactory.Piece], words: [TranscriptWord], trimPauses: Bool = false,
+        peaks: [Float] = []
+    ) throws -> [Clip] {
+        let clips = [Clip(source: media, start: 0, end: 100)]
+        let map = TranscriptTimelineMapper.make(clips: clips, transcripts: words).words
+        return try ShortsDraftFactory.clips(
+            for: pieces, map: map, clips: clips, peaksFor: { _ in peaks }, sourceDuration: { _ in 100 },
+            thresholdDB: -40, trimPauses: trimPauses, removeFillers: false)
+    }
+
+    @Test("a word range becomes a clip around those words")
+    func wordRangeClip() throws {
+        let spoken = words(10)
+        let clips = try draft([ShortsDraftFactory.Piece(from: 3, to: 5)], words: spoken)
+        #expect(clips.count == 1)
+        #expect(clips[0].start <= spoken[2].start && clips[0].start > spoken[1].end - 0.2)
+        #expect(clips[0].end >= spoken[4].end && clips[0].end < spoken[5].start + 0.2)
+    }
+
+    @Test("pieces keep the order the agent gave, even backwards")
+    func piecesOrder() throws {
+        let spoken = words(20)
+        let clips = try draft(
+            [ShortsDraftFactory.Piece(from: 15, to: 17), ShortsDraftFactory.Piece(from: 2, to: 4)], words: spoken)
+        #expect(clips.count == 2)
+        #expect(clips[0].start > clips[1].start)
+    }
+
+    @Test("word numbers outside the transcript fail loudly")
+    func badNumbers() {
+        #expect(throws: ShortsDraftError.self) {
+            try draft([ShortsDraftFactory.Piece(from: 5, to: 50)], words: words(10))
+        }
+    }
+
+    @Test("a seconds piece works without a transcript")
+    func secondsPiece() throws {
+        let clips = try draft([ShortsDraftFactory.Piece(start: 10, end: 25)], words: [])
+        #expect(clips.count == 1)
+        #expect(abs(clips[0].start - 10) < 1e-9 && abs(clips[0].end - 25) < 1e-9)
+    }
+
+    @Test("a short hum between words is cut when fillers are removed")
+    func removesHum() throws {
+        let spoken = words(6, longGapAfter: 3)
+        // Громко всё время: между словами 3 и 4 звучит «эээ» (1 с без слов).
+        let loud = [Float](repeating: 0.3, count: 100 * 100)
+        let clips = [Clip(source: media, start: 0, end: 100)]
+        let map = TranscriptTimelineMapper.make(clips: clips, transcripts: spoken).words
+        let result = try ShortsDraftFactory.clips(
+            for: [ShortsDraftFactory.Piece(from: 1, to: 6)], map: map, clips: clips, peaksFor: { _ in loud },
+            sourceDuration: { _ in 100 }, thresholdDB: -40, trimPauses: false, removeFillers: true)
+        #expect(result.count == 2)
+        #expect(result[0].end <= spoken[2].end + 0.1)
+        #expect(result[1].start >= spoken[3].start - 0.1)
+    }
+
+    @Test("zooms are pinned to source time of the chosen words")
+    func zoomSpans() throws {
+        let spoken = words(10)
+        let clips = [Clip(source: media, start: 0, end: 100)]
+        let map = TranscriptTimelineMapper.make(clips: clips, transcripts: spoken).words
+        let zooms = try ShortsDraftFactory.zooms([AgentWordRange(from: 4, to: 6)], map: map)
+        #expect(zooms.count == 1)
+        #expect(zooms[0].sourceStart == spoken[3].start && zooms[0].sourceEnd == spoken[5].end)
+        #expect(zooms[0].sourceID == media.id)
+    }
+
+    @Test("auto zooms land on whole sentences after the hook")
+    func autoZooms() {
+        let texts = ["Смотрите.", "Это", "самый", "важный", "момент", "всего", "ролика!", "А", "дальше", "всё."]
+        let spoken = words(10, texts: texts)
+        let clips = [Clip(source: media, start: 0, end: 100)]
+        let map = TranscriptTimelineMapper.make(clips: clips, transcripts: spoken).words
+        let zooms = ShortsDraftFactory.autoZooms(map: map, total: 30, notBefore: 0.5)
+        #expect(zooms.count == 1)
+        #expect(zooms.first?.sourceStart == spoken[1].start)
+        #expect(zooms.first?.sourceEnd == spoken[6].end)
+    }
+
+    @Test("music follows the mood, or stays off when asked")
+    func musicChoice() {
+        let energetic = ShortsDraftFactory.music(track: nil, mood: "energetic", variant: 0)
+        #expect(energetic.enabled && energetic.ducking)
+        #expect(MusicLibrary.track(id: energetic.trackID ?? "")?.mood == "energetic")
+        #expect(!ShortsDraftFactory.music(track: "none", mood: nil, variant: 0).enabled)
+    }
+}

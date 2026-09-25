@@ -1,100 +1,90 @@
 @preconcurrency import AVFoundation
 import Foundation
 
-private struct AgentShortCandidateArtifact: Encodable {
-    let title: String
-    let reason: String
-    let start: Double
-    let end: Double
-    let confidence: Double
+/// `montazhka_make_shorts`: моменты выбрал агент, программа собирает из них
+/// черновики-проекты и выгружает MP4. Встроенный платный отбор здесь не
+/// вызывается никогда.
+struct AgentShortsRequest: Codable, Sendable {
+    var projectID: UUID
+    /// Отпечаток ленты из `montazhka_transcript`: номера слов верны только для него.
+    var timeline: String
+    var shorts: [ShortsDraftFactory.Spec]
+    var removeFillers: Bool?
+    var trimPauses: Bool?
+    var quality: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case projectID = "projectId", timeline, shorts, removeFillers, trimPauses, quality
+    }
 }
 
 extension AgentService {
-    func makeShorts(
-        sourcePath: String, confirmModelDownload: Bool,
-        trimPauses: Bool = true,
-        runMode: AgentRunMode = .standalone
-    ) async -> AgentResponse {
+    func makeShorts(_ request: AgentShortsRequest, runMode: AgentRunMode = .standalone) async -> AgentResponse {
+        guard !request.shorts.isEmpty else {
+            return .failure(
+                command: "make_shorts", code: "INVALID_REQUEST",
+                message: "Не переданы ролики: моменты для шортсов выбираете вы.",
+                recovery: "Прочитайте montazhka_transcript проекта, выберите моменты, покажите их пользователю "
+                    + "и передайте shorts: [{title, hook, pieces: [{from, to}]}] с timeline из расшифровки.")
+        }
         var activeRunID: UUID?
         do {
-            let sourceURL = URL(fileURLWithPath: sourcePath).standardized
-            guard FileManager.default.fileExists(atPath: sourceURL.path) else {
-                throw AgentServiceError.missingFile(sourceURL.path)
+            guard let quality = ExportQuality(rawValue: request.quality ?? "high") else {
+                throw AgentServiceError.invalidInput("Неизвестное качество экспорта: \(request.quality ?? "")")
             }
-            if let refusal = await refusalIfModelNeedsDownload(
-                command: "make_shorts", confirmed: confirmModelDownload)
-            {
-                return refusal
+            let project = try await store.load(id: request.projectID)
+            guard !project.clips.isEmpty else { throw AgentServiceError.emptyProject }
+            guard request.timeline == AgentWordCuts.fingerprint(project.clips) else {
+                throw AgentServiceError.invalidInput(
+                    "Лента проекта изменилась после чтения расшифровки, номера слов устарели. "
+                        + "Вызовите montazhka_transcript заново и возьмите новый timeline.")
             }
-            let transcriptStore = makeTranscriptStore()
-            let asset = AVURLAsset(url: sourceURL)
-            guard let duration = try? await asset.load(.duration).seconds,
-                duration.isFinite, duration >= ShortsLimits.minSourceDuration
-            else {
-                throw AgentServiceError.invalidInput("Для shorts нужно видео длительностью от 20 секунд.")
+            let words = try await cachedTranscriptWords(for: project) ?? []
+            let map = TranscriptTimelineMapper.make(clips: project.clips, transcripts: words).words
+            var peaks: [String: [Float]] = [:]
+            var durations: [UUID: Double] = [:]
+            for clip in project.clips where durations[clip.source.id] == nil {
+                peaks[clip.sourcePath] = await waveforms.ensure(path: clip.sourcePath)
+                durations[clip.source.id] = try await AVURLAsset(url: clip.url).load(.duration).seconds
             }
-            let displaySize = await Self.displaySize(asset: asset)
             let run = try await beginRun(
-                mode: runMode, kind: .makeShorts, sourcePaths: [sourceURL.path],
-                stage: "Расшифровка и поиск моментов")
+                mode: runMode, kind: .makeShorts, sourcePaths: project.clips.map(\.sourcePath),
+                stage: "Сборка черновиков", projectID: project.id)
             activeRunID = run.id
-            let configuration = try await AgentAIConfigurationResolver.resolve(
-                reasoningKey: ShortsController.reasoningKey)
-            let service = ShortsCutService(
-                transcriptStore: transcriptStore,
-                ai: UnifiedAIClient(openRouter: OpenRouterClient()),
-                waveforms: waveforms,
-                cache: ShortsAnalysisCache(cacheDir: store.shortsAnalysisDir))
-            let source = MediaReference(path: sourceURL.path)
-            let analysis = try await service.analyze(
-                source: source, sourceDuration: duration, count: .five,
-                configuration: configuration, thresholdDB: DetectionSettings().thresholdDB,
-                status: { status in
-                    try? await self.runs.update(id: run.id) { $0.stage = Self.stage(status) }
-                })
-            let selected = Array(analysis.candidates.filter(\.enabled).prefix(5))
-            guard !selected.isEmpty else {
-                throw AgentServiceError.invalidInput("ИИ не нашёл самостоятельных фрагментов для shorts.")
-            }
-            let outputDirectory = sourceURL.deletingLastPathComponent()
-                .appendingPathComponent(
-                    "\(sourceURL.deletingPathExtension().lastPathComponent)-shorts", isDirectory: true)
-            try FileManager.default.createDirectory(at: outputDirectory, withIntermediateDirectories: true)
-            let frame = ShortsFrameSettings(mode: .verticalCrop, canvasColor: .black)
-            let subtitles = ShortsSubtitleMode.on(
-                words: analysis.transcript, appearance: .default, highlight: true)
-            var outputs: [String] = []
-            for (index, candidate) in selected.enumerated() {
-                let output = ShortsExporter.fileURL(
-                    in: outputDirectory, sourceName: sourceURL.deletingPathExtension().lastPathComponent,
-                    index: index, title: candidate.title)
-                try await ShortsExporter.export(
-                    candidate: candidate,
-                    timeMap: candidate.timeMap(trimmingPauses: trimPauses),
-                    sourceURL: sourceURL, displaySize: displaySize,
-                    quality: .compact, frameSettings: frame, subtitleMode: subtitles,
-                    to: output, progress: { _ in })
-                outputs.append(output.path)
+
+            let faces = FaceTrackStore(cacheDir: store.faceTracksDir)
+            var results: [AgentJSONValue] = []
+            for (index, spec) in request.shorts.enumerated() {
                 try await runs.update(id: run.id) {
-                    $0.progress = Double(index + 1) / Double(selected.count)
-                    $0.stage = "Экспорт shorts \(index + 1) из \(selected.count)"
+                    $0.stage = "Шортс \(index + 1) из \(request.shorts.count): \(spec.title)"
+                    $0.progress = Double(index) / Double(request.shorts.count)
                 }
+                let draft = try await makeDraft(
+                    spec, index: index, from: project, map: map, words: words, peaks: peaks, durations: durations,
+                    request: request, faces: faces)
+                let plan = try await shortsPlan(draft, quality: quality)
+                let output = URL(fileURLWithPath: draft.shorts?.exportPath ?? "")
+                try await ShortsRenderer.export(plan, quality: quality, to: output) { _ in }
+                results.append(
+                    .object([
+                        "projectId": .string(draft.id.uuidString), "title": .string(spec.title),
+                        "output": .string(output.path), "duration": .number(Self.rounded(draft.totalDuration)),
+                        "layout": .string(draft.shorts?.resolvedLayout.rawValue ?? ""),
+                        "music": draft.music.enabled ? .string(draft.music.trackID ?? "") : .null,
+                        "warnings": .array(Self.draftWarnings(draft, plan: plan).map { .string($0) }),
+                    ]))
             }
-            let artifacts = try await writeShortsArtifacts(
-                runID: run.id, transcript: analysis.transcript, candidates: selected)
             try await runs.update(id: run.id) {
-                $0.status = .completed; $0.progress = 1; $0.stage = "Shorts готовы"
-                $0.summary = "Создано \(outputs.count) вертикальных роликов."
-                $0.artifacts["transcript"] = artifacts.transcript.path
-                $0.artifacts["candidates"] = artifacts.candidates.path
+                $0.status = .completed; $0.progress = 1; $0.stage = "Шортсы готовы"
+                $0.summary = "Создано черновиков: \(results.count)."
             }
             return .success(
                 command: "make_shorts",
                 data: [
-                    "jobId": .string(run.id.uuidString), "status": .string("completed"),
-                    "outputs": .array(outputs.map { .string($0) }),
-                    "transcript": .string("montazhka://runs/\(run.id.uuidString)/transcript"),
-                    "candidates": .string("montazhka://runs/\(run.id.uuidString)/candidates"),
+                    "jobId": .string(run.id.uuidString), "status": .string("completed"), "shorts": .array(results),
+                    "next": .string(
+                        "Проверьте каждый черновик: montazhka_frames projectId (вертикальный кадр с хуком), "
+                            + "aroundCuts, montazhka_audio. Правки — apply_edits, затем montazhka_export."),
                 ])
         } catch {
             if let activeRunID { await failRun(id: activeRunID, error: error) }
@@ -102,47 +92,65 @@ extension AgentService {
         }
     }
 
-    private func writeShortsArtifacts(
-        runID: UUID, transcript: [TranscriptWord], candidates: [ShortCandidate]
-    ) async throws -> (transcript: URL, candidates: URL) {
-        let directory = try await runs.artifactDirectory(id: runID)
-        let transcriptURL = directory.appendingPathComponent("transcript.json")
-        try JSONEncoder().encode(TranscriptDocument(words: transcript)).write(
-            to: transcriptURL, options: .atomic)
-        let candidatesURL = directory.appendingPathComponent("candidates.json")
-        let artifacts = candidates.map {
-            AgentShortCandidateArtifact(
-                title: $0.title, reason: $0.reason, start: $0.start,
-                end: $0.end, confidence: $0.confidence)
-        }
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        try encoder.encode(artifacts).write(to: candidatesURL, options: .atomic)
-        return (transcriptURL, candidatesURL)
+    /// Один черновик: лента из кусков, оформление, музыка; сохраняется в проекты.
+    private func makeDraft(
+        _ spec: ShortsDraftFactory.Spec, index: Int, from project: Project, map: [MappedTranscriptWord],
+        words: [TranscriptWord], peaks: [String: [Float]], durations: [UUID: Double],
+        request: AgentShortsRequest, faces: FaceTrackStore
+    ) async throws -> Project {
+        let clips = try ShortsDraftFactory.clips(
+            for: spec.pieces, map: map, clips: project.clips, peaksFor: { peaks[$0] },
+            sourceDuration: { durations[$0] ?? .infinity }, thresholdDB: project.detection.thresholdDB,
+            trimPauses: request.trimPauses ?? true, removeFillers: request.removeFillers ?? true)
+        let hook = spec.hook.flatMap { $0.trimmingCharacters(in: .whitespaces).isEmpty ? nil : ShortsHook(text: $0) }
+        let total = clips.reduce(0) { $0 + $1.duration }
+        let draftMap = TranscriptTimelineMapper.make(clips: clips, transcripts: words).words
+        let zooms =
+            try spec.zooms.map { try ShortsDraftFactory.zooms($0, map: map) }
+            ?? ShortsDraftFactory.autoZooms(map: draftMap, total: total, notBefore: hook?.duration ?? 0)
+        let layout = spec.layout ?? .auto
+        let resolved = layout == .auto ? try await suggestedLayout(clips, faces: faces) : layout
+        let saved = ShortsSubtitleSettings.saved()
+
+        let source = project.clips[0].url
+        let folder = source.deletingLastPathComponent()
+            .appendingPathComponent("\(source.deletingPathExtension().lastPathComponent)-shorts", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let output = ShortsExporter.fileURL(
+            in: folder, sourceName: source.deletingPathExtension().lastPathComponent, index: index, title: spec.title)
+
+        var draft = Project(name: "Шортс: \(spec.title)", clips: clips)
+        draft.voiceEnhance.enabled = true
+        draft.music = ShortsDraftFactory.music(track: spec.music, mood: spec.mood, variant: index)
+        draft.shorts = ShortsPresentation(
+            title: spec.title, reason: "", layout: layout, resolvedLayout: resolved, hook: hook,
+            subtitles: spec.subtitles == true
+                ? ShortsDraftSubtitles(appearance: saved.appearance, highlight: saved.highlightActiveWord) : nil,
+            zooms: zooms, exportPath: output.path)
+        try await store.save(draft)
+        return draft
     }
 
-    private static func displaySize(asset: AVURLAsset) async -> CGSize {
-        guard let track = try? await asset.loadTracks(withMediaType: .video).first,
-            let natural = try? await track.load(.naturalSize),
-            let transform = try? await track.load(.preferredTransform)
-        else {
-            return CGSize(width: 1920, height: 1080)
+    private func suggestedLayout(_ clips: [Clip], faces: FaceTrackStore) async throws -> ShortsDraftLayout {
+        var samples: [FaceSample] = []
+        for (_, group) in Dictionary(grouping: clips, by: \.source.id) {
+            guard let url = group.first?.url else { continue }
+            samples += try await faces.samples(for: url, ranges: group.map { $0.start...$0.end })
         }
-        let rect = CGRect(origin: .zero, size: natural).applying(transform)
-        return CGSize(width: abs(rect.width), height: abs(rect.height))
+        return FaceLayoutAdvisor.suggest(samples)
     }
 
-    private static func stage(_ status: ShortsStatus) -> String {
-        switch status {
-        case .idle: "Ожидание"
-        case .preparingModel: "Подготовка модели"
-        case .transcribing: "Расшифровка"
-        case .mapping: "Карта видео"
-        case .searching: "Поиск моментов"
-        case .ranking: "Отбор моментов"
-        case .verifying: "Проверка моментов"
-        case .ready: "Анализ готов"
-        case .failed(let error): error.message
+    private static func draftWarnings(_ draft: Project, plan: ShortsRenderer.Plan) -> [String] {
+        var warnings = plan.warnings.map(\.message)
+        if draft.totalDuration < ShortsLimits.discardBelow || draft.totalDuration > ShortsLimits.maxDuration {
+            warnings.append(
+                "Длительность \(String(format: "%.1f", draft.totalDuration)) с — вне 12–60 с для Reels и Shorts.")
         }
+        if draft.shorts?.resolvedLayout == .split,
+            plan.frameComposition.instructions.first.map({ ($0 as? AVVideoCompositionInstruction)?.layerInstructions.count }) == 1
+        {
+            warnings.append("Лицо для раскладки «экран + лицо» не найдено — показан обычный кадр по лицу.")
+        }
+        return warnings
     }
 }
