@@ -5,7 +5,7 @@
 1. Вызвать `montazhka_doctor`.
 2. Для обычного разговорного ролика выбрать `clean-speech`.
 3. Для более плотного темпа выбрать `dynamic`.
-4. Для пяти вертикальных роликов с субтитрами вызвать `montazhka_make_shorts`.
+4. Для шортсов и Reels выбрать моменты самому, согласовать их с пользователем и вызвать `montazhka_make_shorts` (раздел «Шортсы и Reels»).
 5. Читать состояние долгой задачи через `montazhka_get_job waitSeconds=25` — вызов сам ждёт смены этапа.
 6. Проверить проект через `montazhka_inspect`, затем сделать компактный черновик.
 7. Если пользователь поручил готовый файл — вызвать финальный `montazhka_export`.
@@ -17,14 +17,14 @@
 | `montazhka_doctor` | Проверка движка, модели и папок |
 | `montazhka_get_projects` | Список или один проект |
 | `montazhka_edit_video` | Полный монтаж по профилю |
-| `montazhka_make_shorts` | Анализ и пять вертикальных роликов |
+| `montazhka_make_shorts` | Черновики-проекты и вертикальные MP4 из моментов, выбранных агентом |
 | `montazhka_edit_project` | Точные резы и настройки в копии проекта |
 | `montazhka_get_job` | Короткий статус по `jobId`, с `waitSeconds` — ожидание смены этапа |
 | `montazhka_inspect` | Лента: клипы с номерами, время ленты и исходника, ревизия; до 200 клипов, дальше `nextOffset` |
 | `montazhka_transcript` | Слова с номерами и временем ленты, паузы, склейки, отпечаток `timeline`; поиск `query` |
 | `montazhka_frames` | Сетка кадров картинкой: диапазон, точные моменты или «до/после» склеек |
 | `montazhka_audio` | Громкость по отрезкам (dBFS) и тишины |
-| `montazhka_apply_edits` | Правки ленты: deleteWords, delete, split, move, trim, insert, undo |
+| `montazhka_apply_edits` | Правки ленты, исправления расшифровки и оформление черновика шортса |
 | `montazhka_export` | Черновой или финальный MP4 с проверкой длительности |
 
 Большие ответы не входят в обычный вызов. Транскрипт, кандидаты, отчёт и итог
@@ -34,7 +34,6 @@
 
 - `clean-speech`: длинные паузы, осторожные речевые исправления, улучшение голоса, без музыки.
 - `dynamic`: более короткие паузы, те же осторожные смысловые правила.
-- `shorts`: до пяти роликов 9:16, классические субтитры, компактное качество.
 
 Точные внешние резы имеют поля `sourcePath`, `start`, `end`. Корректные диапазоны
 применяются буквально, без сдвига к словам и тишине.
@@ -71,7 +70,14 @@
 | `move` | `clip`, `to` | Переставляет клип на новое место (номера из `inspect`) |
 | `trim` | `clip`, `edge` (`start`/`end`), `seconds` | Подрезает край; отрицательное число удлиняет в пределах исходника |
 | `insert` | `sourcePath`, `start`, `end`, `at` | Вставляет кусок любого исходника (время файла) в точку ленты |
-| `undo` | `steps` | Отдельным вызовом возвращает предыдущую ревизию |
+| `fixWords` | `words[{from,to}]`, `timeline`, `text`, `remember` | Исправляет распознанный текст: слова становятся одним словом `text`, номера не сдвигаются; `remember` дописывает замену в словарь `glossary.json` |
+| `setHook` | `text` | Черновик шортса: текст хука (пусто — без хука) |
+| `setLayout` | `layout` (`face`/`split`/`fit`) | Черновик: кадр за лицом, экран сверху + лицо снизу, кадр целиком |
+| `setSubtitles` | `on` | Черновик: субтитры в стиле из настроек приложения |
+| `zoom` | `words[{from,to}]`, `timeline` | Черновик: плавный наезд на слова |
+| `clearZooms` | — | Черновик: убрать все наезды |
+| `setMusic` | `track` (id или `none`), `volume` | Черновик: сменить или убрать музыку |
+| `undo` | `steps` | Отдельным вызовом возвращает предыдущую ревизию (оформление тоже) |
 
 Каждая правка сохраняет ревизию в `~/Library/Application Support/Montazhka/AgentRevisions`.
 Ответ содержит новую ленту (до 50 клипов, `clipsShown`) и предупреждения: рез посреди слова,
@@ -86,6 +92,26 @@
 местах → `apply_edits` → `frames aroundCuts=true` → финальный `export` → проверка готового
 файла через `frames`/`audio` с `filePath`.
 
+## Шортсы и Reels
+
+Моменты выбирает агент — встроенный платный отбор приложения не вызывается. Порядок и критерии
+отбора описаны в ресурсе `montazhka://guide`. Кратко: расшифровка → кандидаты по критериям
+hook/standalone/payoff/pacing → таблица пользователю и вопрос о субтитрах → `montazhka_make_shorts`.
+
+```json
+{"projectId": "…", "timeline": "…", "shorts": [{"title": "Как я монтирую", "hook": "Монтаж за минуту",
+  "subtitles": false, "pieces": [{"from": 120, "to": 190}], "layout": "auto", "mood": "energetic"}]}
+```
+
+- `pieces` — слова `{from,to}` из `montazhka_transcript` или секунды ленты `{start,end}`, в порядке показа.
+- `layout`: `face` — кадр 9:16 ведёт лицо (Apple Vision, локально); `split` — экран целиком сверху,
+  лицо снизу; `fit` — кадр целиком; `auto` — по лицам в кадре.
+- `zooms` не передан — плавные наезды подбираются сами; `[]` — без наездов.
+- `music` — id трека из `montazhka_doctor.music`, `none` или по `mood`; музыка стихает под речью.
+- Паузы и «звук без слов» (скорее всего «эээ») вырезаются сами (`trimPauses`, `removeFillers`).
+- Каждый ролик — проект-черновик и MP4 в папке «<исходник>-shorts». `montazhka_frames` черновика
+  показывает вертикальный результат с хуком и субтитрами; `montazhka_export` перевыгружает его файл.
+
 ## CLI
 
 CLI возвращает один JSON-объект версии 1 в stdout. Диагностика: `montazhka doctor`.
@@ -93,7 +119,7 @@ CLI возвращает один JSON-объект версии 1 в stdout. Д
 `inspect`, `transcript`, `frames`, `audio`, `apply-edits`, `export`, `integration`.
 Кадры и звук: `--project <id>` или `--file <mp4>`, `--from`, `--to`, `--count`,
 `--times 1.5,3`, `--around-cuts`, `--buckets`. Поиск по расшифровке — `transcript --query "фраза"`,
-ожидание задачи — `job --id <jobId> --wait 25`, страницы ленты — `inspect --offset 200 --limit 200`. Правки: `montazhka apply-edits --project <id>
+ожидание задачи — `job --id <jobId> --wait 25`, шортсы — `make-shorts --request shorts.json`, страницы ленты — `inspect --offset 200 --limit 200`. Правки: `montazhka apply-edits --project <id>
 --request ops.json` (список операций или `{"operations": [...]}`), отмена — `--undo [шаги]`. Для сложного пакета: `montazhka edit-project --request request.json`.
 Во встроенном ИИ через CLI используется `--smart-edit`, во внешнем — `--external-ai`.
 

@@ -149,3 +149,19 @@ struct AgentShortsTests {
         #expect(!response.ok)
     }
 }
+
+@Suite("Shorts guide for agents")
+struct AgentShortsGuideTests {
+    @Test("the guide teaches the agent to pick moments itself and ask the user first")
+    func guideCoversShorts() {
+        let guide = AgentDocumentation.guide
+        for phrase in [
+            "## Шортсы и Reels", "montazhka_make_shorts", "холодного зрителя", "покажите пользователю",
+            "fixWords", "звук без слов", "setHook", "субтитры",
+        ] {
+            #expect(guide.contains(phrase), "в гайде нет «\(phrase)»")
+        }
+        #expect(!guide.contains("пять роликов"))
+        #expect(AgentDocumentation.skill.contains("montazhka_make_shorts"))
+    }
+}
