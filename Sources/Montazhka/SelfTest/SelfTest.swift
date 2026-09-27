@@ -69,6 +69,7 @@ enum SelfTest {
         failures += await ActivitySelfTest.run()
         failures += await ShortsSubtitleSelfTest.run()
         failures += await AgentToolsSelfTest.run()
+        failures += await ProjectPictureSelfTest.run()
         await testAudioPipeline()
         await testLoudnessNormalization()
         await testVoiceEnhance()

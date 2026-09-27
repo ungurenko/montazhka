@@ -5,20 +5,26 @@ import Foundation
 extension EditorController {
     /// Композиция для экспорта. Если улучшение включено — дожидается обработки всех
     /// исходников; при неудаче отдаёт оригинальный звук и текст предупреждения.
-    func compositionForExport(_ snapshot: Project, speechRanges: [TimelineRange]?) async -> (
+    /// `videoComposition` — анимации и вшитые субтитры; nil — кадр как есть.
+    func compositionForExport(
+        _ snapshot: Project, speechRanges: [TimelineRange]?, subtitleLayer: ProjectSubtitleLayer? = nil
+    ) async -> (
         composition: AVComposition,
         audioMix: AVAudioMix?,
+        videoComposition: AVVideoComposition?,
         audioWarning: String?
     ) {
-        let result = await renderComposition(snapshot, mode: .export, speechRanges: speechRanges)
+        let result = await renderComposition(
+            snapshot, mode: .export, speechRanges: speechRanges, subtitleLayer: subtitleLayer)
         let warning =
             result.warnings.isEmpty
             ? nil
             : result.warnings.map(\.message).joined(separator: "\n")
-        return (result.composition, result.audioMix, warning)
+        return (result.composition, result.audioMix, result.videoPlan?.exportComposition, warning)
     }
 
-    /// Обычный проект: слова ленты дают и .srt, и приглушение музыки под голосом.
+    /// Обычный проект: слова ленты дают .srt, вшитые субтитры (если включены)
+    /// и приглушение музыки под голосом; анимации ложатся поверх кадра.
     /// Нет готовой расшифровки — речь распознаётся сейчас, если модель уже скачана.
     func prepareExport(step: @escaping @Sendable (ExportPreparationStep) -> Void) async throws -> PreparedExport {
         if project.shorts != nil { return try await prepareShortsExport() }
@@ -28,9 +34,12 @@ extension EditorController {
             clips: exported.clips, store: transcriptStore, glossaryURL: repository.directories.glossary,
             transcribing: { step(.transcribing($0)) })
         step(.assembling)
-        let result = await compositionForExport(exported, speechRanges: speech.speechRanges)
+        let burned = exported.export.burnSubtitles ? ProjectSubtitleLayer.saved(cues: speech.horizontalCues) : nil
+        let result = await compositionForExport(
+            exported, speechRanges: speech.speechRanges, subtitleLayer: burned)
         return PreparedExport(
             composition: result.composition, audioMix: result.audioMix, warning: result.audioWarning,
+            videoComposition: result.videoComposition,
             subtitleCues: speech.horizontalCues, subtitlesSkippedReason: speech.skippedReason,
             normalizeLoudness: exported.export.normalizeLoudness,
             timelineFingerprint: AgentWordCuts.fingerprint(exported.clips), sizing: .quality)

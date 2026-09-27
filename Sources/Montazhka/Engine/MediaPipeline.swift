@@ -1,5 +1,6 @@
 @preconcurrency import AVFoundation
 import Foundation
+import OSLog
 
 enum MediaRenderMode: Sendable {
     case preview
@@ -15,6 +16,8 @@ struct MediaRenderRequest: Sendable {
     var speechRanges: [TimelineRange]? = nil
     /// Сколько копий видеодорожки собрать (раскладке «экран + лицо» нужны две).
     var videoCopies = 1
+    /// Субтитры, впечатанные в кадр обычного проекта; nil — без них.
+    var subtitleLayer: ProjectSubtitleLayer? = nil
 }
 
 struct MediaRenderResult: @unchecked Sendable {
@@ -65,17 +68,67 @@ actor MediaPipeline {
                 warnings.append(.musicNotDucked)
             }
         }
+        // Анимации и вшитые субтитры — только у обычного проекта: картинку черновика
+        // шортса собирает ShortsRenderer.
+        let isNormal = request.project.shorts == nil
         let built = await CompositionBuilder.buildResult(
             clips: request.project.clips,
             enhancedAudio: request.project.voiceEnhance.enabled ? enhanced : [:],
             music: music,
-            videoCopies: request.videoCopies
+            videoCopies: request.videoCopies,
+            overlays: isNormal ? availableOverlays(request.project, warnings: &warnings) : []
         )
         warnings.append(contentsOf: built.warnings)
+        let subtitles = isNormal ? request.subtitleLayer : nil
+        var videoPlan: ProjectVideoPlan?
+        if !built.overlayTracks.isEmpty || subtitles != nil {
+            do {
+                videoPlan = try await ProjectVideoComposition.make(
+                    composition: built.composition, baseTrackID: built.baseVideoTrackID,
+                    overlays: built.overlayTracks, subtitles: subtitles,
+                    duration: request.project.totalDuration)
+            } catch {
+                Logger.export.error("Картинка проекта не собралась: \(String(reflecting: error), privacy: .public)")
+                warnings.append(.pictureFailed)
+            }
+        }
         return MediaRenderResult(
             composition: built.composition,
             audioMix: built.audioMix,
-            warnings: warnings)
+            warnings: warnings,
+            videoPlan: videoPlan)
+    }
+
+    /// Картинка обычного проекта для кадров агента — такая же, как в готовом MP4:
+    /// склейка, анимации и (если `project.export.burnSubtitles`) субтитры по словам
+    /// ленты картинкой поверх кадра. Звук кадрам не нужен: музыка не собирается.
+    nonisolated func framePlan(
+        for project: Project, words: [MappedTranscriptWord]?
+    ) async throws -> (
+        asset: AVAsset, videoComposition: AVVideoComposition?, overlayAt: ((Double) -> CGImage?)?
+    ) {
+        var picture = project
+        picture.music.enabled = false
+        let cues = words.map { ShortsSubtitleCueBuilder.make(mapped: $0, rules: .horizontal) }
+        let result = await render(
+            MediaRenderRequest(
+                project: picture, mode: .preview, readyEnhancedAudio: [:],
+                subtitleLayer: project.export.burnSubtitles ? ProjectSubtitleLayer.saved(cues: cues) : nil))
+        try Task.checkCancellation()
+        return (result.composition, result.videoPlan?.frameComposition, result.videoPlan?.overlayImageAt)
+    }
+
+    /// Видимые анимации, чьи файлы на месте; пропавшие — предупреждение.
+    private func availableOverlays(_ project: Project, warnings: inout [CompositionWarning]) -> [ResolvedOverlay] {
+        OverlayTimeline.resolve(project.overlays, clips: project.clips).filter { resolved in
+            guard resolved.status == .visible else { return false }
+            guard let url = resolved.overlay.media.resolvedURL, FileManager.default.fileExists(atPath: url.path)
+            else {
+                warnings.append(.overlayUnavailable(resolved.overlay.media.displayName))
+                return false
+            }
+            return true
+        }
     }
 
     private func uniqueSources(_ clips: [Clip]) -> [MediaReference] {

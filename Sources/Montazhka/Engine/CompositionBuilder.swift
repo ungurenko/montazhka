@@ -18,6 +18,10 @@ enum CompositionWarning: Equatable {
     case voiceFallback(String)
     /// Приглушение музыки включено, а участков речи не знаем: нет расшифровки.
     case musicNotDucked
+    /// Файл анимации пропал или не читается — ролик собирается без неё.
+    case overlayUnavailable(String)
+    /// Анимации и вшитые субтитры не удалось наложить на кадр.
+    case pictureFailed
 
     var message: String {
         switch self {
@@ -29,6 +33,8 @@ enum CompositionWarning: Equatable {
             return "Не удалось настроить музыку «\(name)» под голос — используется исходная мелодия."
         case .voiceFallback(let name): return "Не удалось обработать голос в «\(name)» — используется исходный звук."
         case .musicNotDucked: return "Музыка не приглушается под голосом: нет расшифровки"
+        case .overlayUnavailable(let name): return "Анимация «\(name)» недоступна — видео будет без неё."
+        case .pictureFailed: return "Не удалось наложить анимации и субтитры на кадр — видео будет без них."
         }
     }
 }
@@ -39,6 +45,10 @@ struct CompositionBuildResult: @unchecked Sendable {
     let composition: AVMutableComposition
     let audioMix: AVAudioMix?
     let warnings: [CompositionWarning]
+    /// Основная видеодорожка ленты — первая видеодорожка склейки.
+    var baseVideoTrackID = kCMPersistentTrackID_Invalid
+    /// Дорожки анимаций поверх основной, по порядку `overlays`.
+    var overlayTracks: [OverlayTrack] = []
 }
 
 /// План открытия медиа: каждый исходник и его обработанный звук загружаются один раз.
@@ -108,11 +118,14 @@ enum CompositionBuilder {
 
     /// `videoCopies` — сколько одинаковых видеодорожек положить: раскладке
     /// «экран + лицо» нужны две, чтобы показать одну картинку в двух местах.
+    /// `overlays` — видимые анимации: каждая на своей дорожке после основной
+    /// (на первую видеодорожку опираются экспорт и черновики шортсов), без звука.
     static func buildResult(
         clips: [Clip],
         enhancedAudio: [String: URL] = [:],
         music: MusicInput? = nil,
-        videoCopies: Int = 1
+        videoCopies: Int = 1,
+        overlays: [ResolvedOverlay] = []
     ) async -> CompositionBuildResult {
         let composition = AVMutableComposition()
         let extraVideoTracks = (1..<max(1, videoCopies)).compactMap { _ in
@@ -207,6 +220,7 @@ enum CompositionBuilder {
             previousDuration = range.duration
             cursor = cursor + range.duration
         }
+        let overlayTracks = await addOverlayTracks(overlays, to: composition, warnings: &warnings)
 
         var mixParameters: [AVAudioMixInputParameters] = []
         if let voice = voiceMixParameters(track: audioTrack, joints: voiceJoints) {
@@ -225,7 +239,61 @@ enum CompositionBuilder {
                 mix.inputParameters = mixParameters
                 return mix
             }()
-        return CompositionBuildResult(composition: composition, audioMix: audioMix, warnings: warnings)
+        return CompositionBuildResult(
+            composition: composition, audioMix: audioMix, warnings: warnings,
+            baseVideoTrackID: videoTrack.trackID, overlayTracks: overlayTracks)
+    }
+
+    /// Каждая видимая анимация — своя дорожка: кусок файла с `mediaStart` длиной в окно
+    /// встаёт на начало окна. Окно дорожки — то, что реально вставилось: файл бывает
+    /// короче, и за его концом дорожка держала бы последний кадр.
+    private static func addOverlayTracks(
+        _ overlays: [ResolvedOverlay], to composition: AVMutableComposition,
+        warnings: inout [CompositionWarning]
+    ) async -> [OverlayTrack] {
+        var tracks: [OverlayTrack] = []
+        for resolved in overlays where resolved.status == .visible {
+            guard !Task.isCancelled else { break }
+            let overlay = resolved.overlay
+            let timescale: CMTimeScale = 60_000
+            // Ассет держим до вставки: дорожка без живого ассета не вставляется.
+            let asset = overlay.media.resolvedURL.map { AVURLAsset(url: $0) }
+            defer { withExtendedLifetime(asset) {} }
+            guard let asset,
+                let source = try? await asset.loadTracks(withMediaType: .video).first,
+                case let (range, size, transform)? = try? await source.load(
+                    .timeRange, .naturalSize, .preferredTransform)
+            else {
+                warnings.append(.overlayUnavailable(overlay.media.displayName))
+                continue
+            }
+            let wanted = CMTimeRange(
+                start: range.start + CMTime(seconds: resolved.mediaStart, preferredTimescale: timescale),
+                duration: CMTime(seconds: resolved.window.to - resolved.window.from, preferredTimescale: timescale))
+            let piece = wanted.intersection(range)
+            let at = CMTime(seconds: resolved.window.from, preferredTimescale: timescale)
+            guard piece.duration > .zero,
+                let track = composition.addMutableTrack(
+                    withMediaType: .video, preferredTrackID: kCMPersistentTrackID_Invalid)
+            else {
+                warnings.append(.overlayUnavailable(overlay.media.displayName))
+                continue
+            }
+            do {
+                try track.insertTimeRange(piece, of: source, at: at)
+            } catch {
+                composition.removeTrack(track)
+                warnings.append(.overlayUnavailable(overlay.media.displayName))
+                continue
+            }
+            tracks.append(
+                OverlayTrack(
+                    overlayID: overlay.id, trackID: track.trackID,
+                    window: TimelineRange(from: resolved.window.from, to: (at + piece.duration).seconds),
+                    naturalSize: size, preferredTransform: transform, position: overlay.position,
+                    scale: overlay.scale))
+        }
+        return tracks
     }
 
     private static func voiceMixParameters(

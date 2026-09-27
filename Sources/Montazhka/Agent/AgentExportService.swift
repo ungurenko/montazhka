@@ -9,7 +9,8 @@ extension AgentService {
     ]
 
     /// `normalizeLoudness`, `burnSubtitles`: nil — как в `project.export`.
-    /// `burnSubtitles` пока не впечатывает субтитры в кадр: .srt ложится рядом всегда.
+    /// .srt ложится рядом всегда; `burnSubtitles` ещё и впечатывает фразы в кадр
+    /// обычного проекта (у черновика шортса свои субтитры).
     func export(
         projectID: UUID, outputPath: String?, quality: String,
         final: Bool, confirmFinal: Bool, overwrite: Bool,
@@ -49,7 +50,8 @@ extension AgentService {
             }
             let normalize = normalizeLoudness ?? project.export.normalizeLoudness
             let (job, renderWarnings) = try await exportJob(
-                project, quality: exportQuality, normalize: normalize, runID: run.id)
+                project, quality: exportQuality, normalize: normalize,
+                burnSubtitles: burnSubtitles ?? project.export.burnSubtitles, runID: run.id)
             let report = try await FinalExport.run(job, to: destination, progress: progress, stage: stage)
             let actual = try await AVURLAsset(url: destination).load(.duration).seconds
             let matches = abs(actual - project.totalDuration) <= 0.25
@@ -86,10 +88,11 @@ extension AgentService {
     }
 
     /// Задание записи и предупреждения сборки. Шортс — по плану черновика;
-    /// обычный проект — слова ленты для .srt и приглушения музыки. Расшифровка
-    /// здесь (в фоновом процессе) запускается, если модель уже скачана.
+    /// обычный проект — слова ленты для .srt, вшитых субтитров и приглушения
+    /// музыки, анимации поверх кадра. Расшифровка здесь (в фоновом процессе)
+    /// запускается, если модель уже скачана.
     private func exportJob(
-        _ project: Project, quality: ExportQuality, normalize: Bool, runID: UUID
+        _ project: Project, quality: ExportQuality, normalize: Bool, burnSubtitles: Bool, runID: UUID
     ) async throws -> (FinalExportJob, [String]) {
         let fingerprint = AgentWordCuts.fingerprint(project.clips)
         if project.shorts != nil {
@@ -110,9 +113,12 @@ extension AgentService {
         let music = MusicEQStore(cacheDir: store.musicEQDir)
         let rendered = await MediaPipeline(voiceStore: voice, musicEQStore: music).render(
             MediaRenderRequest(
-                project: project, mode: .export, readyEnhancedAudio: [:], speechRanges: speech.speechRanges))
+                project: project, mode: .export, readyEnhancedAudio: [:], speechRanges: speech.speechRanges,
+                subtitleLayer: burnSubtitles ? ProjectSubtitleLayer.saved(cues: speech.horizontalCues) : nil))
         let job = FinalExportJob(
-            input: ExportInput(composition: rendered.composition, audioMix: rendered.audioMix),
+            input: ExportInput(
+                composition: rendered.composition, audioMix: rendered.audioMix,
+                videoComposition: rendered.videoPlan?.exportComposition),
             quality: quality, sizing: .quality(quality), subtitleCues: speech.horizontalCues,
             subtitlesSkippedReason: speech.skippedReason, normalizeLoudness: normalize,
             timelineFingerprint: fingerprint)

@@ -339,7 +339,8 @@ final class EditorController: ExportPreparing {
     }
 
     func renderComposition(
-        _ snapshot: Project, mode: MediaRenderMode, speechRanges: [TimelineRange]?
+        _ snapshot: Project, mode: MediaRenderMode, speechRanges: [TimelineRange]?,
+        subtitleLayer: ProjectSubtitleLayer? = nil
     ) async -> MediaRenderResult {
         let processesMusic = snapshot.music.enabled && snapshot.music.eqEnabled
         if processesMusic { musicProcessing = true }
@@ -347,7 +348,8 @@ final class EditorController: ExportPreparing {
             project: snapshot,
             mode: mode,
             readyEnhancedAudio: enhancedAudioURLs,
-            speechRanges: speechRanges)
+            speechRanges: speechRanges,
+            subtitleLayer: subtitleLayer)
         let result = await mediaPipeline.render(request)
         if processesMusic { musicProcessing = false }
         return result
@@ -390,6 +392,8 @@ final class EditorController: ExportPreparing {
             }
             let item = AVPlayerItem(asset: composition)
             item.audioMix = audioMix
+            // Анимации поверх кадра; субтитры предпросмотра рисует окно.
+            item.videoComposition = result.videoPlan?.frameComposition
             self.player.replaceCurrentItem(with: item)
             if let time {
                 let clamped = min(max(0, time), max(0, self.duration - 0.001))
@@ -1033,6 +1037,7 @@ final class EditorController: ExportPreparing {
             guard self.rebuildGeneration.isCurrent(generation) else { return }
             let item = AVPlayerItem(asset: result.composition)
             item.audioMix = result.audioMix
+            item.videoComposition = result.videoPlan?.frameComposition
             self.player.replaceCurrentItem(with: item)
             await self.player.seek(
                 to: CMTime(seconds: start, preferredTimescale: 600),
