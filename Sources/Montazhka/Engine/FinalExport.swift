@@ -60,6 +60,9 @@ enum FinalExport {
     static let noSpeechReason = "В ролике нет речи — субтитры не созданы"
 
     /// `progress` — общая доля 0…1 всех проходов; `stage` — начало каждого прохода.
+    /// Видео и .srt пишутся во временные файлы рядом и встают на место последним шагом,
+    /// после замера громкости: отмена до этого оставляет прежние файлы нетронутыми,
+    /// а после него экспорт уже готов.
     static func run(
         _ job: FinalExportJob, to url: URL,
         progress: @escaping @Sendable (Double) -> Void,
@@ -70,6 +73,8 @@ enum FinalExport {
             .appendingPathComponent("montazhka-master-\(UUID().uuidString)", isDirectory: true)
         // Выровненный звук (CAF) живёт только до конца записи — и при ошибке, и при отмене.
         defer { try? FileManager.default.removeItem(at: scratch) }
+        // MP4 уже на месте — значит, перезаписывается прошлый экспорт, и его .srt тоже наш.
+        let replacesVideo = FileManager.default.fileExists(atPath: url.path)
         let length = try await job.input.composition.load(.duration)
         let duration = length.seconds
 
@@ -80,14 +85,18 @@ enum FinalExport {
             if let mastered { input = try await replacingAudio(of: input, with: mastered.audioURL, length: length) }
         }
 
-        var subtitles = SubtitleSidecar(job: job, duration: duration, video: url)
+        var subtitles = SubtitleSidecar(job: job, duration: duration, video: url, replacesVideo: replacesVideo)
         defer { subtitles.discard() }
+        var video = AtomicMediaOutput(destinationURL: url)
+        defer { video.discard() }
         tracker.begin(.writing)
-        try await writeVideo(job, input: input, to: url, progress: { tracker.update($0) })
-        var warnings = subtitles.commit()
+        try await writeVideo(job, input: input, to: video.temporaryURL, progress: { tracker.update($0) })
 
         tracker.begin(.verifying)
-        let loudness = try? await LoudnessMeter.measure(url: url, progress: { tracker.update($0) })
+        let loudness = try? await LoudnessMeter.measure(url: video.temporaryURL, progress: { tracker.update($0) })
+        try Task.checkCancellation()
+        try video.commit()
+        var warnings = subtitles.commit()
         tracker.update(1)
         let targetMet = mastered == nil ? nil : loudness.map(meetsTarget)
         warnings += loudnessWarnings(normalized: mastered != nil, loudness: loudness, targetMet: targetMet)
@@ -183,21 +192,31 @@ enum FinalExport {
 /// .srt рядом с видео. Временная копия пишется в папку назначения до видео,
 /// на место встаёт только после готового MP4: при ошибке записи прежняя пара
 /// «видео + субтитры» остаётся нетронутой. Сбой с субтитрами экспорт не валит.
+/// Чужой .srt (рядом ещё не было MP4) не заменяется и не удаляется никогда.
 private struct SubtitleSidecar {
     let destination: URL
     private var output: AtomicMediaOutput?
+    /// Прежний .srt от прошлого экспорта этого MP4 уходит, если новых фраз нет.
+    private var removesStale = false
     private(set) var committedURL: URL?
     private(set) var skippedReason: String?
 
-    init(job: FinalExportJob, duration: Double, video: URL) {
+    /// `replacesVideo` — MP4 по этому пути уже был: перезаписывается прошлый экспорт.
+    init(job: FinalExportJob, duration: Double, video: URL, replacesVideo: Bool) {
         destination = SubRipWriter.url(forVideo: video)
         guard let cues = job.subtitleCues else {
             skippedReason = job.subtitlesSkippedReason
+            removesStale = replacesVideo
             return
         }
         let fitted = Self.fitted(cues, to: duration)
         guard !fitted.isEmpty else {
             skippedReason = FinalExport.noSpeechReason
+            removesStale = replacesVideo
+            return
+        }
+        if !replacesVideo, FileManager.default.fileExists(atPath: destination.path) {
+            skippedReason = "Рядом уже есть файл субтитров \(destination.lastPathComponent) — не стал его заменять"
             return
         }
         let pending = AtomicMediaOutput(destinationURL: destination)
@@ -218,22 +237,23 @@ private struct SubtitleSidecar {
         }
     }
 
-    /// Видео уже на месте: новый .srt встаёт рядом, а без него уходит старый —
-    /// он от прежнего экспорта этого файла. Возвращает предупреждения.
+    /// Видео уже на месте: новый .srt встаёт рядом, а без новых фраз уходит старый —
+    /// он от прежнего экспорта этого файла. Не удалось поставить новый — прежний
+    /// остаётся. Возвращает предупреждения.
     mutating func commit() -> [String] {
         if var pending = output {
             do {
                 try pending.commit()
                 output = pending
                 committedURL = destination
-                return []
             } catch {
                 pending.discard()
                 output = nil
                 skippedReason = Self.failure(error)
             }
+            return []
         }
-        guard FileManager.default.fileExists(atPath: destination.path) else { return [] }
+        guard removesStale, FileManager.default.fileExists(atPath: destination.path) else { return [] }
         do {
             try FileManager.default.removeItem(at: destination)
             return []
