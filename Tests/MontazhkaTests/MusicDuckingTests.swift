@@ -90,3 +90,66 @@ struct MusicDuckingPipelineTests {
         #expect(abs(try await musicVolume(at: 6.5, ducking: false) - 0.3) < 0.01)
     }
 }
+
+/// Музыка, включённая в окне или агентом, стихает под голосом; сохранённый выбор не трогается.
+@Suite("Music ducking defaults")
+struct MusicDuckingDefaultsTests {
+    private func temporaryRoot() throws -> URL {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("montazhka-ducking-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        return root
+    }
+
+    @MainActor
+    @Test("turning music on in the editor turns ducking on; a saved project's choice stays")
+    func editorTurnsDuckingOn() async throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let controller = EditorController(
+            project: Project(name: "Музыка"), store: ProjectStore(baseDirectory: root),
+            openRouterKeyStore: EmptyOpenRouterKeyStore())
+        var music = controller.project.music
+        music.enabled = true
+
+        controller.updateMusicSettings(music)
+
+        #expect(controller.project.music.enabled)
+        #expect(controller.project.music.ducking)
+        await controller.shutdown()
+
+        var saved = Project(name: "Сохранённый")
+        saved.music = MusicSettings(enabled: true, volume: 30, ducking: false)
+        let reopened = EditorController(
+            project: saved, store: ProjectStore(baseDirectory: root), openRouterKeyStore: EmptyOpenRouterKeyStore())
+        var louder = reopened.project.music
+        louder.volume = 40
+
+        reopened.updateMusicSettings(louder)
+
+        #expect(reopened.project.music.volume == 40)
+        #expect(!reopened.project.music.ducking, "выбор сохранённого проекта не меняется молча")
+        await reopened.shutdown()
+    }
+
+    @Test("edit_video with musicPath ducks the music under speech")
+    func agentMusicDucks() async throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let video = root.appendingPathComponent("talk.mov")
+        try await TestVideoFactory.make(segments: [(duration: 2, loud: true)], to: video)
+        let service = AgentService(baseDirectory: root)
+
+        let response = await service.edit(
+            AgentEditRequest(
+                sourcePaths: [video.path], removePauses: false, enhanceVoice: false, musicPath: video.path))
+
+        guard case .string(let id)? = response.data?["projectId"], let projectID = UUID(uuidString: id) else {
+            Issue.record("проект не создан: \(String(describing: response.error))")
+            return
+        }
+        let project = try await service.store.load(id: projectID)
+        #expect(project.music.enabled)
+        #expect(project.music.ducking)
+    }
+}

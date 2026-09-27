@@ -175,7 +175,7 @@ extension AgentService {
             throw AgentServiceError.missingFile(path)
         }
         project.music = MusicSettings(
-            enabled: true, customMedia: MediaReference(path: path), volume: 18)
+            enabled: true, customMedia: MediaReference(path: path), volume: 18, ducking: true)
     }
 
     /// Новый проект из файлов или копия проекта `request.projectID`; `original` — проект,

@@ -20,6 +20,7 @@ struct MusicPanel: View {
                     if settings.enabled {
                         tracksBlock
                         volumeBlock
+                        duckingBlock
                         eqBlock
                         warningBlock
                     }
@@ -31,6 +32,8 @@ struct MusicPanel: View {
         .onAppear { settings = controller.project.music }
         .onChange(of: settings) { _, new in
             controller.updateMusicSettings(new)
+            // Контроллер мог дополнить выбор (приглушение при включении музыки).
+            if controller.project.music != new { settings = controller.project.music }
         }
     }
 
@@ -106,6 +109,19 @@ struct MusicPanel: View {
             range: 0...100, step: 1,
             display: { "\(Int($0)) %" }
         )
+    }
+
+    private var duckingBlock: some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.small) {
+            Toggle("Приглушать музыку под голосом", isOn: $settings.ducking)
+                .toggleStyle(.checkbox)
+                .typeStyle(.bodyEmphasis)
+                .foregroundStyle(Theme.textPrimary)
+                .accessibilityIdentifier("music.ducking")
+            Text("Пока звучит голос, музыка тише. Где звучит голос, берётся из расшифровки речи.")
+                .typeStyle(.helper)
+                .foregroundStyle(Theme.textSecondary)
+        }
     }
 
     private var eqBlock: some View {

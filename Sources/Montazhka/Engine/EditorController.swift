@@ -774,6 +774,9 @@ final class EditorController: ExportPreparing {
     // MARK: - Фоновая музыка
 
     func updateMusicSettings(_ settings: MusicSettings) {
+        var settings = settings
+        // Музыку только что включили — по умолчанию она стихает под голосом.
+        if settings.enabled, !project.music.enabled { settings.ducking = true }
         guard settings != project.music else { return }
         beginCoalescedEdit("music")
         let onlyVolumeChanged = settings.differsOnlyByVolume(from: project.music)

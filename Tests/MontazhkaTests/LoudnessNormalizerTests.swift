@@ -197,6 +197,41 @@ struct LoudnessNormalizerTests {
         #expect(abs(Double(file.length) / 48000 - 3) <= 0.001)
     }
 
+    @Test("master applies the audio mix: music turned down under speech stays down in the file")
+    func masterAppliesAudioMix() async throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let source = directory.appendingPathComponent("tone.caf")
+        try writeStereo(sine(frequency: 1000, dbfs: -30, seconds: 3), to: source)
+        let composition = try await audioComposition(of: source)
+        let params = AVMutableAudioMixInputParameters(track: try #require(composition.tracks.first))
+        // Как у приглушения музыки: ровные участки рампами, первые 1,5 с — полный уровень, дальше 0,1.
+        let half = CMTime(seconds: 1.5, preferredTimescale: 600)
+        params.setVolumeRamp(fromStartVolume: 1, toEndVolume: 1, timeRange: CMTimeRange(start: .zero, end: half))
+        params.setVolumeRamp(
+            fromStartVolume: 0.1, toEndVolume: 0.1,
+            timeRange: CMTimeRange(start: half, end: CMTime(seconds: 3, preferredTimescale: 600)))
+        let mix = AVMutableAudioMix()
+        mix.inputParameters = [params]
+
+        let mastered = try #require(
+            try await LoudnessNormalizer.master(
+                asset: composition, audioMix: mix, duration: 3, target: LoudnessTarget(),
+                scratchDirectory: directory.appendingPathComponent("scratch", isDirectory: true),
+                isCancelled: { false }))
+
+        let file = try AVAudioFile(forReading: mastered.audioURL)
+        let buffer = try #require(AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: 144_000))
+        try file.read(into: buffer)
+        let left = try #require(buffer.floatChannelData)[0]
+        func rms(_ from: Double, _ to: Double) -> Double {
+            let range = Int(from * 48000)..<Int(to * 48000)
+            return sqrt(range.reduce(0) { $0 + Double(left[$1] * left[$1]) } / Double(range.count))
+        }
+        let ratioDB = 20 * log10(rms(1.7, 2.8) / rms(0.2, 1.3))
+        #expect(abs(ratioDB + 20) < 1, "после 1,5 с музыка на 20 дБ тише: \(ratioDB) дБ")
+    }
+
     @Test("peaky speech that the limiter pulls short still reaches −14 LUFS after the second pass")
     func masterPeakySpeech() async throws {
         let directory = try temporaryDirectory()
