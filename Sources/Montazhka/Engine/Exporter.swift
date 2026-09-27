@@ -158,8 +158,11 @@ extension FinalExportStage {
 protocol ExportPreparing {
     /// Файлы, из которых собирается ролик: поверх них экспорт не пишет.
     var exportInputFiles: [URL] { get }
+    /// `quality` — выбранное качество: черновик шортса собирает по нему кадр.
     /// `step` зовётся с любого потока.
-    func prepareExport(step: @escaping @Sendable (ExportPreparationStep) -> Void) async throws -> PreparedExport
+    func prepareExport(
+        quality: ExportQuality, step: @escaping @Sendable (ExportPreparationStep) -> Void
+    ) async throws -> PreparedExport
 }
 
 @MainActor
@@ -321,7 +324,7 @@ final class ExportModel {
             do {
                 // До подготовки: расшифровка и обработка звука не тратятся на заведомый отказ.
                 try ExportDestinationGuard.check(url, inputs: preparer.exportInputFiles)
-                let prepared = try await preparer.prepareExport(step: onStep)
+                let prepared = try await preparer.prepareExport(quality: quality, step: onStep)
                 try Task.checkCancellation()
                 guard self.operationGeneration.isCurrent(generation) else { return }
                 self.audioWarning = prepared.warning

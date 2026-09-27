@@ -535,14 +535,14 @@ struct ProjectVideoCompositionTests {
         #expect(preview.renderSize == CGSize(width: Scene.width, height: Scene.height))
         #expect(preview.animationTool == nil)
 
-        let burned = try await controller.prepareExport(step: { _ in })
+        let burned = try await controller.prepareExport(quality: .high, step: { _ in })
         #expect(burned.videoComposition?.animationTool == nil)
         #expect(burned.overlay?(1) != nil, "субтитры идут картинкой поверх кадра")
         #expect(burned.sizing == .quality)
         #expect(burned.subtitleCues?.map(\.text) == ["Привет это проверка"])
 
         controller.setExportPreferences(ExportPreferences(normalizeLoudness: true, burnSubtitles: false))
-        let overlayOnly = try await controller.prepareExport(step: { _ in })
+        let overlayOnly = try await controller.prepareExport(quality: .high, step: { _ in })
         #expect(overlayOnly.videoComposition != nil)
         #expect(overlayOnly.overlay == nil)
         #expect(overlayOnly.videoComposition?.animationTool == nil)
@@ -550,7 +550,7 @@ struct ProjectVideoCompositionTests {
         controller.removeOverlay(id: try #require(scene.project.overlays.first?.id))
         try await waitForPreview(controller)
         #expect(controller.player.currentItem?.videoComposition == nil)
-        let plain = try await controller.prepareExport(step: { _ in })
+        let plain = try await controller.prepareExport(quality: .high, step: { _ in })
         #expect(plain.videoComposition == nil)
         await controller.shutdown()
     }

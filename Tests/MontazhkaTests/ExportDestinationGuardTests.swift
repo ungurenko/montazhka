@@ -167,7 +167,9 @@ private final class CountingPreparer: ExportPreparing {
 
     init(inputs: [URL]) { exportInputFiles = inputs }
 
-    func prepareExport(step: @escaping @Sendable (ExportPreparationStep) -> Void) async throws -> PreparedExport {
+    func prepareExport(
+        quality: ExportQuality, step: @escaping @Sendable (ExportPreparationStep) -> Void
+    ) async throws -> PreparedExport {
         calls += 1
         return PreparedExport(composition: AVMutableComposition(), audioMix: nil, warning: nil)
     }

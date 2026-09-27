@@ -164,7 +164,9 @@ private struct ImmediateExportPreparer: ExportPreparing {
         self.warning = warning
     }
 
-    func prepareExport(step: @escaping @Sendable (ExportPreparationStep) -> Void) async throws -> PreparedExport {
+    func prepareExport(
+        quality: ExportQuality, step: @escaping @Sendable (ExportPreparationStep) -> Void
+    ) async throws -> PreparedExport {
         PreparedExport(composition: AVMutableComposition(), audioMix: nil, warning: warning)
     }
 }
@@ -172,7 +174,9 @@ private struct ImmediateExportPreparer: ExportPreparing {
 @MainActor
 private struct SlowExportPreparer: ExportPreparing {
     var exportInputFiles: [URL] { [] }
-    func prepareExport(step: @escaping @Sendable (ExportPreparationStep) -> Void) async throws -> PreparedExport {
+    func prepareExport(
+        quality: ExportQuality, step: @escaping @Sendable (ExportPreparationStep) -> Void
+    ) async throws -> PreparedExport {
         try await Task.sleep(for: .seconds(30))
         return PreparedExport(composition: AVMutableComposition(), audioMix: nil, warning: nil)
     }
@@ -209,7 +213,9 @@ private final class SteppingExportPreparer: ExportPreparing {
     var exportInputFiles: [URL] { [] }
     private var continuation: CheckedContinuation<Void, Never>?
 
-    func prepareExport(step: @escaping @Sendable (ExportPreparationStep) -> Void) async throws -> PreparedExport {
+    func prepareExport(
+        quality: ExportQuality, step: @escaping @Sendable (ExportPreparationStep) -> Void
+    ) async throws -> PreparedExport {
         step(.transcribing(0.4))
         await withCheckedContinuation { continuation = $0 }
         return PreparedExport(composition: AVMutableComposition(), audioMix: nil, warning: nil)

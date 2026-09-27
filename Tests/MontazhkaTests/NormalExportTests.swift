@@ -75,7 +75,7 @@ struct NormalExportTests {
         let controller = EditorController(
             project: fixture.project, store: fixture.store, openRouterKeyStore: EmptyOpenRouterKeyStore())
 
-        let prepared = try await controller.prepareExport(step: { _ in })
+        let prepared = try await controller.prepareExport(quality: .high, step: { _ in })
 
         #expect(abs(try musicVolume(prepared.audioMix, at: 6.5) - 0.3 * Float(MusicDucking.duckRatio)) < 0.01)
         #expect(abs(try musicVolume(prepared.audioMix, at: 3) - 0.3) < 0.01)
@@ -96,7 +96,7 @@ struct NormalExportTests {
         let controller = EditorController(
             project: fixture.project, store: fixture.store, openRouterKeyStore: EmptyOpenRouterKeyStore())
 
-        let prepared = try await controller.prepareExport(step: { _ in })
+        let prepared = try await controller.prepareExport(quality: .high, step: { _ in })
 
         #expect(abs(try musicVolume(prepared.audioMix, at: 6.5) - 0.3) < 0.01)
         #expect(prepared.subtitleCues == nil)
@@ -120,7 +120,7 @@ struct NormalExportTests {
         // Расшифровка появилась после сборки предпросмотра — как при распознавании во время экспорта.
         try await writeTranscript(fixture)
 
-        _ = try await controller.prepareExport(step: { _ in })
+        _ = try await controller.prepareExport(quality: .high, step: { _ in })
 
         try await waitForPreview(controller)
         #expect(controller.previewSubtitleCues.map(\.text) == ["Привет это проверка"])

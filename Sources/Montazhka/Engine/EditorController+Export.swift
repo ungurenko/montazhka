@@ -32,8 +32,10 @@ extension EditorController {
     /// Обычный проект: слова ленты дают .srt, вшитые субтитры (если включены)
     /// и приглушение музыки под голосом; анимации ложатся поверх кадра.
     /// Нет готовой расшифровки — речь распознаётся сейчас, если модель уже скачана.
-    func prepareExport(step: @escaping @Sendable (ExportPreparationStep) -> Void) async throws -> PreparedExport {
-        if project.shorts != nil { return try await prepareShortsExport() }
+    func prepareExport(
+        quality: ExportQuality, step: @escaping @Sendable (ExportPreparationStep) -> Void
+    ) async throws -> PreparedExport {
+        if project.shorts != nil { return try await prepareShortsExport(quality: quality) }
         // Та версия проекта, из которой соберётся файл, — до ожидания расшифровки и сборки.
         let exported = project
         let speech = try await ExportSpeech.load(
@@ -65,16 +67,17 @@ extension EditorController {
     }
 
     /// Черновик шортса выгружается так же, как у агента: вертикально, с лицом,
-    /// наездами, хуком и субтитрами. .srt — те же фразы шортса.
-    func prepareShortsExport() async throws -> PreparedExport {
+    /// наездами, хуком и субтитрами, в кадре выбранного качества. .srt — те же фразы шортса.
+    func prepareShortsExport(quality: ExportQuality) async throws -> PreparedExport {
         let directories = repository.directories
-        let sources = Array(
-            Dictionary(project.clips.map { ($0.source.id, $0.source) }, uniquingKeysWith: { a, _ in a }).values)
-        let words = try await transcriptStore.correctedCachedWords(for: sources, glossaryURL: directories.glossary)
+        // Слова, монтаж и настройки — из одной версии проекта: снимок до первого ожидания.
         let exported = project
+        let sources = Array(
+            Dictionary(exported.clips.map { ($0.source.id, $0.source) }, uniquingKeysWith: { a, _ in a }).values)
+        let words = try await transcriptStore.correctedCachedWords(for: sources, glossaryURL: directories.glossary)
         let plan = try await ShortsRenderer.plan(
             project: exported, words: words ?? [], faces: FaceTrackStore(cacheDir: directories.faceTracks),
-            quality: .high, voiceStore: VoiceEnhanceStore(cacheDir: directories.enhancedAudio),
+            quality: quality, voiceStore: VoiceEnhanceStore(cacheDir: directories.enhancedAudio),
             musicEQStore: MusicEQStore(cacheDir: directories.musicEQ))
         return PreparedExport(
             composition: plan.composition, audioMix: plan.audioMix,
