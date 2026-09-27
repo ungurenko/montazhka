@@ -1,0 +1,80 @@
+import Foundation
+
+/// Заметки агента о проекте: бриф, стратегия, решения, просьбы, что осталось.
+/// Пользователь их не видит. Файл `<base>/<projectId>.md` (UTF-8) лежит вне проекта,
+/// поэтому окно Монтажки и `undo` его не трогают.
+actor AgentNotesStore {
+    /// Длиннее агенту неудобно читать за раз — пусть сожмёт заметки через `setNotes`.
+    static let maxCharacters = 20_000
+
+    let baseDirectory: URL
+
+    init(baseDirectory: URL) {
+        self.baseDirectory = baseDirectory
+    }
+
+    func read(_ projectID: UUID) -> String? {
+        (try? existing(projectID)) ?? nil
+    }
+
+    /// Дописывает заметку под заголовком с датой: "\n## yyyy-MM-dd HH:mm\n" + текст.
+    func append(_ projectID: UUID, text: String, at date: Date) throws {
+        try write(projectID, (existing(projectID) ?? "") + "\n## \(Self.stamp(date))\n" + text)
+    }
+
+    /// Переписывает заметки целиком. Пустой текст (или одни пробелы) удаляет файл.
+    func replace(_ projectID: UUID, text: String) throws {
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            let url = fileURL(projectID)
+            if FileManager.default.fileExists(atPath: url.path) { try FileManager.default.removeItem(at: url) }
+            return
+        }
+        try write(projectID, text)
+    }
+
+    /// Заметки для копии проекта: строка `header`, под ней заметки источника. Если у получателя
+    /// уже есть заметки, они остаются выше. Нет заметок у источника — ничего не делает.
+    /// Лимит здесь не проверяется: копия проекта не должна ломаться из-за длины заметок,
+    /// а следующая запись попросит агента их сжать.
+    func copy(from source: UUID, to destination: UUID, header: String) throws {
+        guard let notes = try existing(source) else { return }
+        let block = header + "\n" + notes
+        try save(destination, try existing(destination).map { $0 + "\n" + block } ?? block)
+    }
+
+    /// Текст заметок; nil — файла нет. Нечитаемый файл — ошибка, а не пустые заметки,
+    /// чтобы запись поверх не стёрла его молча.
+    private func existing(_ projectID: UUID) throws -> String? {
+        let url = fileURL(projectID)
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        return try String(contentsOf: url, encoding: .utf8)
+    }
+
+    private func write(_ projectID: UUID, _ text: String) throws {
+        guard text.count <= Self.maxCharacters else {
+            throw AgentServiceError.invalidInput(
+                "Заметки проекта длиннее \(Self.maxCharacters) знаков (получилось бы \(text.count)). "
+                    + "Сожмите их: перепишите целиком операцией setNotes.")
+        }
+        try save(projectID, text)
+    }
+
+    private func save(_ projectID: UUID, _ text: String) throws {
+        try FileManager.default.createDirectory(at: baseDirectory, withIntermediateDirectories: true)
+        try Data(text.utf8).write(to: fileURL(projectID), options: .atomic)
+    }
+
+    private func fileURL(_ projectID: UUID) -> URL {
+        baseDirectory.appendingPathComponent("\(projectID.uuidString).md")
+    }
+
+    /// Время заголовка в календаре и часовом поясе пользователя, формат фиксирован.
+    private static func stamp(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.calendar = Calendar.current
+        formatter.timeZone = TimeZone.current
+        formatter.dateFormat = "yyyy-MM-dd HH:mm"
+        return formatter.string(from: date)
+    }
+}
