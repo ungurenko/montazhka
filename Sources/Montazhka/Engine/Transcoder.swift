@@ -293,6 +293,19 @@ enum Transcoder {
             progress: { progress(0.5 + $0 * 0.5) })
     }
 
+    /// Сессия экспорта помечает промежуточный файл как BT.709 всегда — и у SD без пометок,
+    /// и у композиции в BT.601 (замерено), — а пиксели считает в цвете видеокомпозиции.
+    /// Поэтому цвет композиции для неё закрепляется тем же BT.709: иначе пометки и пиксели
+    /// расходятся (macOS 26: серый 128 выходит 145, красный — с зелёным 34). Это настоящее
+    /// преобразование: кадры исходников сводятся в BT.709, HLG — в обычный SDR.
+    static func sessionComposition(_ videoComposition: AVVideoComposition) -> AVVideoComposition {
+        guard let fixed = videoComposition.mutableCopy() as? AVMutableVideoComposition else { return videoComposition }
+        fixed.colorPrimaries = AVVideoColorPrimaries_ITU_R_709_2
+        fixed.colorTransferFunction = AVVideoTransferFunction_ITU_R_709_2
+        fixed.colorYCbCrMatrix = AVVideoYCbCrMatrix_ITU_R_709_2
+        return fixed
+    }
+
     private static func exportWithSession(
         input: ExportInput,
         to url: URL,
@@ -307,7 +320,7 @@ enum Transcoder {
         }
 
         let box = ExportSessionBox(session)
-        session.videoComposition = videoComposition
+        session.videoComposition = sessionComposition(videoComposition)
         session.audioMix = input.audioMix
         session.outputURL = url
         session.outputFileType = .mp4
