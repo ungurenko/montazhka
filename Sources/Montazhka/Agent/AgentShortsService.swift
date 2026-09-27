@@ -70,7 +70,13 @@ extension AgentService {
                     timelineFingerprint: AgentWordCuts.fingerprint(draft.clips),
                     subtitlesSkippedReason: cached == nil ? ExportSpeech.noTranscriptReason : nil)
                 let report = try await FinalExport.run(job, to: output) { _ in }
-                let warnings = Self.draftWarnings(draft, plan: plan) + report.warnings
+                var warnings = Self.draftWarnings(draft, plan: plan) + report.warnings
+                // Заметки черновика ведут к проекту-источнику: общий бриф и решения живут там.
+                do {
+                    try await notes.replace(draft.id, text: Self.draftNote(draft, parent: project.id))
+                } catch {
+                    warnings.append("Заметка черновика не записана: \(error.localizedDescription)")
+                }
                 results.append(
                     .object([
                         "projectId": .string(draft.id.uuidString), "title": .string(spec.title),
@@ -137,6 +143,11 @@ extension AgentService {
             zooms: zooms, exportPath: output.path)
         try await store.save(draft)
         return draft
+    }
+
+    static func draftNote(_ draft: Project, parent: UUID) -> String {
+        "Черновик шортса «\(draft.shorts?.title ?? draft.name)» из проекта \(parent.uuidString). "
+            + "Общие заметки — в нём. Хук: \(draft.shorts?.hook?.text ?? "нет")"
     }
 
     private func suggestedLayout(_ clips: [Clip], faces: FaceTrackStore) async throws -> ShortsDraftLayout {

@@ -30,14 +30,24 @@ struct AgentEditOperation: Codable, Sendable {
     var on: Bool?
     var track: String?
     var volume: Double?
+    /// Анимация поверх видео: `addOverlay` (файл, якорь `words` или `at`, выравнивание, место в кадре),
+    /// `removeOverlay` (`overlay` — id из inspect).
+    var file: String?
+    var align: String?
+    var payoffAt: Double?
+    var position: String?
+    var scale: Double?
+    var overlay: String?
 
     var isUndo: Bool { op == "undo" }
     var isWordDelete: Bool { op == "deleteWords" }
     /// `note{text}` дописывает заметку проекта, `setNotes{text}` переписывает их целиком.
     var isNoteOp: Bool { op == "note" || op == "setNotes" }
-    /// Операции, которые меняют не ленту, а текст расшифровки или оформление.
-    var isProjectOp: Bool { op == "fixWords" || Self.draftOps.contains(op) }
+    var isOverlayOp: Bool { Self.overlayOps.contains(op) }
+    /// Операции, которые меняют не ленту, а текст расшифровки, оформление или анимации.
+    var isProjectOp: Bool { op == "fixWords" || Self.draftOps.contains(op) || isOverlayOp }
     static let draftOps: Set<String> = ["setHook", "setLayout", "setSubtitles", "zoom", "clearZooms", "setMusic"]
+    static let overlayOps: Set<String> = ["addOverlay", "removeOverlay", "clearOverlays"]
 
     init(op: String, steps: Int? = nil) {
         self.op = op
@@ -84,6 +94,8 @@ struct AgentEditOperation: Codable, Sendable {
 
 extension AgentService {
     func applyEdits(projectID: UUID, operations: [AgentEditOperation]) async -> AgentResponse {
+        // Копии анимаций, сделанные этой пачкой: если она не сохранится, копии не нужны.
+        var overlayCopies: [URL] = []
         do {
             guard !operations.isEmpty else { throw AgentServiceError.invalidInput("Список operations пуст.") }
             let lock = try AgentProjectLock(projectID: projectID, directory: store.projectsDir)
@@ -146,6 +158,12 @@ extension AgentService {
                     try await fixWords(operation, clips: clips)
                     continue
                 }
+                if operation.isOverlayOp {
+                    let added = try await applyOverlayOp(operation, to: &project, clips: clips, words: transcriptWords)
+                    overlayCopies += added.copy.map { [$0] } ?? []
+                    warnings += added.warnings
+                    continue
+                }
                 if operation.isProjectOp {
                     try applyDraftOp(operation, to: &project, clips: clips, words: transcriptWords)
                     continue
@@ -178,6 +196,7 @@ extension AgentService {
                 await revisions.drop(projectID: projectID, steps: 1)
                 throw error
             }
+            overlayCopies = []  // проект сохранён и ссылается на копии
             if transcriptWords == nil {
                 warnings.append("Расшифровки нет в кэше — резы посреди слов не проверялись.")
             }
@@ -193,7 +212,10 @@ extension AgentService {
                 }
             }
             return try await editResponse(project, warnings: warnings, notesSaved: notesSaved)
-        } catch { return failure("apply_edits", error) }
+        } catch {
+            for copy in overlayCopies { try? FileManager.default.removeItem(at: copy) }
+            return failure("apply_edits", error)
+        }
     }
 
     /// Запись заметки: дописать (`note`) или переписать целиком (`setNotes`).
@@ -253,10 +275,15 @@ extension AgentService {
             thresholdDB: thresholdDB)
     }
 
-    /// Оформление черновика шортса. Обычный проект такие правки не принимает.
+    /// Оформление черновика шортса. Обычный проект из них принимает только `setSubtitles` —
+    /// субтитры, впечатанные в кадр при экспорте.
     private func applyDraftOp(
         _ operation: AgentEditOperation, to project: inout Project, clips: [Clip], words: [TranscriptWord]?
     ) throws {
+        if operation.op == "setSubtitles", project.shorts == nil {
+            project.export.burnSubtitles = operation.on == true
+            return
+        }
         guard var shorts = project.shorts else {
             throw AgentServiceError.invalidInput(
                 "\(operation.op) работает только с черновиком шортса (его создаёт montazhka_make_shorts).")
@@ -379,10 +406,12 @@ extension AgentService {
             "clipCount": .number(Double(project.clips.count)),
             "clipsShown": .number(Double(shown)),
             "clips": clipsData(project, limit: shown),
-            "warnings": .array(warnings.map { .string($0) }),
+            // Анимации, чьё слово вырезано или повторяется, — после любой правки.
+            "warnings": .array((warnings + Self.overlayWarnings(project)).map { .string($0) }),
         ]
         if let notesSaved { data["notesSaved"] = .bool(notesSaved) }
         if project.shorts != nil { data["shorts"] = Self.shortsData(project) }
+        data.merge(await overlaysData(project)) { _, new in new }
         if shown < project.clips.count {
             data["more"] = .string("Показаны первые \(shown) клипов. Остальные — montazhka_inspect с offset=\(shown).")
         }

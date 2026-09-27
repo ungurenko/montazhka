@@ -72,6 +72,10 @@ struct AgentShortsTests {
         let subtitles = SubRipWriter.url(forVideo: URL(fileURLWithPath: output))
         #expect(first["subtitlesPath"] == .string(subtitles.path), "черновик получает .srt рядом с MP4")
         #expect(FileManager.default.fileExists(atPath: subtitles.path))
+        #expect(
+            await fixture.service.notes.read(draft.id)
+                == "Черновик шортса «Главное» из проекта \(fixture.project.id.uuidString). "
+                + "Общие заметки — в нём. Хук: Вот что важно")
     }
 
     @Test("without shorts the tool explains that the agent picks the moments")

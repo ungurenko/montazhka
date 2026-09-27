@@ -16,6 +16,8 @@ struct AgentFramesRequest: Sendable {
     var count: Int?
     var times: [Double] = []
     var aroundCuts = false
+    /// Склейки для `aroundCuts` вместо всех склеек проекта в `from…to` (их выбирает `montazhka_check`).
+    var cuts: [Double]?
 }
 
 /// Запрос `montazhka_transcript`: ровно одно из `target.projectID` (время ленты)
@@ -50,7 +52,10 @@ extension AgentService {
     func frames(_ request: AgentFramesRequest) async -> AgentResponse {
         do {
             var project: Project?
-            var shortsDraft: ShortsRenderer.Plan?
+            // Своя картинка ролика: вертикальный черновик шортса или анимации и вшитые субтитры
+            // обычного проекта; nil — кадры как есть.
+            var videoComposition: AVVideoComposition?
+            var overlayAt: ((Double) -> CGImage?)?
             if let id = request.target.projectID { project = try await store.load(id: id) }
             let asset: AVAsset
             let duration: Double
@@ -66,12 +71,23 @@ extension AgentService {
                 // Черновик шортса агент видит таким, каким он выйдет: вертикально,
                 // с лицом в кадре, наездами, хуком и субтитрами.
                 let plan = try await shortsPlan(project, quality: .compact)
-                shortsDraft = plan
                 asset = plan.composition
+                videoComposition = plan.frameComposition
+                overlayAt = { plan.overlay(at: $0) }
                 duration = project.totalDuration
             } else if let project {
                 guard !project.clips.isEmpty else { throw AgentServiceError.emptyProject }
-                asset = await CompositionBuilder.buildResult(clips: project.clips).composition
+                // Обычный проект — как в готовом MP4: анимации и (если включены) вшитые субтитры.
+                let words =
+                    project.export.burnSubtitles
+                    ? ((try? await cachedTimelineTranscript(for: project)) ?? nil)?.words : nil
+                let plan = try await MediaPipeline(
+                    voiceStore: VoiceEnhanceStore(cacheDir: store.enhancedAudioDir),
+                    musicEQStore: MusicEQStore(cacheDir: store.musicEQDir)
+                ).framePlan(for: project, words: words)
+                asset = plan.asset
+                videoComposition = plan.videoComposition
+                overlayAt = plan.overlayAt
                 duration = project.totalDuration
             } else {
                 throw AgentServiceError.invalidInput("Нужен projectId или filePath.")
@@ -85,7 +101,9 @@ extension AgentService {
                 guard let project else {
                     throw AgentServiceError.invalidInput("Для aroundCuts нужен projectId: склейки берутся из проекта.")
                 }
-                let cuts = TimelineEditOps.starts(of: project.clips).dropFirst().filter { $0 >= from && $0 <= to }
+                let cuts =
+                    request.cuts
+                    ?? TimelineEditOps.starts(of: project.clips).dropFirst().filter { $0 >= from && $0 <= to }
                 guard !cuts.isEmpty else {
                     throw AgentServiceError.invalidInput("В этом диапазоне нет склеек.")
                 }
@@ -110,8 +128,8 @@ extension AgentService {
             Self.removeOldInspections(in: directory)
             let url = directory.appendingPathComponent("frames-\(UUID().uuidString).jpg")
             let sheet = try await FrameSheetRenderer.render(
-                asset: asset, videoComposition: shortsDraft?.frameComposition, times: times, labels: labels,
-                to: url, overlayAt: shortsDraft.map { plan in { plan.overlay(at: $0) } })
+                asset: asset, videoComposition: videoComposition, times: times, labels: labels, to: url,
+                overlayAt: overlayAt)
             return .success(
                 command: "frames",
                 data: [
@@ -130,6 +148,7 @@ extension AgentService {
         do {
             let clips: [Clip]
             var settings = DetectionSettings(minPauseDuration: 0.4, paddingMS: 0)
+            var fileURL: URL?
             if let path = target.filePath {
                 let url = URL(fileURLWithPath: path).standardized
                 guard FileManager.default.fileExists(atPath: url.path) else {
@@ -137,6 +156,7 @@ extension AgentService {
                 }
                 let duration = try await AVURLAsset(url: url).load(.duration).seconds
                 clips = [Clip(sourcePath: url.path, start: 0, end: duration)]
+                fileURL = url
             } else if let id = target.projectID {
                 let project = try await store.load(id: id)
                 clips = project.clips
@@ -150,20 +170,32 @@ extension AgentService {
             let report = LoudnessProbe.measure(
                 clips: clips, peaksFor: { self.waveforms.peaks(for: $0) },
                 from: from ?? 0, to: to ?? total, buckets: buckets ?? 60, settings: settings)
-            return .success(
-                command: "audio",
-                data: [
-                    "from": .number(Self.rounded(report.from)), "to": .number(Self.rounded(report.to)),
-                    "bucketSeconds": .number(Self.rounded(report.bucketSeconds)),
-                    "levelsDB": .array(report.levelsDB.map { .number($0) }),
-                    "loudestDB": .number(report.loudestDB),
-                    "silenceThresholdDB": .number(settings.thresholdDB),
-                    "silences": .array(
-                        report.silences.map {
-                            .object(["from": .number(Self.rounded($0.from)), "to": .number(Self.rounded($0.to))])
-                        }),
-                ])
+            var data: [String: AgentJSONValue] = [
+                "from": .number(Self.rounded(report.from)), "to": .number(Self.rounded(report.to)),
+                "bucketSeconds": .number(Self.rounded(report.bucketSeconds)),
+                "levelsDB": .array(report.levelsDB.map { .number($0) }),
+                "loudestDB": .number(report.loudestDB),
+                "silenceThresholdDB": .number(settings.thresholdDB),
+                "silences": .array(
+                    report.silences.map {
+                        .object(["from": .number(Self.rounded($0.from)), "to": .number(Self.rounded($0.to))])
+                    }),
+            ]
+            // Громкость всего файла по стандарту площадок (LUFS) — у готового MP4.
+            if let fileURL { data["loudness"] = await Self.fileLoudness(fileURL) }
+            return .success(command: "audio", data: data)
         } catch { return failure("audio", error) }
+    }
+
+    /// Громкость файла целиком: LUFS, истинный пик и разброс; null — в файле нет звука.
+    static func fileLoudness(_ url: URL) async -> AgentJSONValue {
+        guard let measured = try? await LoudnessMeter.measure(url: url) else { return .null }
+        return .object([
+            "integratedLUFS": measured.integratedLUFS.map { .number(rounded($0)) } ?? .null,
+            "truePeakDBTP": .number(rounded(measured.truePeakDBTP)),
+            "loudnessRangeLU": measured.loudnessRangeLU.map { .number(rounded($0)) } ?? .null,
+            "targetLUFS": .number(LoudnessTarget().integrated),
+        ])
     }
 
     // MARK: - Расшифровка
@@ -240,7 +272,7 @@ extension AgentService {
 
     /// Путь файла для расшифровки. Один и тот же и для чтения, и для фоновой задачи:
     /// кэш расшифровки ищется по пути.
-    private static func transcriptFilePath(_ target: AgentMediaTarget) -> String {
+    static func transcriptFilePath(_ target: AgentMediaTarget) -> String {
         URL(fileURLWithPath: target.filePath ?? "").standardized.path
     }
 

@@ -23,6 +23,7 @@ struct AgentContractTests {
                 "montazhka_frames",
                 "montazhka_audio",
                 "montazhka_apply_edits",
+                "montazhka_check",
             ])
         #expect(AgentToolCatalog.estimatedTokenCount <= 3_000)
         let editVideo = try #require(tools.first { $0.name == "montazhka_edit_video" })
@@ -57,6 +58,88 @@ struct AgentContractTests {
         }
         #expect(AgentDocumentation.skill.contains("notes"))
         #expect(AgentDocumentation.skill.contains("retakes"))
+    }
+
+    @Test("check is read-only; overlays and export options are in the schemas; guide explains them")
+    func checkOverlaysAndExportOptionsContract() throws {
+        let tools = AgentToolCatalog.definitions
+        let check = try #require(tools.first { $0.name == "montazhka_check" })
+        #expect(check.isReadOnly && !check.isDestructive)
+        #expect(check.inputSchema["required"] == .array([.string("projectId")]))
+        let edits = try #require(tools.first { $0.name == "montazhka_apply_edits" })
+        let encodedEdits = String(decoding: try JSONEncoder().encode(edits.inputSchema), as: UTF8.self)
+        for op in ["addOverlay", "removeOverlay", "clearOverlays", "payoffAt"] {
+            #expect(encodedEdits.contains("\"\(op)\""), "в apply_edits нет \(op)")
+        }
+        let export = try #require(tools.first { $0.name == "montazhka_export" })
+        guard case .object(let exportProperties)? = export.inputSchema["properties"] else {
+            Issue.record("у export нет properties")
+            return
+        }
+        #expect(exportProperties["normalizeLoudness"] != nil && exportProperties["burnSubtitles"] != nil)
+
+        let guide = AgentDocumentation.guide
+        for phrase in [
+            "## Критик перед сдачей", "## Анимации поверх видео", "montazhka://critic",
+            "montazhka_check projectId filePath",
+            "−14 LUFS", "normalizeLoudness=false", "burnSubtitles=true", "--format mov", "payoffAt", "frameSize",
+        ] {
+            #expect(guide.contains(phrase), "в гайде нет «\(phrase)»")
+        }
+        #expect(AgentDocumentation.skill.contains("montazhka://critic"))
+    }
+
+    @Test("the critic prompt is served verbatim as a resource and by the CLI")
+    func criticPrompt() async throws {
+        let expected = """
+            Ты — строгий редактор видеомонтажа. Твоя задача — найти проблемы в готовом ролике, а не хвалить его.
+            Похвала запрещена. Молчание о проблеме — провал задания.
+            Вход: файл {{filePath}}, проект {{projectId}}. Бриф пользователя: {{brief}}. Заметки монтажа: {{notes}}.
+            Инструменты Монтажки — только для чтения: montazhka_check (склейки готового файла), montazhka_frames и
+            montazhka_audio с filePath, montazhka_transcript (projectId или filePath), montazhka_inspect. Ничего не
+            правь и не экспортируй.
+            Порядок: 1) montazhka_check и разбор каждой проблемы из problems; 2) montazhka_transcript готового файла
+            целиком — повторяй вызов с nextFrom, пока он не станет null: оборванные мысли, повторы и дубли,
+            оговорки, слова-паразиты, логика и порядок; 3) montazhka_frames: начало (цепляет ли первые 3 секунды),
+            конец (завершена ли мысль), подозрительные места; 4) сверка с брифом: сделано ли то, что просили, и не
+            вырезано ли важное.
+            Каждая проблема: время (мм:сс.д), тип technical или taste, серьёзность critical/major/minor, улика
+            (цитата слов, цифра из check, описание кадра), предлагаемая правка. Без улики проблему не пиши.
+            Ответ строго в формате:
+            VERDICT: ship | fix | rework — одна фраза почему.
+            ISSUES: нумерованный список, от самой серьёзной.
+            TOP-5 FIXES: пять самых ценных правок, конкретно (что, где, чем).
+            technical — объективный дефект: обрезанное слово, щелчок, провал звука, чёрный или застывший кадр,
+            скачок громкости. taste — темп, выбор дубля, порядок, хук, музыка. Не выдумывай проблем без улик.
+            """
+        #expect(AgentDocumentation.critic == expected)
+        #expect(AgentDocumentation.resourceText(uri: "montazhka://critic") == expected)
+        #expect(AgentDocumentation.resourceText(uri: "montazhka://guide") == AgentDocumentation.guide)
+        #expect(AgentDocumentation.resources.map(\.uri) == ["montazhka://guide", "montazhka://critic"])
+        let cli = await AgentCommand.execute(["critic-prompt"])
+        #expect(cli.ok)
+        #expect(cli.data?["text"] == .string(expected))
+    }
+
+    @Test("MCP export arguments carry loudness and burned subtitles to the worker")
+    func exportOptionsFromMCP() throws {
+        let id = UUID()
+        let chosen = AgentCommand.mcpExportRequest(
+            projectID: id, arguments: ["final": true, "normalizeLoudness": false, "burnSubtitles": true])
+        guard case .export(let project, _, let quality, let final, _, _, let loudness, let burn) = chosen else {
+            Issue.record("не экспорт: \(chosen)")
+            return
+        }
+        #expect(project == id && quality == "compact" && final)
+        #expect(loudness == false && burn == true)
+        guard
+            case .export(_, _, _, _, _, _, let unset, let unsetBurn) = AgentCommand.mcpExportRequest(
+                projectID: id, arguments: [:])
+        else {
+            Issue.record("не экспорт")
+            return
+        }
+        #expect(unset == nil && unsetBurn == nil, "без полей — как в настройках проекта")
     }
 
     @Test("Agent runs survive a new store instance")

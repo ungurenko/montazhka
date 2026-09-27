@@ -131,6 +131,7 @@ enum AgentToolCatalog {
                 "projectId": string, "outputPath": string,
                 "quality": enumStrings(["compact", "medium", "high", "maximum"]),
                 "final": boolean, "confirmFinal": boolean, "overwrite": boolean,
+                "normalizeLoudness": boolean, "burnSubtitles": boolean,
             ], required: ["projectId"], destructive: true),
         tool(
             "montazhka_transcript",
@@ -150,7 +151,8 @@ enum AgentToolCatalog {
                 "count": integer, "times": array(number), "aroundCuts": boolean,
             ], readOnly: true),
         tool(
-            "montazhka_audio", "Громкость по отрезкам (dBFS) и тишины в диапазоне ленты проекта или filePath.",
+            "montazhka_audio",
+            "Громкость по отрезкам (dBFS) и тишины в диапазоне ленты проекта или filePath (+ LUFS файла).",
             properties: [
                 "projectId": string, "filePath": string, "from": number, "to": number, "buckets": integer,
             ], readOnly: true),
@@ -160,10 +162,19 @@ enum AgentToolCatalog {
                 + "рез в тишине между словами. Время ленты: delete{ranges[{from,to}]}, split{at}, move{clip,to}, "
                 + "trim{clip,edge,seconds}, insert{sourcePath,start,end,at}. fixWords{words,timeline,text,remember} — "
                 + "исправить распознанный текст. Черновик шортса: setHook{text}, setLayout{layout}, setSubtitles{on}, "
-                + "zoom{words,timeline}, clearZooms, setMusic{track,volume}. Заметки проекта: note{text} дописать, "
-                + "setNotes{text} переписать. undo{steps} — отдельным вызовом.",
+                + "zoom{words,timeline}, clearZooms, setMusic{track,volume}. Обычный проект: setSubtitles{on} — вшить; "
+                + "анимации addOverlay{file,words+timeline|at,align,payoffAt,position,scale}, removeOverlay{overlay}, "
+                + "clearOverlays. Заметки: note{text} дописать, setNotes{text} переписать. undo{steps} — отдельно.",
             properties: ["projectId": string, "operations": array(operation)],
             required: ["projectId", "operations"], destructive: true),
+        tool(
+            "montazhka_check",
+            "Проверка готового MP4 у каждой склейки: обрезанные слова, щелчки, провалы, чёрные кадры, скачки "
+                + "громкости с уликами; LUFS, сетка кадров. filePath не нужен у черновика шортса. До 40 склеек, дальше nextFrom.",
+            properties: [
+                "projectId": string, "filePath": string, "from": number, "to": number, "window": number,
+                "words": boolean, "confirmModelDownload": boolean,
+            ], required: ["projectId"], readOnly: true),
     ]
 
     static var estimatedTokenCount: Int {
@@ -213,7 +224,8 @@ enum AgentToolCatalog {
         "properties": .object([
             "op": enumStrings([
                 "deleteWords", "delete", "split", "move", "trim", "insert", "fixWords", "setHook", "setLayout",
-                "setSubtitles", "zoom", "clearZooms", "setMusic", "note", "setNotes", "undo",
+                "setSubtitles", "zoom", "clearZooms", "setMusic", "note", "setNotes", "undo", "addOverlay",
+                "removeOverlay", "clearOverlays",
             ]),
             "ranges": array(
                 .object([
@@ -229,6 +241,9 @@ enum AgentToolCatalog {
                 ])),
             "timeline": string, "text": string, "remember": boolean,
             "layout": enumStrings(["face", "split", "fit"]), "on": boolean, "track": string, "volume": number,
+            "file": string, "align": enumStrings(["payoff", "start"]), "payoffAt": number,
+            "position": enumStrings(["full", "center", "topLeft", "topRight", "bottomLeft", "bottomRight"]),
+            "scale": number, "overlay": string,
         ]),
         "required": .array([.string("op")]),
     ])

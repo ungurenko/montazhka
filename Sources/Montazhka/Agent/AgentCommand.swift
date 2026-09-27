@@ -92,7 +92,21 @@ enum AgentCommand {
                 projectID: id, outputPath: value("--output", in: args),
                 quality: value("--quality", in: args) ?? (args.contains("--final") ? "high" : "compact"),
                 final: args.contains("--final"), confirmFinal: args.contains("--confirm-final"),
-                overwrite: args.contains("--overwrite"))
+                overwrite: args.contains("--overwrite"),
+                normalizeLoudness: args.contains("--no-normalize-loudness") ? false : nil,
+                burnSubtitles: args.contains("--burn-subtitles") ? true : nil)
+        case "check":
+            guard let id = value("--project", in: args).flatMap(UUID.init(uuidString:)) else {
+                return .failure(command: "check", code: "INVALID_PROJECT_ID", message: "Укажите --project.")
+            }
+            return await service.check(
+                AgentCheckRequest(
+                    projectID: id, filePath: value("--file", in: args), from: number("--from", in: args),
+                    to: number("--to", in: args), window: number("--window", in: args),
+                    words: !args.contains("--no-words"),
+                    confirmModelDownload: args.contains("--confirm-model-download")))
+        case "critic-prompt":
+            return .success(command: "critic_prompt", data: ["text": .string(AgentDocumentation.critic)])
         case "make-shorts":
             guard let path = value("--request", in: args) else {
                 return .failure(
@@ -198,9 +212,25 @@ enum AgentCommand {
         }
     }
 
+    /// Запрос фонового экспорта из аргументов MCP. `normalizeLoudness`/`burnSubtitles`
+    /// не переданы — nil: как в настройках экспорта проекта.
+    static func mcpExportRequest(projectID: UUID, arguments: [String: AgentJSONValue]) -> AgentWorkerRequest {
+        func flag(_ key: String) -> Bool? {
+            if case .bool(let value)? = arguments[key] { value } else { nil }
+        }
+        func text(_ key: String) -> String? {
+            if case .string(let value)? = arguments[key] { value } else { nil }
+        }
+        return .export(
+            projectID: projectID, outputPath: text("outputPath"), quality: text("quality") ?? "compact",
+            final: flag("final") ?? false, confirmFinal: flag("confirmFinal") ?? false,
+            overwrite: flag("overwrite") ?? false, normalizeLoudness: flag("normalizeLoudness"),
+            burnSubtitles: flag("burnSubtitles"))
+    }
+
     private static let usage =
         "Команды: doctor, projects, edit-video, edit-project, job, inspect, transcript, frames, audio, "
-        + "apply-edits, export, make-shorts, mcp serve."
+        + "apply-edits, export, check, critic-prompt, make-shorts, mcp serve."
 }
 
 private struct AgentMCPServer {
@@ -251,17 +281,16 @@ private struct AgentMCPServer {
             return CallTool.Result(content: content, isError: !response.ok)
         }
         await server.withMethodHandler(ListResources.self) { _ in
-            ListResources.Result(resources: [
-                Resource(
-                    name: "Справочник Монтажки", uri: "montazhka://guide",
-                    description: "Контракт v1 и полный цикл монтажа", mimeType: "text/markdown")
-            ])
+            ListResources.Result(
+                resources: AgentDocumentation.resources.map {
+                    Resource(name: $0.name, uri: $0.uri, description: $0.description, mimeType: "text/markdown")
+                })
         }
         await server.withMethodHandler(ReadResource.self) { request in
             do {
                 let text: String
-                if request.uri == "montazhka://guide" {
-                    text = AgentDocumentation.guide
+                if let documentation = AgentDocumentation.resourceText(uri: request.uri) {
+                    text = documentation
                 } else {
                     text = try await service.resource(uri: request.uri)
                 }
@@ -306,14 +335,10 @@ private struct AgentMCPServer {
                 return .failure(command: "export", code: "INVALID_PROJECT_ID", message: "Нужен projectId.")
             }
             do {
+                let values = try JSONDecoder().decode(
+                    [String: AgentJSONValue].self, from: JSONEncoder().encode(arguments))
                 return try await AgentBackgroundJob.submit(
-                    .export(
-                        projectID: id, outputPath: arguments["outputPath"]?.stringValue,
-                        quality: arguments["quality"]?.stringValue ?? "compact",
-                        final: arguments["final"]?.boolValue ?? false,
-                        confirmFinal: arguments["confirmFinal"]?.boolValue ?? false,
-                        overwrite: arguments["overwrite"]?.boolValue ?? false,
-                        normalizeLoudness: nil, burnSubtitles: nil))
+                    AgentCommand.mcpExportRequest(projectID: id, arguments: values))
             } catch {
                 return .failure(command: "export", code: "JOB_START_FAILED", message: error.localizedDescription)
             }
@@ -354,6 +379,16 @@ private struct AgentMCPServer {
             return await service.audio(
                 target: Self.target(arguments), from: Self.double(arguments["from"]),
                 to: Self.double(arguments["to"]), buckets: arguments["buckets"]?.intValue)
+        case "montazhka_check":
+            guard let id = arguments["projectId"]?.stringValue.flatMap(UUID.init(uuidString:)) else {
+                return .failure(command: "check", code: "INVALID_PROJECT_ID", message: "Нужен projectId.")
+            }
+            return await service.check(
+                AgentCheckRequest(
+                    projectID: id, filePath: arguments["filePath"]?.stringValue, from: Self.double(arguments["from"]),
+                    to: Self.double(arguments["to"]), window: Self.double(arguments["window"]),
+                    words: arguments["words"]?.boolValue ?? true,
+                    confirmModelDownload: arguments["confirmModelDownload"]?.boolValue ?? false))
         case "montazhka_apply_edits":
             guard let id = arguments["projectId"]?.stringValue.flatMap(UUID.init(uuidString:)) else {
                 return .failure(command: "apply_edits", code: "INVALID_PROJECT_ID", message: "Нужен projectId.")
@@ -436,6 +471,44 @@ private struct AgentMCPServer {
 }
 
 enum AgentDocumentation {
+    /// Постоянные текстовые ресурсы MCP; остальные адреса — материалы фоновых задач.
+    static let resources: [(uri: String, name: String, description: String)] = [
+        ("montazhka://guide", "Справочник Монтажки", "Контракт v1 и полный цикл монтажа"),
+        ("montazhka://critic", "Критик Монтажки", "Промпт строгого критика готового ролика для отдельного субагента"),
+    ]
+
+    static func resourceText(uri: String) -> String? {
+        switch uri {
+        case "montazhka://guide": guide
+        case "montazhka://critic": critic
+        default: nil
+        }
+    }
+
+    /// Промпт критика. Подставьте {{filePath}}, {{projectId}}, {{brief}} (бриф пользователя дословно)
+    /// и {{notes}} (заметки проекта) и отдайте субагенту со свежим контекстом.
+    static let critic = """
+        Ты — строгий редактор видеомонтажа. Твоя задача — найти проблемы в готовом ролике, а не хвалить его.
+        Похвала запрещена. Молчание о проблеме — провал задания.
+        Вход: файл {{filePath}}, проект {{projectId}}. Бриф пользователя: {{brief}}. Заметки монтажа: {{notes}}.
+        Инструменты Монтажки — только для чтения: montazhka_check (склейки готового файла), montazhka_frames и
+        montazhka_audio с filePath, montazhka_transcript (projectId или filePath), montazhka_inspect. Ничего не
+        правь и не экспортируй.
+        Порядок: 1) montazhka_check и разбор каждой проблемы из problems; 2) montazhka_transcript готового файла
+        целиком — повторяй вызов с nextFrom, пока он не станет null: оборванные мысли, повторы и дубли,
+        оговорки, слова-паразиты, логика и порядок; 3) montazhka_frames: начало (цепляет ли первые 3 секунды),
+        конец (завершена ли мысль), подозрительные места; 4) сверка с брифом: сделано ли то, что просили, и не
+        вырезано ли важное.
+        Каждая проблема: время (мм:сс.д), тип technical или taste, серьёзность critical/major/minor, улика
+        (цитата слов, цифра из check, описание кадра), предлагаемая правка. Без улики проблему не пиши.
+        Ответ строго в формате:
+        VERDICT: ship | fix | rework — одна фраза почему.
+        ISSUES: нумерованный список, от самой серьёзной.
+        TOP-5 FIXES: пять самых ценных правок, конкретно (что, где, чем).
+        technical — объективный дефект: обрезанное слово, щелчок, провал звука, чёрный или застывший кадр,
+        скачок громкости. taste — темп, выбор дубля, порядок, хук, музыка. Не выдумывай проблем без улик.
+        """
+
     static let guide = """
         # Монтажка Agent API v1
         Начните с `montazhka_doctor`, затем выберите проект или передайте `sourcePaths`.
@@ -471,15 +544,44 @@ enum AgentDocumentation {
            отдельным вызовом.
         5. После правок: `montazhka_frames aroundCuts=true` (скачки картинки) и `montazhka_audio` у склеек.
         6. Если пользователь поручил сделать готовый файл, это согласие на финал:
-           `montazhka_export final=true confirmFinal=true quality=high`.
+           `montazhka_export final=true confirmFinal=true quality=high`. Экспорт сам приводит звук к −14 LUFS
+           (`normalizeLoudness=false` — выключить); смотрите `loudness` в итоге. Рядом с MP4 всегда ложится `.srt`;
+           вшить субтитры — `burnSubtitles=true` или `setSubtitles{on}`.
         7. Проверьте результат: `durationCheck.matches` в итоге задачи, затем `montazhka_frames`
-           и `montazhka_audio` с `filePath` готового MP4.
+           и `montazhka_audio` с `filePath` готового MP4 (`audio` с `filePath` даёт и `loudness`).
+        8. `montazhka_check projectId filePath` — каждая склейка готового файла: `problems` с уликами (обрезанное
+           слово, щелчок, провал звука, чёрный кадр, скачок громкости), `loudness` и сетка кадров у склеек.
+           Больше 40 склеек — повторите с `from=nextFrom`; `wordsCheck.status=pending` — дождитесь `jobId` и
+           вызовите снова. Сервер без `montazhka_check` (старая версия) —
+           `montazhka_frames projectId filePath aroundCuts=true`. Затем — критик (раздел ниже).
         Говорящая голова: режьте по словам (оговорки, повторы, дубли — оставляйте последний удачный).
         Запись экрана: ищите по кадрам участки, где картинка не меняется, и сокращайте их.
 
         Термины, которые распознавание пишет по-русски («клод код», «чат ГПТ»), исправляет словарь.
         Остальные ошибки чините `{"op":"fixWords","words":[{"from":12,"to":13}],"timeline":"…","text":"Cursor",
         "remember":true}`: номера слов не сдвигаются, `remember` запоминает замену навсегда.
+
+        ## Критик перед сдачей
+        После финального экспорта и своего `montazhka_check` запустите критика отдельным субагентом со свежим
+        контекстом (в Claude Code — субагент; в Codex — отдельная сессия `codex exec`, если субагент не видит MCP).
+        Промпт — ресурс `montazhka://critic`: подставьте путь MP4, projectId, бриф пользователя дословно и заметки.
+        Технические проблемы чините сами, перевыгружайте (`overwrite=true`) и зовите нового критика; вердикт
+        `ship` или 3 круга — конец. Вкусовые замечания не чините молча — покажите пользователю списком вместе
+        с путём к файлу.
+
+        ## Анимации поверх видео
+        Только обычный проект. 1) Найдите в `montazhka_transcript` слово, на которое приходится кульминация
+        (payoff); `frameSize` — в `montazhka_inspect`. 2) Композиция HyperFrames этого размера с прозрачным
+        корнем, 2–6 с; запомните секунду кульминации. 3) `npx hyperframes render --format mov --fps 30` (60, если
+        видео 60 к/с) — webm не поддерживается. 4) `{"op":"addOverlay","file":"….mov","words":[{"from":N,"to":N}],
+        "timeline":"…","align":"payoff","payoffAt":1.2}` — секунда 1.2 анимации совпадёт с началом слова #N;
+        `align:"start"` — анимация начнётся со слова; `at` (секунды ленты) вместо words. 5) Проверьте
+        `montazhka_frames` в её окне. `position`: `full` — вписана в кадр целиком (`scale` не нужен); `center`
+        и углы `topLeft`, `topRight`, `bottomLeft`, `bottomRight` — уменьшена в `scale` (0.2…1), отступ 4% от
+        краёв. Анимация держится за слово: правки ленты двигают её вместе с ним, вырезанное слово скрывает её
+        (предупреждение в `warnings`). `removeOverlay{overlay:id}`, `clearOverlays`; окна на ленте и статус —
+        `overlays` в inspect. Несколько анимаций — параллельные субагенты, у каждого своя папка и файл;
+        добавляйте их после всех рендеров.
 
         ## Дубли
         `montazhka_transcript retakes=true` находит соседние похожие фразы: `restart` — оборванное начало,
@@ -542,6 +644,7 @@ enum AgentDocumentation {
         по номерам операцией `deleteWords`, сомнительные места проверяй кадрами (`montazhka_frames`)
         и громкостью (`montazhka_audio`), правь через `montazhka_apply_edits`. Читай `warnings` в ответах.
         После правок посмотри кадры у склеек. Если пользователь поручил готовый файл — делай финальный
-        экспорт сам и проверь готовый MP4 теми же инструментами. Исходники не перезаписывай.
+        экспорт сам и проверь готовый MP4 теми же инструментами и `montazhka_check`. Исходники не перезаписывай.
+        Перед сдачей запусти критика отдельным субагентом — промпт в ресурсе `montazhka://critic`.
         """
 }

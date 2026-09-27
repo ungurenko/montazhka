@@ -260,25 +260,26 @@ actor AgentService {
             let missing = Set(project.clips.map(\.sourcePath)).filter { !FileManager.default.fileExists(atPath: $0) }
             let start = min(max(0, offset), project.clips.count)
             let end = min(project.clips.count, start + min(500, max(1, limit)))
-            return .success(
-                command: "inspect",
-                data: [
-                    "projectId": .string(project.id.uuidString), "duration": .number(project.totalDuration),
-                    "clipCount": .number(Double(project.clips.count)),
-                    "missingFiles": .array(missing.sorted().map { .string($0) }),
-                    "revision": .number(Double(await revisions.revision(of: project.id))),
-                    "clips": clipsData(project, offset: start, limit: end - start),
-                    "offset": .number(Double(start)),
-                    "nextOffset": end < project.clips.count ? .number(Double(end)) : .null,
-                    "cutChecks": .array(
-                        cuts.prefix(50).map {
-                            .object([
-                                "time": .number($0), "from": .number(max(0, $0 - 1.5)), "to": .number($0 + 1.5),
-                            ])
-                        }),
-                    "shorts": Self.shortsData(project),
-                    "notes": await notes.read(project.id).map { .string($0) } ?? .null,
-                ])
+            var data: [String: AgentJSONValue] = [
+                "projectId": .string(project.id.uuidString), "duration": .number(project.totalDuration),
+                "clipCount": .number(Double(project.clips.count)),
+                "missingFiles": .array(missing.sorted().map { .string($0) }),
+                "revision": .number(Double(await revisions.revision(of: project.id))),
+                "clips": clipsData(project, offset: start, limit: end - start),
+                "offset": .number(Double(start)),
+                "nextOffset": end < project.clips.count ? .number(Double(end)) : .null,
+                "cutChecks": .array(
+                    cuts.prefix(50).map {
+                        .object([
+                            "time": .number($0), "from": .number(max(0, $0 - 1.5)), "to": .number($0 + 1.5),
+                        ])
+                    }),
+                "shorts": Self.shortsData(project),
+                "notes": await notes.read(project.id).map { .string($0) } ?? .null,
+            ]
+            // Обычный проект: размер кадра (для анимаций HyperFrames) и анимации на ленте.
+            data.merge(await overlaysData(project)) { _, new in new }
+            return .success(command: "inspect", data: data)
         } catch { return failure("inspect", error) }
     }
 
