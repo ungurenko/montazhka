@@ -15,6 +15,8 @@ enum ShortsRenderer {
         /// Для кадров и предпросмотра: без Core Animation, надписи — `overlay`.
         let frameComposition: AVMutableVideoComposition
         let cues: [ShortsSubtitleCue]
+        /// Фразы для .srt рядом с MP4: впечатанные, а без них — те же фразы шортса после хука.
+        let subtitleFileCues: [ShortsSubtitleCue]
         let hook: ShortsHook?
         let appearance: ShortsSubtitleAppearance
         let highlight: Bool
@@ -28,12 +30,16 @@ enum ShortsRenderer {
         }
 
         /// Запись MP4 черновика: размер кадра задаёт композиция, битрейт — качество.
+        /// `subtitlesSkippedReason` — расшифровки не было, .srt не пишется.
         func exportJob(
-            quality: ExportQuality, normalizeLoudness: Bool, timelineFingerprint: String?
+            quality: ExportQuality, normalizeLoudness: Bool, timelineFingerprint: String?,
+            subtitlesSkippedReason: String? = nil
         ) -> FinalExportJob {
             FinalExportJob(
                 input: ExportInput(composition: composition, audioMix: audioMix, videoComposition: exportComposition),
-                quality: quality, sizing: .composition, subtitleCues: nil, subtitlesSkippedReason: nil,
+                quality: quality, sizing: .composition,
+                subtitleCues: subtitlesSkippedReason == nil ? subtitleFileCues : nil,
+                subtitlesSkippedReason: subtitlesSkippedReason,
                 normalizeLoudness: normalizeLoudness, timelineFingerprint: timelineFingerprint)
         }
     }
@@ -83,9 +89,8 @@ enum ShortsRenderer {
             canvas: canvas)
 
         let hook = shorts.hook.flatMap { $0.text.trimmingCharacters(in: .whitespaces).isEmpty ? nil : $0 }
-        let cues =
-            shorts.subtitles == nil
-            ? [] : ShortsSubtitleCueBuilder.make(mapped: mapped, notBefore: hook?.duration ?? 0)
+        let spoken = ShortsSubtitleCueBuilder.make(mapped: mapped, notBefore: hook?.duration ?? 0)
+        let cues = shorts.subtitles == nil ? [] : spoken
         let appearance = shorts.subtitles?.appearance ?? ShortsSubtitleSettings.saved().appearance
         let highlight = shorts.subtitles?.highlight ?? false
         guard let exportBase = frame.mutableCopy() as? AVMutableVideoComposition else {
@@ -96,8 +101,8 @@ enum ShortsRenderer {
             highlight: highlight, duration: project.totalDuration, hook: hook)
         return Plan(
             composition: rendered.composition, audioMix: rendered.audioMix, exportComposition: export,
-            frameComposition: frame, cues: cues, hook: hook, appearance: appearance, highlight: highlight,
-            warnings: rendered.warnings)
+            frameComposition: frame, cues: cues, subtitleFileCues: spoken, hook: hook, appearance: appearance,
+            highlight: highlight, warnings: rendered.warnings)
     }
 
     /// Лица по кускам черновика с запасом в секунду: сглаживанию нужен разгон.

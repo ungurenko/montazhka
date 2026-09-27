@@ -22,9 +22,12 @@ enum ActivityStagePlan {
         ActivityStage(id: "shorts.verify", title: "Проверка"),
     ]
 
+    /// Громкость пропускается, когда её выравнивание выключено.
     static let export: [ActivityStage] = [
         ActivityStage(id: "export.prepare", title: "Подготовка"),
+        ActivityStage(id: "export.loudness", title: "Громкость"),
         ActivityStage(id: "export.write", title: "Запись файла"),
+        ActivityStage(id: "export.verify", title: "Проверка громкости"),
     ]
 
     static let shortsExport: [ActivityStage] = [

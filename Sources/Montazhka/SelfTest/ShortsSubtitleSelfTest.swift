@@ -37,13 +37,12 @@ enum ShortsSubtitleSelfTest {
             .appendingPathComponent("montazhka-selftest-timed-\(runID).mp4")
         defer {
             try? FileManager.default.removeItem(at: source)
-            try? FileManager.default.removeItem(at: output)
-            try? FileManager.default.removeItem(at: croppedOutput)
-            try? FileManager.default.removeItem(at: trimmedOutput)
-            try? FileManager.default.removeItem(at: blackFitOutput)
-            try? FileManager.default.removeItem(at: whiteFitOutput)
-            try? FileManager.default.removeItem(at: draftOutput)
-            try? FileManager.default.removeItem(at: timedOutput)
+            for video in [
+                output, croppedOutput, trimmedOutput, blackFitOutput, whiteFitOutput, draftOutput, timedOutput,
+            ] {
+                try? FileManager.default.removeItem(at: video)
+                try? FileManager.default.removeItem(at: SubRipWriter.url(forVideo: video))
+            }
         }
 
         do {
@@ -287,7 +286,15 @@ enum ShortsSubtitleSelfTest {
         let timedJob = timedPlan.exportJob(
             quality: .compact, normalizeLoudness: timed.export.normalizeLoudness,
             timelineFingerprint: AgentWordCuts.fingerprint(timed.clips))
-        _ = try await FinalExport.run(timedJob, to: timedOutput) { _ in }
+        let timedReport = try await FinalExport.run(timedJob, to: timedOutput) { _ in }
+        let timedPeak = timedReport.loudness?.truePeakDBTP ?? 0
+        check(
+            timedReport.normalized && timedPeak <= -1,
+            "субтитры и два прохода записи не поднимают пик выше −1 dBTP "
+                + "(\(String(format: "%.2f", timedPeak)) dBTP)")
+        check(
+            timedReport.subtitlesURL.map { FileManager.default.fileExists(atPath: $0.path) } == true,
+            "рядом с черновиком лежит .srt")
         let timedAsset = AVURLAsset(url: timedOutput)
         let duringPhrase = brightPixels(in: try image(at: 0.8, in: timedAsset), rows: 0.6...1)
         let betweenPhrases = brightPixels(in: try image(at: 2.2, in: timedAsset), rows: 0.6...1)

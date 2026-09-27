@@ -29,6 +29,11 @@ enum ShortsExporter {
             dimensions: dimensions,
             videoBitrate: quality.videoBitrate(forDimensions: dimensions),
             audioBitrate: quality.audioBitrate)
+        // .srt — те же фразы, что впечатывает окно шортсов, на шкале готового ролика.
+        var cues: [ShortsSubtitleCue]?
+        if case .on(let words, _, _) = subtitleMode {
+            cues = ShortsSubtitleCueBuilder.make(words: words, timeMap: timeMap)
+        }
         let job = FinalExportJob(
             input: ExportInput(
                 composition: built.composition,
@@ -36,9 +41,9 @@ enum ShortsExporter {
                 videoComposition: plan.videoComposition),
             quality: quality,
             sizing: .settings(settings),
-            subtitleCues: nil,
-            subtitlesSkippedReason: nil,
-            normalizeLoudness: ExportPreferences().normalizeLoudness,
+            subtitleCues: cues,
+            subtitlesSkippedReason: cues == nil ? "Субтитры выключены — файл субтитров не создан" : nil,
+            normalizeLoudness: true,
             timelineFingerprint: nil)
         _ = try await FinalExport.run(job, to: url, progress: progress)
     }

@@ -2,7 +2,14 @@
 import Foundation
 
 extension AgentService {
+    /// Что проверить после финального файла.
+    static let finalExportNextSteps = [
+        "montazhka_check projectId filePath — проверьте склейки готового файла",
+        "Критик: прочитайте ресурс montazhka://critic и запустите проверку отдельным субагентом",
+    ]
+
     /// `normalizeLoudness`, `burnSubtitles`: nil — как в `project.export`.
+    /// `burnSubtitles` пока не впечатывает субтитры в кадр: .srt ложится рядом всегда.
     func export(
         projectID: UUID, outputPath: String?, quality: String,
         final: Bool, confirmFinal: Bool, overwrite: Bool,
@@ -37,24 +44,13 @@ extension AgentService {
             let progress: @Sendable (Double) -> Void = { progress in
                 Task { try? await self.runs.update(id: run.id) { $0.progress = max($0.progress, progress) } }
             }
-            let normalize = normalizeLoudness ?? project.export.normalizeLoudness
-            let fingerprint = AgentWordCuts.fingerprint(project.clips)
-            let job: FinalExportJob
-            if project.shorts != nil {
-                let plan = try await shortsPlan(project, quality: exportQuality)
-                job = plan.exportJob(
-                    quality: exportQuality, normalizeLoudness: normalize, timelineFingerprint: fingerprint)
-            } else {
-                let voice = VoiceEnhanceStore(cacheDir: store.enhancedAudioDir)
-                let music = MusicEQStore(cacheDir: store.musicEQDir)
-                let rendered = await MediaPipeline(voiceStore: voice, musicEQStore: music).render(
-                    MediaRenderRequest(project: project, mode: .export, readyEnhancedAudio: [:]))
-                job = FinalExportJob(
-                    input: ExportInput(composition: rendered.composition, audioMix: rendered.audioMix),
-                    quality: exportQuality, sizing: .quality(exportQuality), subtitleCues: nil,
-                    subtitlesSkippedReason: nil, normalizeLoudness: normalize, timelineFingerprint: fingerprint)
+            let stage: @Sendable (FinalExportStage) -> Void = { stage in
+                Task { try? await self.runs.update(id: run.id) { $0.stage = stage.caption } }
             }
-            _ = try await FinalExport.run(job, to: destination, progress: progress)
+            let normalize = normalizeLoudness ?? project.export.normalizeLoudness
+            let (job, renderWarnings) = try await exportJob(
+                project, quality: exportQuality, normalize: normalize, runID: run.id)
+            let report = try await FinalExport.run(job, to: destination, progress: progress, stage: stage)
             let actual = try await AVURLAsset(url: destination).load(.duration).seconds
             let matches = abs(actual - project.totalDuration) <= 0.25
             try await runs.update(id: run.id) {
@@ -62,29 +58,99 @@ extension AgentService {
                 $0.summary =
                     "\(destination.path) · длительность \(String(format: "%.2f", actual)) из "
                     + "\(String(format: "%.2f", project.totalDuration)) с\(matches ? "" : " — НЕ СОВПАДАЕТ")"
+                    + " · \(Self.loudnessSummary(report))"
                 $0.artifacts[final ? "final" : "draft"] = destination.path
+                if let subtitles = report.subtitlesURL { $0.artifacts["subtitles"] = subtitles.path }
             }
-            return .success(
-                command: "export",
-                data: [
-                    "jobId": .string(run.id.uuidString), "status": .string("completed"),
-                    "path": .string(destination.path), "final": .bool(final),
-                    "durationCheck": .object([
-                        "fileSeconds": .number(Self.rounded(actual)),
-                        "projectSeconds": .number(Self.rounded(project.totalDuration)),
-                        "matches": .bool(matches),
-                    ]),
-                ])
+            var data: [String: AgentJSONValue] = [
+                "jobId": .string(run.id.uuidString), "status": .string("completed"),
+                "path": .string(destination.path), "final": .bool(final),
+                "durationCheck": .object([
+                    "fileSeconds": .number(Self.rounded(actual)),
+                    "projectSeconds": .number(Self.rounded(project.totalDuration)),
+                    "matches": .bool(matches),
+                ]),
+                "loudness": Self.loudnessPayload(report),
+                "subtitlesPath": report.subtitlesURL.map { .string($0.path) } ?? .null,
+                "warnings": .array((renderWarnings + report.warnings).map { .string($0) }),
+            ]
+            if report.subtitlesURL == nil, let reason = report.subtitlesSkippedReason {
+                data["subtitlesSkippedReason"] = .string(reason)
+            }
+            if final { data["nextSteps"] = .array(Self.finalExportNextSteps.map { .string($0) }) }
+            return .success(command: "export", data: data)
         } catch {
             if let activeRunID { await failRun(id: activeRunID, error: error) }
             return failure("export", error)
         }
     }
 
+    /// Задание записи и предупреждения сборки. Шортс — по плану черновика;
+    /// обычный проект — слова ленты для .srt. Расшифровка здесь (в фоновом
+    /// процессе) запускается, если модель уже скачана.
+    private func exportJob(
+        _ project: Project, quality: ExportQuality, normalize: Bool, runID: UUID
+    ) async throws -> (FinalExportJob, [String]) {
+        let fingerprint = AgentWordCuts.fingerprint(project.clips)
+        if project.shorts != nil {
+            let words = (try? await cachedTranscriptWords(for: project)) ?? nil
+            let plan = try await shortsPlan(project, words: words, quality: quality)
+            let job = plan.exportJob(
+                quality: quality, normalizeLoudness: normalize, timelineFingerprint: fingerprint,
+                subtitlesSkippedReason: words == nil ? ExportSpeech.noTranscriptReason : nil)
+            return (job, plan.warnings.map(\.message))
+        }
+        let speech = try await ExportSpeech.load(
+            clips: project.clips, store: makeTranscriptStore(), glossaryURL: store.glossaryURL,
+            transcribing: { fraction in
+                let stage = fraction.map { "Распознаю речь: \(Int($0 * 100)) %" } ?? "Распознаю речь"
+                Task { try? await self.runs.update(id: runID) { $0.stage = stage } }
+            })
+        let voice = VoiceEnhanceStore(cacheDir: store.enhancedAudioDir)
+        let music = MusicEQStore(cacheDir: store.musicEQDir)
+        let rendered = await MediaPipeline(voiceStore: voice, musicEQStore: music).render(
+            MediaRenderRequest(project: project, mode: .export, readyEnhancedAudio: [:]))
+        let job = FinalExportJob(
+            input: ExportInput(composition: rendered.composition, audioMix: rendered.audioMix),
+            quality: quality, sizing: .quality(quality), subtitleCues: speech.horizontalCues,
+            subtitlesSkippedReason: speech.skippedReason, normalizeLoudness: normalize,
+            timelineFingerprint: fingerprint)
+        return (job, rendered.warnings.map(\.message))
+    }
+
+    /// Громкость готового файла для ответа агенту; неизвестное — null.
+    static func loudnessPayload(_ report: FinalExportReport) -> AgentJSONValue {
+        let loudness = report.loudness
+        return .object([
+            "integratedLUFS": loudness?.integratedLUFS.map { .number(rounded($0)) } ?? .null,
+            "truePeakDBTP": loudness.map { .number(rounded($0.truePeakDBTP)) } ?? .null,
+            "loudnessRangeLU": loudness?.loudnessRangeLU.map { .number(rounded($0)) } ?? .null,
+            "normalized": .bool(report.normalized),
+            "gainDB": .number(rounded(report.gainDB)),
+            "targetLUFS": .number(LoudnessTarget().integrated),
+            "targetMet": report.targetMet.map { .bool($0) } ?? .null,
+        ])
+    }
+
+    private static func loudnessSummary(_ report: FinalExportReport) -> String {
+        guard let loudness = report.loudness, let integrated = loudness.integratedLUFS else {
+            return "громкость не замерена"
+        }
+        let verdict = report.targetMet.map { $0 ? " — по стандарту" : " — НЕ по стандарту" } ?? ""
+        return "громкость \(String(format: "%.1f", integrated)) LUFS, пик "
+            + "\(String(format: "%.1f", loudness.truePeakDBTP)) dBTP\(verdict)"
+    }
+
     /// План черновика шортса со словами из кэша расшифровки (если она есть).
     func shortsPlan(_ project: Project, quality: ExportQuality) async throws -> ShortsRenderer.Plan {
-        let words = (try? await cachedTranscriptWords(for: project)) ?? nil
-        return try await ShortsRenderer.plan(
+        try await shortsPlan(project, words: (try? await cachedTranscriptWords(for: project)) ?? nil, quality: quality)
+    }
+
+    /// План черновика шортса по уже прочитанным словам; nil — расшифровки нет.
+    func shortsPlan(
+        _ project: Project, words: [TranscriptWord]?, quality: ExportQuality
+    ) async throws -> ShortsRenderer.Plan {
+        try await ShortsRenderer.plan(
             project: project, words: words ?? [], faces: FaceTrackStore(cacheDir: store.faceTracksDir),
             quality: quality, voiceStore: VoiceEnhanceStore(cacheDir: store.enhancedAudioDir),
             musicEQStore: MusicEQStore(cacheDir: store.musicEQDir))

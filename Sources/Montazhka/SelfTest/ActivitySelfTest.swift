@@ -196,7 +196,7 @@ enum ActivitySelfTest {
         let progress = makeAnnouncer()
         let sample = Activity(
             kind: .export, title: "Сохранение видео", stages: ActivityStagePlan.export,
-            stageIndex: 1, caption: "Записываю файл", progress: .fraction(0.42),
+            stageIndex: 2, caption: "Записываю файл", progress: .fraction(0.42),
             isCancellable: true, startedAt: Date(), stageStartedAt: Date(),
             estimatedRemaining: nil, typicalStageDuration: nil)
         progress.render(primary: sample)

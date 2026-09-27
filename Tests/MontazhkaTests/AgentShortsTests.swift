@@ -69,6 +69,9 @@ struct AgentShortsTests {
             try await AVURLAsset(url: URL(fileURLWithPath: output)).loadTracks(withMediaType: .video).first)
         let size = try await track.load(.naturalSize)
         #expect(size.height > size.width)
+        let subtitles = SubRipWriter.url(forVideo: URL(fileURLWithPath: output))
+        #expect(first["subtitlesPath"] == .string(subtitles.path), "черновик получает .srt рядом с MP4")
+        #expect(FileManager.default.fileExists(atPath: subtitles.path))
     }
 
     @Test("without shorts the tool explains that the agent picks the moments")

@@ -118,6 +118,8 @@ final class EditorController: ExportPreparing {
     /// Проект перечитан после правки агента — окно говорит, что лента поменялась не сама.
     private(set) var externalChangeNotice: ExternalChangeNotice?
     private(set) var renderWarnings: [CompositionWarning] = []
+    /// Фразы горизонтальных субтитров текущей ленты из готовой расшифровки; пусто — её нет.
+    private(set) var previewSubtitleCues: [ShortsSubtitleCue] = []
     private(set) var previewState: PreviewState = .empty
     private(set) var clipImportState: ClipImportState = .idle
     var smartEditCandidates: [SmartEditCandidate] = []
@@ -327,15 +329,20 @@ final class EditorController: ExportPreparing {
 
     // MARK: - Сборка предпросмотра
 
-    private func makeComposition() async -> MediaRenderResult {
-        await renderComposition(mode: .preview)
+    /// Субтитры предпросмотра берутся только из готовой расшифровки:
+    /// ради предпросмотра речь не распознаётся.
+    private func makeComposition() async -> (result: MediaRenderResult, cues: [ShortsSubtitleCue]) {
+        let snapshot = project
+        let speech = await cachedSpeech(for: snapshot.clips)
+        let result = await renderComposition(snapshot, mode: .preview)
+        return (result, speech.horizontalCues ?? [])
     }
 
-    func renderComposition(mode: MediaRenderMode) async -> MediaRenderResult {
-        let processesMusic = project.music.enabled && project.music.eqEnabled
+    func renderComposition(_ snapshot: Project, mode: MediaRenderMode) async -> MediaRenderResult {
+        let processesMusic = snapshot.music.enabled && snapshot.music.eqEnabled
         if processesMusic { musicProcessing = true }
         let request = MediaRenderRequest(
-            project: project,
+            project: snapshot,
             mode: mode,
             readyEnhancedAudio: enhancedAudioURLs)
         let result = await mediaPipeline.render(request)
@@ -352,15 +359,17 @@ final class EditorController: ExportPreparing {
         guard !project.clips.isEmpty else {
             player.replaceCurrentItem(with: nil)
             renderWarnings = []
+            previewSubtitleCues = []
             previewState = .empty
             return
         }
         previewState = .preparing
         previewTask = Task { [weak self] in
             guard let self else { return }
-            let result = await self.makeComposition()
+            let (result, cues) = await self.makeComposition()
             guard !Task.isCancelled, self.rebuildGeneration.isCurrent(generation) else { return }
             self.renderWarnings = result.warnings
+            self.previewSubtitleCues = cues
             let composition = result.composition
             let audioMix = result.audioMix
             let duration = composition.duration.seconds

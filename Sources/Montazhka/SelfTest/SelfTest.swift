@@ -70,6 +70,7 @@ enum SelfTest {
         failures += await ShortsSubtitleSelfTest.run()
         failures += await AgentToolsSelfTest.run()
         await testAudioPipeline()
+        await testLoudnessNormalization()
         await testVoiceEnhance()
         await testBackgroundMusic()
         await testMusicEQ()
@@ -235,6 +236,37 @@ enum SelfTest {
             check(moov < mdat, "оглавление MP4 в начале файла (стриминг)")
         } else {
             check(false, "оглавление MP4 в начале файла (куски: \(atoms.joined(separator: ", ")))")
+        }
+    }
+
+    // MARK: - Громкость по стандарту площадок
+
+    /// Тихий тон −30 dBFS проходит завершающий шаг экспорта: −14 LUFS, пик не выше −1 dBTP.
+    private static func testLoudnessNormalization() async {
+        print("Громкость готового файла (тон −30 dBFS, 8 сек):")
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("montazhka-selftest-loudness-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        do {
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            let source = root.appendingPathComponent("tone.mov")
+            try await TestVideoFactory.make(segments: [(duration: 8, amplitude: pow(10, -30.0 / 20))], to: source)
+            let built = await CompositionBuilder.build(clips: [Clip(sourceURL: source, start: 0, end: 8)])
+            let job = FinalExportJob(
+                input: ExportInput(composition: built.composition, audioMix: built.audioMix), quality: .compact,
+                sizing: .quality(.compact), subtitleCues: nil, subtitlesSkippedReason: nil,
+                normalizeLoudness: true, timelineFingerprint: nil)
+            let report = try await FinalExport.run(job, to: root.appendingPathComponent("out.mp4")) { _ in }
+            let integrated = report.loudness?.integratedLUFS ?? -99
+            let peak = report.loudness?.truePeakDBTP ?? 0
+            check(
+                report.normalized && approx(integrated, -14, 0.5),
+                "громкость выровнена до −14 LUFS (получено \(String(format: "%.2f", integrated)), "
+                    + "усиление \(String(format: "%+.1f", report.gainDB)) дБ)")
+            check(peak <= -1, "пик не выше −1 dBTP (получено \(String(format: "%.2f", peak)))")
+            check(report.targetMet == true, "файл отмечен как выровненный по стандарту")
+        } catch {
+            check(false, "выравнивание громкости (\(error.localizedDescription))")
         }
     }
 

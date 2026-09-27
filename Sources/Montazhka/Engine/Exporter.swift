@@ -119,9 +119,40 @@ struct PreparedExport {
     var sizing: PreparedSizing = .composition
 }
 
+/// Что происходит до записи файла — подпись в окне.
+enum ExportPreparationStep: Equatable, Sendable {
+    /// Сборка дорожек и обработка звука.
+    case assembling
+    /// Расшифровка речи для субтитров; доля nil — неизвестна.
+    case transcribing(Double?)
+
+    var activitySnapshot: ActivitySnapshot {
+        switch self {
+        case .assembling:
+            ActivitySnapshot(stageIndex: 0, caption: "Собираю дорожки и обрабатываю звук", progress: .indeterminate)
+        case .transcribing(let fraction):
+            ActivitySnapshot(
+                stageIndex: 0, caption: "Распознаю речь",
+                progress: fraction.map { .fraction($0) } ?? .indeterminate)
+        }
+    }
+}
+
+extension FinalExportStage {
+    /// Шаг в `ActivityStagePlan.export`.
+    var activityStageIndex: Int {
+        switch self {
+        case .measuring, .mastering: 1
+        case .writing: 2
+        case .verifying: 3
+        }
+    }
+}
+
 @MainActor
 protocol ExportPreparing {
-    func prepareExport() async throws -> PreparedExport
+    /// `step` зовётся с любого потока.
+    func prepareExport(step: @escaping @Sendable (ExportPreparationStep) -> Void) async throws -> PreparedExport
 }
 
 @MainActor
@@ -130,7 +161,8 @@ protocol VideoExporting {
         _ prepared: PreparedExport,
         quality: ExportQuality,
         to url: URL,
-        progress: @escaping @Sendable (Double) -> Void
+        progress: @escaping @Sendable (Double) -> Void,
+        stage: @escaping @Sendable (FinalExportStage) -> Void
     ) async throws -> FinalExportReport
 }
 
@@ -140,7 +172,8 @@ struct TranscodingVideoExporter: VideoExporting {
         _ prepared: PreparedExport,
         quality: ExportQuality,
         to url: URL,
-        progress: @escaping @Sendable (Double) -> Void
+        progress: @escaping @Sendable (Double) -> Void,
+        stage: @escaping @Sendable (FinalExportStage) -> Void = { _ in }
     ) async throws -> FinalExportReport {
         let job = FinalExportJob(
             input: ExportInput(
@@ -152,7 +185,7 @@ struct TranscodingVideoExporter: VideoExporting {
             subtitlesSkippedReason: prepared.subtitlesSkippedReason,
             normalizeLoudness: prepared.normalizeLoudness,
             timelineFingerprint: prepared.timelineFingerprint)
-        return try await FinalExport.run(job, to: url, progress: progress)
+        return try await FinalExport.run(job, to: url, progress: progress, stage: stage)
     }
 }
 
@@ -168,8 +201,11 @@ final class ExportModel {
     }
 
     private(set) var state: State = .idle
+    /// Общая доля записи 0…1 по всем проходам: громкость, запись, проверка.
     private(set) var progress: Double = 0
     private(set) var audioWarning: String?
+    /// Какой проход записи идёт сейчас.
+    private(set) var exportStage: FinalExportStage = .writing
 
     @ObservationIgnored private let videoExporter: any VideoExporting
     @ObservationIgnored private let activity: ActivityCenter
@@ -191,19 +227,9 @@ final class ExportModel {
         if let progress { self.progress = progress }
         switch new {
         case .preparing:
-            activity.apply(
-                .export,
-                snapshot: ActivitySnapshot(
-                    stageIndex: 0,
-                    caption: "Собираю дорожки и обрабатываю звук",
-                    progress: .indeterminate))
+            activity.apply(.export, snapshot: ExportPreparationStep.assembling.activitySnapshot)
         case .exporting:
-            activity.apply(
-                .export,
-                snapshot: ActivitySnapshot(
-                    stageIndex: 1,
-                    caption: "Записываю файл",
-                    progress: .fraction(self.progress)))
+            applyExportSnapshot()
         case .done:
             activity.finish(.export, outcome: .success("Видео сохранено"))
         case .failed(let message):
@@ -211,6 +237,15 @@ final class ExportModel {
         case .idle:
             activity.finish(.export, outcome: .cancelled)
         }
+    }
+
+    private func applyExportSnapshot() {
+        activity.apply(
+            .export,
+            snapshot: ActivitySnapshot(
+                stageIndex: exportStage.activityStageIndex,
+                caption: exportStage.caption,
+                progress: .fraction(progress)))
     }
 
     func chooseDestination(projectName: String) -> URL? {
@@ -239,34 +274,44 @@ final class ExportModel {
             isCancellable: true,
             cancel: { [weak self] in self?.cancel() })
         setState(.preparing)
+        let onStep: @Sendable (ExportPreparationStep) -> Void = { [weak self] step in
+            Task { @MainActor in
+                guard let self, self.operationGeneration.isCurrent(generation), self.state == .preparing else { return }
+                self.activity.apply(.export, snapshot: step.activitySnapshot)
+            }
+        }
+        let onStage: @Sendable (FinalExportStage) -> Void = { [weak self] stage in
+            Task { @MainActor in
+                guard let self, self.operationGeneration.isCurrent(generation), self.state == .exporting else { return }
+                self.exportStage = stage
+                self.applyExportSnapshot()
+            }
+        }
         let onProgress: @Sendable (Double) -> Void = { [weak self] value in
             Task { @MainActor in
                 guard let self,
                     self.operationGeneration.isCurrent(generation),
                     self.state == .exporting
                 else { return }
-                self.progress = value
-                self.activity.apply(
-                    .export,
-                    snapshot: ActivitySnapshot(
-                        stageIndex: 1,
-                        caption: "Записываю файл",
-                        progress: .fraction(value)))
+                self.progress = max(self.progress, value)
+                self.applyExportSnapshot()
             }
         }
         operationTask = Task { [weak self] in
             guard let self else { return }
             do {
-                let prepared = try await preparer.prepareExport()
+                let prepared = try await preparer.prepareExport(step: onStep)
                 try Task.checkCancellation()
                 guard self.operationGeneration.isCurrent(generation) else { return }
                 self.audioWarning = prepared.warning
+                self.exportStage = prepared.normalizeLoudness ? .measuring : .writing
                 self.setState(.exporting)
                 let report = try await self.videoExporter.export(
                     prepared,
                     quality: quality,
                     to: url,
-                    progress: onProgress
+                    progress: onProgress,
+                    stage: onStage
                 )
                 try Task.checkCancellation()
                 guard self.operationGeneration.isCurrent(generation) else { return }

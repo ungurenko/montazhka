@@ -39,7 +39,8 @@ extension AgentService {
                     "Лента проекта изменилась после чтения расшифровки, номера слов устарели. "
                         + "Вызовите montazhka_transcript заново и возьмите новый timeline.")
             }
-            let words = try await cachedTranscriptWords(for: project) ?? []
+            let cached = try await cachedTranscriptWords(for: project)
+            let words = cached ?? []
             let map = TranscriptTimelineMapper.make(clips: project.clips, transcripts: words).words
             var peaks: [String: [Float]] = [:]
             var durations: [UUID: Double] = [:]
@@ -66,15 +67,19 @@ extension AgentService {
                 let output = URL(fileURLWithPath: draft.shorts?.exportPath ?? "")
                 let job = plan.exportJob(
                     quality: quality, normalizeLoudness: draft.export.normalizeLoudness,
-                    timelineFingerprint: AgentWordCuts.fingerprint(draft.clips))
-                _ = try await FinalExport.run(job, to: output) { _ in }
+                    timelineFingerprint: AgentWordCuts.fingerprint(draft.clips),
+                    subtitlesSkippedReason: cached == nil ? ExportSpeech.noTranscriptReason : nil)
+                let report = try await FinalExport.run(job, to: output) { _ in }
+                let warnings = Self.draftWarnings(draft, plan: plan) + report.warnings
                 results.append(
                     .object([
                         "projectId": .string(draft.id.uuidString), "title": .string(spec.title),
                         "output": .string(output.path), "duration": .number(Self.rounded(draft.totalDuration)),
                         "layout": .string(draft.shorts?.resolvedLayout.rawValue ?? ""),
                         "music": draft.music.enabled ? .string(draft.music.trackID ?? "") : .null,
-                        "warnings": .array(Self.draftWarnings(draft, plan: plan).map { .string($0) }),
+                        "subtitlesPath": report.subtitlesURL.map { .string($0.path) } ?? .null,
+                        "loudness": Self.loudnessPayload(report),
+                        "warnings": .array(warnings.map { .string($0) }),
                     ]))
             }
             try await runs.update(id: run.id) {

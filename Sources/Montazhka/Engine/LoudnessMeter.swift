@@ -100,8 +100,9 @@ struct LoudnessMeter {
 
     /// Замер первой звуковой дорожки файла (MP4/MOV/CAF) на её собственной частоте.
     /// Каналов не больше двух: моно остаётся моно, иначе Core Audio сводит в стерео.
+    /// `progress` — доля прочитанной дорожки 0…1.
     @concurrent
-    static func measure(url: URL) async throws -> LoudnessMeasurement {
+    static func measure(url: URL, progress: (@Sendable (Double) -> Void)? = nil) async throws -> LoudnessMeasurement {
         let asset = AVURLAsset(url: url)
         guard let track = try await asset.loadTracks(withMediaType: .audio).first else {
             throw LoudnessError.noAudioTrack
@@ -111,6 +112,7 @@ struct LoudnessMeter {
         let sourceRate = stream?.mSampleRate ?? 0
         let sampleRate = sourceRate > 0 ? sourceRate : 48000
         let channels = min(2, max(1, Int(stream?.mChannelsPerFrame ?? 2)))
+        let length = progress == nil ? 0 : (try? await track.load(.timeRange).end.seconds) ?? 0
         guard let format = PCMChunk.format(sampleRate: sampleRate, channels: channels) else {
             throw LoudnessError.readerFailed
         }
@@ -128,6 +130,10 @@ struct LoudnessMeter {
         while let sample = output.copyNextSampleBuffer() {
             try Task.checkCancellation()
             meter.process(try PCMChunk.channels(of: sample, format: format))
+            if let progress, length > 0 {
+                let end = CMSampleBufferGetPresentationTimeStamp(sample) + CMSampleBufferGetDuration(sample)
+                progress(min(1, end.seconds / length))
+            }
         }
         if reader.status == .failed { throw LoudnessError.readerFailed }
         return meter.result()

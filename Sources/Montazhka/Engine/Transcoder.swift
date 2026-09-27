@@ -94,11 +94,13 @@ enum Transcoder {
     }
 
     /// Полное перекодирование: читает склейку (с миксом музыки), кодирует H.264 + AAC.
+    /// `metadata` пишется в сам MP4 (например, отпечаток ленты).
     /// `progress` зовётся с фоновой очереди значениями 0…1.
     static func export(
         input: ExportInput,
         settings: Settings,
         to url: URL,
+        metadata: [AVMetadataItem] = [],
         progress: @escaping @Sendable (Double) -> Void
     ) async throws {
         var output = AtomicMediaOutput(destinationURL: url)
@@ -107,6 +109,7 @@ enum Transcoder {
             input: input,
             settings: settings,
             to: output.temporaryURL,
+            metadata: metadata,
             progress: progress)
         try Task.checkCancellation()
         try output.commit()
@@ -118,6 +121,7 @@ enum Transcoder {
         input: ExportInput,
         settings: Settings,
         to url: URL,
+        metadata: [AVMetadataItem],
         progress: @escaping @Sendable (Double) -> Void
     ) async throws {
         let composition = input.composition
@@ -168,6 +172,7 @@ enum Transcoder {
 
         let writer = try AVAssetWriter(outputURL: url, fileType: .mp4)
         writer.shouldOptimizeForNetworkUse = true  // moov в начале — стриминг в мессенджерах
+        writer.metadata = metadata
 
         let videoInput = AVAssetWriterInput(
             mediaType: .video,
@@ -258,14 +263,16 @@ enum Transcoder {
     /// Core Animation tool поддерживается AVFoundation в offline-экспорте через
     /// AVAssetExportSession. После запекания субтитров вторым проходом возвращаем
     /// привычные битрейт и размеры, которыми пользуется основной Transcoder.
+    /// `metadata` получает готовый файл второго прохода.
     static func exportWithOfflineComposition(
         input: ExportInput,
         settings: Settings,
         to url: URL,
+        metadata: [AVMetadataItem] = [],
         progress: @escaping @Sendable (Double) -> Void
     ) async throws {
         guard input.videoComposition?.animationTool != nil else {
-            try await export(input: input, settings: settings, to: url, progress: progress)
+            try await export(input: input, settings: settings, to: url, metadata: metadata, progress: progress)
             return
         }
 
@@ -282,6 +289,7 @@ enum Transcoder {
             input: ExportInput(composition: AVURLAsset(url: intermediate), audioMix: nil),
             settings: settings,
             to: url,
+            metadata: metadata,
             progress: { progress(0.5 + $0 * 0.5) })
     }
 
@@ -394,6 +402,7 @@ extension Transcoder {
     /// композиция, битрейт — качество.
     static func export(
         composed input: ExportInput, quality: ExportQuality, to url: URL,
+        metadata: [AVMetadataItem] = [],
         progress: @escaping @Sendable (Double) -> Void
     ) async throws {
         let dimensions = input.videoComposition?.renderSize ?? .zero
@@ -402,6 +411,6 @@ extension Transcoder {
             settings: Settings(
                 dimensions: dimensions, videoBitrate: quality.videoBitrate(forDimensions: dimensions),
                 audioBitrate: quality.audioBitrate),
-            to: url, progress: progress)
+            to: url, metadata: metadata, progress: progress)
     }
 }

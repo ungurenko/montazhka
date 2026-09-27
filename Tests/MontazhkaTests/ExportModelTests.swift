@@ -132,14 +132,14 @@ private struct ImmediateExportPreparer: ExportPreparing {
         self.warning = warning
     }
 
-    func prepareExport() async throws -> PreparedExport {
+    func prepareExport(step: @escaping @Sendable (ExportPreparationStep) -> Void) async throws -> PreparedExport {
         PreparedExport(composition: AVMutableComposition(), audioMix: nil, warning: warning)
     }
 }
 
 @MainActor
 private struct SlowExportPreparer: ExportPreparing {
-    func prepareExport() async throws -> PreparedExport {
+    func prepareExport(step: @escaping @Sendable (ExportPreparationStep) -> Void) async throws -> PreparedExport {
         try await Task.sleep(for: .seconds(30))
         return PreparedExport(composition: AVMutableComposition(), audioMix: nil, warning: nil)
     }
@@ -156,7 +156,8 @@ private final class ControlledVideoExporter: VideoExporting {
         _ prepared: PreparedExport,
         quality: ExportQuality,
         to url: URL,
-        progress: @escaping @Sendable (Double) -> Void
+        progress: @escaping @Sendable (Double) -> Void,
+        stage: @escaping @Sendable (FinalExportStage) -> Void
     ) async throws -> FinalExportReport {
         progress(0.5)
         try await withCheckedThrowingContinuation { continuation = $0 }
@@ -179,7 +180,8 @@ private struct FailingVideoExporter: VideoExporting {
         _ prepared: PreparedExport,
         quality: ExportQuality,
         to url: URL,
-        progress: @escaping @Sendable (Double) -> Void
+        progress: @escaping @Sendable (Double) -> Void,
+        stage: @escaping @Sendable (FinalExportStage) -> Void
     ) async throws -> FinalExportReport {
         throw Failure()
     }

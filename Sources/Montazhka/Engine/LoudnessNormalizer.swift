@@ -174,6 +174,14 @@ private struct MovingAverage {
     }
 }
 
+/// Проход мастеринга — для честной полосы прогресса экспорта.
+enum MasteringPass: Sendable, Equatable {
+    /// Замер сведённого звука склейки.
+    case measure
+    /// Запись усиленного и ограниченного звука (иногда дважды — с поправкой).
+    case render
+}
+
 /// Мастеринг звука перед экспортом: замер → усиление к цели → ограничитель пиков.
 enum LoudnessNormalizer {
     /// Звук склейки всегда сводится в стерео 48 кГц.
@@ -205,10 +213,12 @@ enum LoudnessNormalizer {
     /// усиленный и ограниченный звук в CAF Int16 48 кГц стерео в `scratchDirectory`.
     /// Чтение — Float32 non-interleaved 48 кГц стерео. Длина результата ровно `duration`.
     /// nil — звука нет или он тихий до нуля. Файл результата удаляет вызывающий.
+    /// `progress` — доля 0…1 внутри текущего прохода.
     @concurrent
     static func master(
         asset: AVAsset, audioMix: AVAudioMix?, duration: Double, target: LoudnessTarget, scratchDirectory: URL,
-        isCancelled: @escaping @Sendable () -> Bool
+        isCancelled: @escaping @Sendable () -> Bool,
+        progress: (@Sendable (MasteringPass, Double) -> Void)? = nil
     ) async throws -> MasteredAudio? {
         let tracks = try await asset.loadTracks(withMediaType: .audio)
         let frames = Int((duration * sampleRate).rounded())
@@ -217,17 +227,21 @@ enum LoudnessNormalizer {
         let cancelled = { isCancelled() || Task.isCancelled }
 
         var meter = LoudnessMeter(sampleRate: sampleRate, channels: channelCount)
-        try source.read(isCancelled: cancelled) { meter.process($0) }
+        try source.read(isCancelled: cancelled, progress: { progress?(.measure, $0) }) { meter.process($0) }
         let before = meter.result()
         guard let gain = gainDB(for: before, target: target) else { return nil }
 
         try FileManager.default.createDirectory(at: scratchDirectory, withIntermediateDirectories: true)
-        var pass = try await render(source, gainDB: gain, target: target, in: scratchDirectory, isCancelled: cancelled)
+        let renderProgress: (Double) -> Void = { progress?(.render, $0) }
+        var pass = try await render(
+            source, gainDB: gain, target: target, in: scratchDirectory, isCancelled: cancelled,
+            progress: renderProgress)
         if let corrected = correctiveGainDB(gainDB: gain, after: pass.after, target: target) {
             let first = pass.url
             defer { try? FileManager.default.removeItem(at: first) }
             pass = try await render(
-                source, gainDB: corrected, target: target, in: scratchDirectory, isCancelled: cancelled)
+                source, gainDB: corrected, target: target, in: scratchDirectory, isCancelled: cancelled,
+                progress: renderProgress)
         }
         return MasteredAudio(
             audioURL: pass.url, before: before, after: pass.after, gainDB: pass.gainDB, limited: pass.limited)
@@ -265,12 +279,14 @@ enum LoudnessNormalizer {
     }
 
     private static func render(
-        _ source: MixSource, gainDB: Double, target: LoudnessTarget, in directory: URL, isCancelled: () -> Bool
+        _ source: MixSource, gainDB: Double, target: LoudnessTarget, in directory: URL, isCancelled: () -> Bool,
+        progress: (Double) -> Void
     ) async throws -> RenderedPass {
         let url = directory.appendingPathComponent("mastered-\(UUID().uuidString).caf")
         do {
             let maxReductionDB = try write(
-                source, gainDB: gainDB, ceilingDB: target.limiterCeiling, to: url, isCancelled: isCancelled)
+                source, gainDB: gainDB, ceilingDB: target.limiterCeiling, to: url, isCancelled: isCancelled,
+                progress: progress)
             let after = try await LoudnessMeter.measure(url: url)
             return RenderedPass(
                 url: url, gainDB: gainDB, after: after, limited: maxReductionDB > limitedThresholdDB)
@@ -283,7 +299,8 @@ enum LoudnessNormalizer {
     /// Усиливает, ограничивает и пишет CAF Int16; возвращает самое сильное прижатие пика, дБ.
     /// Задержка ограничителя срезается, хвост дописывается из `flush`.
     private static func write(
-        _ source: MixSource, gainDB: Double, ceilingDB: Double, to url: URL, isCancelled: () -> Bool
+        _ source: MixSource, gainDB: Double, ceilingDB: Double, to url: URL, isCancelled: () -> Bool,
+        progress: (Double) -> Void
     ) throws -> Double {
         let file = try AVAudioFile(
             forWriting: url,
@@ -298,7 +315,7 @@ enum LoudnessNormalizer {
         let factor = Float(pow(10, gainDB / 20))
         var limiter = TruePeakLimiter(sampleRate: sampleRate, channels: channelCount, ceilingDB: ceilingDB)
         var latencyLeft = limiter.latencyFrames
-        try source.read(isCancelled: isCancelled) { chunk in
+        try source.read(isCancelled: isCancelled, progress: progress) { chunk in
             for index in chunk.indices { chunk[index] = vDSP.multiply(factor, chunk[index]) }
             limiter.process(&chunk)
             try append(chunk, skipping: &latencyLeft, to: file)
@@ -335,7 +352,10 @@ private struct MixSource {
     let audioMix: AVAudioMix?
     let frames: Int
 
-    func read(isCancelled: () -> Bool, consume: (inout [[Float]]) throws -> Void) throws {
+    /// `progress` — доля прочитанных кадров после каждого куска.
+    func read(
+        isCancelled: () -> Bool, progress: (Double) -> Void, consume: (inout [[Float]]) throws -> Void
+    ) throws {
         let sampleRate = LoudnessNormalizer.sampleRate
         let channels = LoudnessNormalizer.channelCount
         guard let format = PCMChunk.format(sampleRate: sampleRate, channels: channels) else {
@@ -363,6 +383,7 @@ private struct MixSource {
             if count < chunk[0].count { chunk = chunk.map { Array($0.prefix(count)) } }
             remaining -= count
             try consume(&chunk)
+            progress(Double(frames - remaining) / Double(frames))
         }
         if reader.status == .failed { throw LoudnessError.readerFailed }
         while remaining > 0 {
@@ -371,6 +392,7 @@ private struct MixSource {
             var silence = Array(repeating: [Float](repeating: 0, count: count), count: channels)
             remaining -= count
             try consume(&silence)
+            progress(Double(frames - remaining) / Double(frames))
         }
     }
 }
