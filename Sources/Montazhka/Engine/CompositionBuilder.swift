@@ -16,6 +16,8 @@ enum CompositionWarning: Equatable {
     case musicUnavailable(String)
     case musicEQFallback(String)
     case voiceFallback(String)
+    /// Приглушение музыки включено, а участков речи не знаем: нет расшифровки.
+    case musicNotDucked
 
     var message: String {
         switch self {
@@ -26,6 +28,7 @@ enum CompositionWarning: Equatable {
         case .musicEQFallback(let name):
             return "Не удалось настроить музыку «\(name)» под голос — используется исходная мелодия."
         case .voiceFallback(let name): return "Не удалось обработать голос в «\(name)» — используется исходный звук."
+        case .musicNotDucked: return "Музыка не приглушается под голосом: нет расшифровки"
         }
     }
 }

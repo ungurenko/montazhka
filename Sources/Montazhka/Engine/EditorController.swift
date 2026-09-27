@@ -329,22 +329,25 @@ final class EditorController: ExportPreparing {
 
     // MARK: - Сборка предпросмотра
 
-    /// Субтитры предпросмотра берутся только из готовой расшифровки:
-    /// ради предпросмотра речь не распознаётся.
+    /// Музыка стихает под речью и субтитры предпросмотра берутся только из готовой
+    /// расшифровки: ради предпросмотра речь не распознаётся.
     private func makeComposition() async -> (result: MediaRenderResult, cues: [ShortsSubtitleCue]) {
         let snapshot = project
         let speech = await cachedSpeech(for: snapshot.clips)
-        let result = await renderComposition(snapshot, mode: .preview)
+        let result = await renderComposition(snapshot, mode: .preview, speechRanges: speech.speechRanges)
         return (result, speech.horizontalCues ?? [])
     }
 
-    func renderComposition(_ snapshot: Project, mode: MediaRenderMode) async -> MediaRenderResult {
+    func renderComposition(
+        _ snapshot: Project, mode: MediaRenderMode, speechRanges: [TimelineRange]?
+    ) async -> MediaRenderResult {
         let processesMusic = snapshot.music.enabled && snapshot.music.eqEnabled
         if processesMusic { musicProcessing = true }
         let request = MediaRenderRequest(
             project: snapshot,
             mode: mode,
-            readyEnhancedAudio: enhancedAudioURLs)
+            readyEnhancedAudio: enhancedAudioURLs,
+            speechRanges: speechRanges)
         let result = await mediaPipeline.render(request)
         if processesMusic { musicProcessing = false }
         return result

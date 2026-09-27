@@ -86,8 +86,8 @@ extension AgentService {
     }
 
     /// Задание записи и предупреждения сборки. Шортс — по плану черновика;
-    /// обычный проект — слова ленты для .srt. Расшифровка здесь (в фоновом
-    /// процессе) запускается, если модель уже скачана.
+    /// обычный проект — слова ленты для .srt и приглушения музыки. Расшифровка
+    /// здесь (в фоновом процессе) запускается, если модель уже скачана.
     private func exportJob(
         _ project: Project, quality: ExportQuality, normalize: Bool, runID: UUID
     ) async throws -> (FinalExportJob, [String]) {
@@ -109,7 +109,8 @@ extension AgentService {
         let voice = VoiceEnhanceStore(cacheDir: store.enhancedAudioDir)
         let music = MusicEQStore(cacheDir: store.musicEQDir)
         let rendered = await MediaPipeline(voiceStore: voice, musicEQStore: music).render(
-            MediaRenderRequest(project: project, mode: .export, readyEnhancedAudio: [:]))
+            MediaRenderRequest(
+                project: project, mode: .export, readyEnhancedAudio: [:], speechRanges: speech.speechRanges))
         let job = FinalExportJob(
             input: ExportInput(composition: rendered.composition, audioMix: rendered.audioMix),
             quality: quality, sizing: .quality(quality), subtitleCues: speech.horizontalCues,

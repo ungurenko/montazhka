@@ -5,12 +5,12 @@ import Foundation
 extension EditorController {
     /// Композиция для экспорта. Если улучшение включено — дожидается обработки всех
     /// исходников; при неудаче отдаёт оригинальный звук и текст предупреждения.
-    func compositionForExport(_ snapshot: Project) async -> (
+    func compositionForExport(_ snapshot: Project, speechRanges: [TimelineRange]?) async -> (
         composition: AVComposition,
         audioMix: AVAudioMix?,
         audioWarning: String?
     ) {
-        let result = await renderComposition(snapshot, mode: .export)
+        let result = await renderComposition(snapshot, mode: .export, speechRanges: speechRanges)
         let warning =
             result.warnings.isEmpty
             ? nil
@@ -18,7 +18,7 @@ extension EditorController {
         return (result.composition, result.audioMix, warning)
     }
 
-    /// Обычный проект: слова ленты дают .srt рядом с видео.
+    /// Обычный проект: слова ленты дают и .srt, и приглушение музыки под голосом.
     /// Нет готовой расшифровки — речь распознаётся сейчас, если модель уже скачана.
     func prepareExport(step: @escaping @Sendable (ExportPreparationStep) -> Void) async throws -> PreparedExport {
         if project.shorts != nil { return try await prepareShortsExport() }
@@ -28,7 +28,7 @@ extension EditorController {
             clips: exported.clips, store: transcriptStore, glossaryURL: repository.directories.glossary,
             transcribing: { step(.transcribing($0)) })
         step(.assembling)
-        let result = await compositionForExport(exported)
+        let result = await compositionForExport(exported, speechRanges: speech.speechRanges)
         return PreparedExport(
             composition: result.composition, audioMix: result.audioMix, warning: result.audioWarning,
             subtitleCues: speech.horizontalCues, subtitlesSkippedReason: speech.skippedReason,

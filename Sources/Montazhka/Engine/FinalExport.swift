@@ -300,7 +300,8 @@ private final class FinalExportProgress: @unchecked Sendable {
     }
 }
 
-/// Речь обычного проекта для экспорта: .srt рядом с видео строится из слов ленты.
+/// Речь обычного проекта для экспорта: .srt рядом с видео и приглушение музыки
+/// под голосом строятся из одних и тех же слов ленты.
 struct ExportSpeech: Sendable {
     static let noTranscriptReason = "Нет расшифровки — субтитры не созданы"
     static let noModelReason = "Нет модели распознавания — субтитры не созданы"
@@ -314,6 +315,11 @@ struct ExportSpeech: Sendable {
     init(clips: [Clip], words: [TranscriptWord]?, missingReason: String = Self.noTranscriptReason) {
         self.words = words.map { TranscriptTimelineMapper.make(clips: clips, transcripts: $0).words }
         skippedReason = words == nil ? missingReason : nil
+    }
+
+    /// Участки речи для приглушения музыки; nil — неизвестно, где речь.
+    var speechRanges: [TimelineRange]? {
+        words?.map { TimelineRange(from: $0.timelineStart, to: $0.timelineEnd) }
     }
 
     /// Фразы горизонтального ролика для .srt; nil — расшифровки нет.
