@@ -71,7 +71,7 @@ struct AgentOverlayTests {
                     AVVideoYCbCrMatrixKey: AVVideoYCbCrMatrix_ITU_R_709_2,
                 ],
             ],
-            fileType: .mov, frameCount: 30, fps: 30, to: url)
+            fileType: .mov, frameCount: 30, frameDuration: CMTime(value: 1, timescale: 30), to: url)
         return url
     }
 
