@@ -2,6 +2,7 @@
 import CoreVideo
 import Foundation
 import Testing
+import os
 
 @testable import MontazhkaKit
 
@@ -371,17 +372,75 @@ struct OverlayMediaNormalizerTests {
         #expect(isClose(corner, to: RGB(r: 128, g: 128, b: 128), within: 6), "corner \(corner)")
     }
 
-    @Test("a cancelled preparation leaves no file behind")
-    func cancelLeavesNothing() async throws {
+    // MARK: - Отмена
+
+    /// Флаг «отменили» говорит «нет» при первом вопросе и «да» потом: подготовка обязана
+    /// заметить это посреди записи, а не только после последнего кадра.
+    @Test("cancelling through the flag mid-run stops early and leaves no file")
+    func flagCancelMidRun() async throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let input = directory.appendingPathComponent("input.mov")
         try await writeOverlay(Self.sources[0], to: input)
+        let checks = OSAllocatedUnfairLock(initialState: 0)
 
         await #expect(throws: CancellationError.self) {
             try await OverlayMediaNormalizer.normalize(
-                input, to: directory.appendingPathComponent("prepared.mov"), isCancelled: { true })
+                input, to: directory.appendingPathComponent("prepared.mov"),
+                isCancelled: {
+                    checks.withLock {
+                        $0 += 1
+                        return $0 > 1
+                    }
+                })
         }
+        // Вопрос задаётся на каждом кадре: остановка на втором вопросе — не в конце файла.
+        #expect(checks.withLock { $0 } < Self.frameCount)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: directory.path) == ["input.mov"])
+    }
+
+    /// Отмена задачи Swift, которая ждёт подготовку, тоже останавливает запись: флаг при этом
+    /// всё время отвечает «нет», как `{ Task.isCancelled }` на чужой очереди.
+    @Test("cancelling the calling task mid-run stops early and leaves no file")
+    func taskCancelMidRun() async throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let input = directory.appendingPathComponent("input.mov")
+        try await writeOverlay(Self.sources[0], to: input)
+        let checks = OSAllocatedUnfairLock(initialState: 0)
+        let running = DispatchSemaphore(value: 0)
+        // Ворота: закрыты, пока тест не отменит задачу, потом открыты для всех.
+        let gate = DispatchGroup()
+        gate.enter()
+
+        let preparation = Task {
+            try await OverlayMediaNormalizer.normalize(
+                input, to: directory.appendingPathComponent("prepared.mov"),
+                isCancelled: {
+                    // Вопрос приходит уже во время записи. Каждый ждёт у ворот: ни один кадр
+                    // не проскочит, пока задачу не отменят.
+                    if checks.withLock({
+                        $0 += 1
+                        return $0
+                    }) == 1 {
+                        running.signal()
+                    }
+                    _ = gate.wait(timeout: .now() + 30)
+                    return false
+                })
+        }
+        let started = await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+            DispatchQueue.global().async {
+                continuation.resume(returning: running.wait(timeout: .now() + 30) == .success)
+            }
+        }
+        #expect(started, "the pump never asked whether it was cancelled")
+        preparation.cancel()
+        gate.leave()
+
+        let result = await preparation.result
+        #expect(throws: CancellationError.self) { try result.get() }
+        #expect(checks.withLock { $0 } < Self.frameCount)
         #expect(try FileManager.default.contentsOfDirectory(atPath: directory.path) == ["input.mov"])
     }
 }

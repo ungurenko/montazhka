@@ -41,6 +41,9 @@ enum OverlayMediaNormalizer {
 
     /// `source` уже проверен `OverlayMediaProbe`. Пишет копию во временный файл рядом
     /// с `destination` и переносит на место только целиком; при ошибке и отмене файлов не остаётся.
+    /// Остановить можно двумя путями: отменить задачу Swift, которая ждёт вызов, или вернуть
+    /// true из `isCancelled`. Флаг спрашивают на каждом кадре с фоновой очереди, где
+    /// `Task.isCancelled` всегда false, — отмену задачи насос ловит сам.
     static func normalize(
         _ source: URL, to destination: URL, isCancelled: @escaping @Sendable () -> Bool = { false }
     ) async throws {
@@ -51,6 +54,7 @@ enum OverlayMediaNormalizer {
         defer { output.discard() }
         try await transcode(video, of: asset, name: name, to: output.temporaryURL, isCancelled: isCancelled)
         guard !isCancelled() else { throw CancellationError() }
+        try Task.checkCancellation()
         do {
             try output.commit()
         } catch {
@@ -133,7 +137,11 @@ enum OverlayMediaNormalizer {
             let pump = Pump(
                 reader: reader, output: output, input: input, adaptor: adaptor, converter: converter,
                 isCancelled: isCancelled)
-            outcome = await pump.run(stallLimit: stallLimit)
+            outcome = await withTaskCancellationHandler {
+                await pump.run(stallLimit: stallLimit)
+            } onCancel: {
+                pump.cancel()
+            }
         } else {
             outcome = .failed(writeFailed)
         }
@@ -262,10 +270,25 @@ enum OverlayMediaNormalizer {
         case failed(Error)
     }
 
-    /// Ридер → преобразование → писатель. Всё состояние меняется только на `queue`
-    /// (колбэк писателя и сторож), отсюда @unchecked Sendable.
+    /// Ридер → преобразование → писатель. Кадры и `continuation` живут только на `queue`
+    /// (колбэк писателя), как в `Transcoder`: писатель трогают, лишь когда насос отдал итог.
+    /// Сторож тикает на своей очереди — чтение кадра может застрять в декодере и занять
+    /// очередь насоса. Общее с ним и с отменой задачи лежит под замком. Отсюда @unchecked Sendable.
     /// Только requestMediaDataWhenReady: ручной опрос isReadyForMoreMediaData виснет без RunLoop.
     private final class Pump: @unchecked Sendable {
+        private enum StopReason: Sendable {
+            case cancelled, stalled
+
+            var outcome: PumpOutcome { self == .cancelled ? .cancelled : .stalled }
+        }
+
+        /// Что видят насос, сторож и обработчик отмены задачи.
+        private struct Control: Sendable {
+            var lastProgress = DispatchTime.now()
+            /// Почему насос останавливают снаружи; nil — пусть работает.
+            var stopReason: StopReason?
+        }
+
         private let reader: AVAssetReader
         private let output: AVAssetReaderTrackOutput
         private let input: AVAssetWriterInput
@@ -273,9 +296,11 @@ enum OverlayMediaNormalizer {
         private let converter: FrameConverter
         private let isCancelled: @Sendable () -> Bool
         private let queue = DispatchQueue(label: "montazhka.overlay-normalizer")
+        private let watchdogQueue = DispatchQueue(label: "montazhka.overlay-normalizer.watchdog")
+        private let control = OSAllocatedUnfairLock(initialState: Control())
+        /// Оба меняются только на `queue`.
         private var continuation: CheckedContinuation<PumpOutcome, Never>?
         private var watchdog: DispatchSourceTimer?
-        private var lastProgress = DispatchTime.now()
 
         init(
             reader: AVAssetReader, output: AVAssetReaderTrackOutput, input: AVAssetWriterInput,
@@ -294,17 +319,44 @@ enum OverlayMediaNormalizer {
             await withCheckedContinuation { continuation in
                 queue.async {
                     self.continuation = continuation
-                    self.lastProgress = .now()
+                    // Задачу могли отменить ещё до старта: её `finish` тогда пришёл раньше нас.
+                    if let stopReason = self.stopReason { return self.finish(stopReason.outcome) }
+                    self.control.withLock { $0.lastProgress = .now() }
                     self.startWatchdog(stallLimit: stallLimit)
                     self.input.requestMediaDataWhenReady(on: self.queue) { self.feed() }
                 }
             }
         }
 
+        /// Зовётся из обработчика отмены задачи, с любого потока.
+        func cancel() {
+            stop(.cancelled)
+        }
+
+        private var stopReason: StopReason? {
+            control.withLock { $0.stopReason }
+        }
+
+        /// Остановка снаружи: причину запоминаем, ридер отменяем сразу — это выводит насос
+        /// из чтения кадра, застрявшего в декодере, — а итог насос отдаёт на своей очереди.
+        private func stop(_ reason: StopReason) {
+            let isFirst = control.withLock { state in
+                guard state.stopReason == nil else { return false }
+                state.stopReason = reason
+                return true
+            }
+            guard isFirst else { return }
+            reader.cancelReading()
+            queue.async { self.finish(reason.outcome) }
+        }
+
         private func feed() {
             while continuation != nil, input.isReadyForMoreMediaData {
+                if let stopReason { return finish(stopReason.outcome) }
                 if isCancelled() { return finish(.cancelled) }
                 guard let sample = output.copyNextSampleBuffer() else {
+                    // Ридер отменили снаружи: итог задаёт причина, а не статус ридера.
+                    if let stopReason { return finish(stopReason.outcome) }
                     guard reader.status == .completed else { return finish(.readFailed) }
                     input.markAsFinished()
                     return finish(.completed)
@@ -318,19 +370,20 @@ enum OverlayMediaNormalizer {
                 guard adaptor.append(converted, withPresentationTime: time) else {
                     return finish(.failed(OverlayMediaNormalizer.writeFailed))
                 }
-                lastProgress = .now()
+                control.withLock { $0.lastProgress = .now() }
             }
         }
 
-        /// Отмена и зависание замечаются, даже если писатель перестал звать колбэк.
+        /// Отмена флагом и зависание замечаются, даже если писатель перестал звать колбэк
+        /// или чтение кадра застряло в декодере.
         private func startWatchdog(stallLimit: DispatchTimeInterval) {
-            let timer = DispatchSource.makeTimerSource(queue: queue)
+            let timer = DispatchSource.makeTimerSource(queue: watchdogQueue)
             timer.schedule(deadline: .now() + .milliseconds(250), repeating: .milliseconds(250))
             timer.setEventHandler { [self] in
                 if isCancelled() {
-                    finish(.cancelled)
-                } else if DispatchTime.now() > lastProgress + stallLimit {
-                    finish(.stalled)
+                    stop(.cancelled)
+                } else if DispatchTime.now() > control.withLock({ $0.lastProgress }) + stallLimit {
+                    stop(.stalled)
                 }
             }
             watchdog = timer
