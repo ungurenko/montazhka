@@ -32,6 +32,55 @@ struct MediaPipelineTests {
         #expect(result.warnings.isEmpty, "\(result.warnings.map(\.message))")
     }
 
+    @Test("a cut through a steady tone does not click once the audio mix is applied")
+    func cutThroughToneDoesNotClick() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("montazhka-cut-click-\(UUID().uuidString).mov")
+        defer { try? FileManager.default.removeItem(at: url) }
+        try await TestVideoFactory.make(segments: [(duration: 4, amplitude: 0.4)], to: url)
+        // Второй кусок начинается на четверть периода тона 220 Гц позже:
+        // на стыке волна скачет, как на настоящей склейке посреди звука.
+        let clips = [
+            Clip(sourceURL: url, start: 0, end: 1.5),
+            Clip(sourceURL: url, start: 2 + 1.0 / 880, end: 3.5),
+        ]
+
+        let built = await CompositionBuilder.buildResult(clips: clips)
+        let samples = try await mixedSamples(built.composition, try #require(built.audioMix))
+        // Пустой или оборванный звук тоже «без щелчка» — поэтому длина проверяется явно.
+        try #require(samples.count >= 3 * 48_000 - 480)
+
+        let finding = SeamProbe.audio(samples: samples, sampleRate: 48_000, cutOffset: 1.5)
+        #expect(!finding.click, "щелчок на склейке, clickRatio \(finding.clickRatio)")
+        #expect(finding.dropoutMS == 0)
+    }
+
+    /// Звук склейки моно 48 кГц с применённым миксом — как его читает финальный экспорт.
+    private func mixedSamples(_ composition: AVComposition, _ audioMix: AVAudioMix) async throws -> [Float] {
+        let tracks = try await composition.loadTracks(withMediaType: .audio)
+        let reader = try AVAssetReader(asset: composition)
+        let output = AVAssetReaderAudioMixOutput(
+            audioTracks: tracks,
+            audioSettings: [
+                AVFormatIDKey: kAudioFormatLinearPCM, AVSampleRateKey: 48_000, AVNumberOfChannelsKey: 1,
+                AVLinearPCMBitDepthKey: 32, AVLinearPCMIsFloatKey: true, AVLinearPCMIsNonInterleaved: false,
+                AVLinearPCMIsBigEndianKey: false,
+            ])
+        output.audioMix = audioMix
+        reader.add(output)
+        #expect(reader.startReading())
+        var samples: [Float] = []
+        while let buffer = output.copyNextSampleBuffer(), let block = CMSampleBufferGetDataBuffer(buffer) {
+            var chunk = [Float](repeating: 0, count: CMBlockBufferGetDataLength(block) / MemoryLayout<Float>.size)
+            let copied = CMBlockBufferCopyDataBytes(
+                block, atOffset: 0, dataLength: chunk.count * MemoryLayout<Float>.size, destination: &chunk)
+            try #require(copied == kCMBlockBufferNoErr)
+            samples += chunk
+        }
+        #expect(reader.status == .completed)
+        return samples
+    }
+
     @Test
     func testCompositionReportsMissingVideoInsteadOfSilentlySkippingIt() async {
         let clip = Clip(sourcePath: "/tmp/montazhka-definitely-missing.mov", start: 0, end: 5)

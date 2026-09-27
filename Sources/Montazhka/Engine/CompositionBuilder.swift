@@ -300,8 +300,12 @@ enum CompositionBuilder {
         track: AVCompositionTrack,
         joints: [(time: CMTime, leftDuration: CMTime, rightDuration: CMTime)]
     ) -> AVMutableAudioMixInputParameters? {
-        let fade = CMTime(seconds: 0.008, preferredTimescale: 48_000)
-        let safeJoints = joints.filter { $0.leftDuration.seconds >= 0.016 && $0.rightDuration.seconds >= 0.016 }
+        // По нашим замерам (AVAssetReaderAudioMixOutput, 44,1 и 48 кГц) AVAudioMix меняет громкость
+        // не быстрее, чем от 1 до 0 за 25 мс: рампа короче не доходит до нуля, и на склейке
+        // остаётся щелчок (8 мс гасили звук лишь до 0,6). Тест щелчка — в MediaPipelineTests.
+        let fade = CMTime(seconds: 0.030, preferredTimescale: 48_000)
+        let minSide = 2 * fade.seconds
+        let safeJoints = joints.filter { $0.leftDuration.seconds >= minSide && $0.rightDuration.seconds >= minSide }
         guard !safeJoints.isEmpty else { return nil }
         let params = AVMutableAudioMixInputParameters(track: track)
         params.setVolume(1, at: .zero)
