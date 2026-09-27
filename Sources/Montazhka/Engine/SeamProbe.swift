@@ -13,12 +13,14 @@ struct SeamAudioFinding: Equatable, Sendable {
 }
 
 /// Слова у склейки: что должно звучать по ленте и что слышно в готовом файле
-/// (нормализованные слова). `suspect` — пропало слово у самой склейки.
+/// (нормализованные слова). `suspect` — пропало слово у самой склейки; `atCut` — эти слова
+/// со временем ленты, чтобы проверить, звучат ли они в файле на самом деле.
 struct SeamWordFinding: Equatable, Sendable {
     let expected: [String]
     let heard: [String]
     let missing: [String]
     let suspect: Bool
+    var atCut: [SeamWord] = []
 }
 
 /// Слово с временем в секундах готового файла.
@@ -92,6 +94,17 @@ enum SeamProbe {
     /// Частота, в которой `samples(url:)` отдаёт звук.
     static let readSampleRate = 48_000.0
 
+    /// Громкость речи у склейки сравнивается, только если с каждой стороны есть слово не дальше 0,3 с…
+    static let levelWordReach = 0.3
+    /// …и мерится по словам в пределах 1 с с каждой стороны…
+    static let levelPhraseReach = 1.0
+    /// …участок короче 20 мс не мерится: в нём только край слова.
+    static let levelMinimumSpan = 0.020
+    /// Без расшифровки речь — окна по 5 мс громче −40 dBFS…
+    static let voicedFrameDB = -40.0
+    /// …и её должно быть не меньше 100 мс в 300 мс с каждой стороны; меньше — там пауза.
+    static let voicedMinimum = 0.100
+
     // MARK: - Звук
 
     /// `samples` — моно-звук окна, `cutOffset` — секунды от начала окна до склейки.
@@ -156,6 +169,74 @@ enum SeamProbe {
         return length >= dropoutMinLength - 1e-9 ? (length * 1000).rounded() : 0
     }
 
+    /// RMS участка `from…to` (секунды от начала окна) в dBFS; nil — участок короче
+    /// `levelMinimumSpan` или вне окна.
+    static func spanDB(samples: [Float], sampleRate: Double, from: Double, to: Double) -> Double? {
+        let lower = max(0, Int((from * sampleRate).rounded()))
+        let upper = min(samples.count, Int((to * sampleRate).rounded()))
+        guard upper > lower, Double(upper - lower) >= levelMinimumSpan * sampleRate - 1e-9 else { return nil }
+        return rmsDB(samples, lower..<upper)
+    }
+
+    /// RMS нескольких участков вместе (секунды от начала окна) в dBFS; nil — вместе они короче
+    /// `levelMinimumSpan`. Пересекающиеся участки считаются один раз.
+    static func spansDB(samples: [Float], sampleRate: Double, spans: [(from: Double, to: Double)]) -> Double? {
+        var covered = [Bool](repeating: false, count: samples.count)
+        for span in spans {
+            let lower = max(0, Int((span.from * sampleRate).rounded()))
+            let upper = min(samples.count, Int((span.to * sampleRate).rounded()))
+            if upper > lower { for index in lower..<upper { covered[index] = true } }
+        }
+        var sum = 0.0
+        var count = 0
+        for index in samples.indices where covered[index] {
+            sum += Double(samples[index]) * Double(samples[index])
+            count += 1
+        }
+        guard count > 0, Double(count) >= levelMinimumSpan * sampleRate - 1e-9 else { return nil }
+        return max(silenceDB, 20 * log10(max((sum / Double(count)).squareRoot(), 1e-12)))
+    }
+
+    /// Скачок громкости речи без расшифровки: громкость только «звучащих» окон по 5 мс
+    /// (громче `voicedFrameDB`) в 300 мс до склейки минус такая же после. Пауза у склейки —
+    /// обычное дело, поэтому если с одной стороны речи меньше `voicedMinimum`, сравнивать нечего: nil.
+    static func voicedLevelJumpDB(samples: [Float], sampleRate: Double, cutOffset: Double) -> Double? {
+        let frame = max(1, Int((dropoutFrame * sampleRate).rounded()))
+        let span = Int((levelSpan * sampleRate).rounded())
+        let cut = min(max(Int((cutOffset * sampleRate).rounded()), 0), samples.count)
+        func voicedDB(_ range: Range<Int>) -> Double? {
+            var power = 0.0
+            var frames = 0
+            for start in stride(from: range.lowerBound, through: range.upperBound - frame, by: frame) {
+                let level = rmsDB(samples, start..<(start + frame))
+                guard level > voicedFrameDB else { continue }
+                power += pow(10, level / 10)
+                frames += 1
+            }
+            guard frames > 0, Double(frames * frame) >= voicedMinimum * sampleRate - 1e-9 else { return nil }
+            return 10 * log10(power / Double(frames))
+        }
+        guard let before = voicedDB(max(0, cut - span)..<cut),
+            let after = voicedDB(cut..<min(samples.count, cut + span))
+        else { return nil }
+        return before - after
+    }
+
+    /// На сколько дБ участок слова `from…to` (секунды от начала окна) в готовом файле тише,
+    /// чем в склейке проекта, с поправкой на громкость всего окна: экспорт выравнивает громкость
+    /// и улучшает голос, а сравнивать нужно само слово. nil — участок не измерить.
+    static func wordDeficitDB(
+        file: [Float], source: [Float], sampleRate: Double, from: Double, to: Double
+    ) -> Double? {
+        let whole = Double(min(file.count, source.count)) / sampleRate
+        guard let fileWord = spanDB(samples: file, sampleRate: sampleRate, from: from, to: to),
+            let sourceWord = spanDB(samples: source, sampleRate: sampleRate, from: from, to: to),
+            let fileWindow = spanDB(samples: file, sampleRate: sampleRate, from: 0, to: whole),
+            let sourceWindow = spanDB(samples: source, sampleRate: sampleRate, from: 0, to: whole)
+        else { return nil }
+        return (sourceWord - sourceWindow) - (fileWord - fileWindow)
+    }
+
     private static func levelJumpDB(_ samples: [Float], sampleRate: Double, cut: Int) -> Double {
         let span = Int((levelSpan * sampleRate).rounded())
         let before = max(0, cut - span)..<cut
@@ -184,10 +265,11 @@ enum SeamProbe {
         let heardTokens = heardWords.map(\.text)
         let matched = Set(RetakeFinder.alignment(expectedTokens, heardTokens).map(\.0))
         let missing = expectedWords.indices.filter { !matched.contains($0) }
+        let atCut = missing.map { expectedWords[$0] }.filter { touches($0, cut: cut) }
         return SeamWordFinding(
             expected: expectedTokens, heard: heardTokens,
             missing: missing.map { expectedTokens[$0] },
-            suspect: missing.contains { touches(expectedWords[$0], cut: cut) })
+            suspect: !atCut.isEmpty, atCut: atCut)
     }
 
     private static func normalized(_ word: SeamWord) -> SeamWord? {
@@ -272,17 +354,38 @@ enum SeamProbe {
         let asset = AVURLAsset(url: url)
         guard let track = try await asset.loadTracks(withMediaType: .audio).first else { throw SeamProbeError.noAudio }
         let reader = try AVAssetReader(asset: asset)
-        let output = AVAssetReaderTrackOutput(
-            track: track,
-            outputSettings: [
-                AVFormatIDKey: kAudioFormatLinearPCM,
-                AVSampleRateKey: readSampleRate,
-                AVNumberOfChannelsKey: 1,
-                AVLinearPCMBitDepthKey: 32,
-                AVLinearPCMIsFloatKey: true,
-                AVLinearPCMIsNonInterleaved: false,
-                AVLinearPCMIsBigEndianKey: false,
-            ])
+        let output = AVAssetReaderTrackOutput(track: track, outputSettings: pcmSettings)
+        return try read(reader, output, from: from, to: to, wanted: wanted)
+    }
+
+    /// То же для склейки проекта (AVComposition): звуковые дорожки смешиваются, как при записи.
+    static func samples(asset: AVAsset, from: Double, to: Double) async throws -> (samples: [Float], sampleRate: Double)
+    {
+        let wanted = Int(((to - from) * readSampleRate).rounded())
+        guard wanted > 0 else { return ([], readSampleRate) }
+        let tracks = try await asset.loadTracks(withMediaType: .audio)
+        guard !tracks.isEmpty else { throw SeamProbeError.noAudio }
+        let reader = try AVAssetReader(asset: asset)
+        let output = AVAssetReaderAudioMixOutput(audioTracks: tracks, audioSettings: pcmSettings)
+        return try read(reader, output, from: from, to: to, wanted: wanted)
+    }
+
+    /// Моно Float32 48 кГц.
+    private static var pcmSettings: [String: Any] {
+        [
+            AVFormatIDKey: kAudioFormatLinearPCM,
+            AVSampleRateKey: readSampleRate,
+            AVNumberOfChannelsKey: 1,
+            AVLinearPCMBitDepthKey: 32,
+            AVLinearPCMIsFloatKey: true,
+            AVLinearPCMIsNonInterleaved: false,
+            AVLinearPCMIsBigEndianKey: false,
+        ]
+    }
+
+    private static func read(
+        _ reader: AVAssetReader, _ output: AVAssetReaderOutput, from: Double, to: Double, wanted: Int
+    ) throws -> (samples: [Float], sampleRate: Double) {
         output.alwaysCopiesSampleData = false
         guard reader.canAdd(output) else { throw SeamProbeError.unreadable }
         reader.add(output)

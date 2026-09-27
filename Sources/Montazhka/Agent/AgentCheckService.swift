@@ -28,12 +28,32 @@ private struct CheckProblem: Sendable {
     var priority: Int { Kind.allCases.firstIndex(of: kind) ?? Kind.allCases.count }
 }
 
-/// Слова для сверки: слова ленты (время ленты = время файла) и слова файла.
-/// `heard == nil` — сверки нет, причина в `status`.
+/// Слова для сверки: слова ленты (время ленты = время файла; nil — расшифровки проекта нет)
+/// и слова файла (`heard == nil` — сверки нет, причина в `status`).
 private struct CheckWords: Sendable {
-    var expected: [SeamWord] = []
+    var expected: [SeamWord]?
     var heard: [SeamWord]?
     let status: AgentJSONValue
+}
+
+/// Склейка: момент на ленте и клипы по обе стороны — по ним находится тот же момент исходника.
+private struct CheckCut: Sendable {
+    let time: Double
+    let before: Clip
+    let after: Clip
+}
+
+/// Что нужно каждой склейке, собранное один раз.
+private struct CheckContext: Sendable {
+    let media: CheckMedia
+    let file: AVAsset
+    let window: Double
+    let words: CheckWords
+    /// В проекте играет музыка: без расшифровки её в паузах не отличить от речи.
+    let music: Bool
+    /// Склейка проекта без улучшения голоса и музыки: с ней сравнивается звук пропавшего слова.
+    /// nil — сверки слов нет.
+    let source: AVAsset?
 }
 
 /// Что есть в файле: без звука или без картинки соответствующая проверка — null.
@@ -49,8 +69,11 @@ private struct CheckMedia: Sendable {
 extension AgentService {
     static let checkCutLimit = 40
     static let checkImageCuts = 8
-    /// Скачок громкости у склейки меньше этого — обычная разница фраз, не проблема.
+    /// Скачок громкости речи у склейки меньше этого — обычная разница фраз, не проблема.
     static let checkLevelJumpDB = 10.0
+    /// Пропавшее у склейки слово — дефект, только если в файле это место тише, чем в проекте,
+    /// хотя бы на столько: иначе слово звучит, а распознавание его просто не расслышало.
+    static let checkWordLostDB = 6.0
     /// Файл без отпечатка ленты считается этим проектом, если длительности сходятся.
     static let checkDurationTolerance = 0.25
     static let fileMismatchMessage = "Файл собран из старой ленты — экспортируйте заново"
@@ -79,15 +102,23 @@ extension AgentService {
             // Округлённый nextFrom может оказаться чуть позже своей склейки — допуск полмиллисекунды.
             let lower = (request.from ?? 0) - 0.0005
             let upper = request.to ?? .infinity
-            let allCuts = TimelineEditOps.starts(of: project.clips).dropFirst().filter { $0 >= lower && $0 <= upper }
+            let starts = TimelineEditOps.starts(of: project.clips)
+            let allCuts = project.clips.indices.dropFirst().compactMap { index -> CheckCut? in
+                guard starts[index] >= lower, starts[index] <= upper else { return nil }
+                return CheckCut(time: starts[index], before: project.clips[index - 1], after: project.clips[index])
+            }
             let cuts = Array(allCuts.prefix(Self.checkCutLimit))
             let words = await checkWords(request, project: project, path: path)
+            let source: AVAsset? =
+                words.heard != nil && media.hasAudio
+                ? await CompositionBuilder.buildResult(clips: project.clips).composition : nil
+            let context = CheckContext(
+                media: media, file: asset, window: window, words: words, music: project.music.enabled, source: source)
 
             var results: [AgentJSONValue] = []
             var problems: [CheckProblem] = []
             for cut in cuts {
-                let (result, found) = try await Self.checkCut(
-                    cut, media: media, asset: asset, window: window, words: words)
+                let (result, found) = try await Self.checkCut(cut, context: context)
                 results.append(result)
                 problems += found
             }
@@ -109,8 +140,8 @@ extension AgentService {
                         }),
                     "loudness": media.hasAudio ? await Self.fileLoudness(media.url) : .null,
                     "wordsCheck": words.status,
-                    "imagePath": await cutsSheet(cuts, problems: problems, project: project, media: media),
-                    "nextFrom": allCuts.count > cuts.count ? .number(Self.rounded(allCuts[cuts.count])) : .null,
+                    "imagePath": await cutsSheet(cuts.map(\.time), problems: problems, project: project, media: media),
+                    "nextFrom": allCuts.count > cuts.count ? .number(Self.rounded(allCuts[cuts.count].time)) : .null,
                 ])
         } catch { return failure("check", error) }
     }
@@ -126,15 +157,17 @@ extension AgentService {
 
     /// Слова ленты и файла из кэша расшифровок. Нет расшифровки файла — запускает её в фоне
     /// (модель без согласия не качает: тогда сверка выключена и сказано почему).
+    /// Слова ленты нужны и без сверки: по ним сравнивается громкость речи у склейки.
     private func checkWords(_ request: AgentCheckRequest, project: Project, path: String) async -> CheckWords {
+        let map = try? await cachedTimelineTranscript(for: project)
+        let timeline = map?.words.map { SeamWord(text: $0.text, start: $0.timelineStart, end: $0.timelineEnd) }
         func off(_ reason: String) -> CheckWords {
-            CheckWords(status: .object(["status": "off", "reason": .string(reason)]))
+            CheckWords(expected: timeline, status: .object(["status": "off", "reason": .string(reason)]))
         }
         guard request.words else { return off("Сверка слов выключена (words=false).") }
-        guard let map = try? await cachedTimelineTranscript(for: project) else {
+        guard let expected = timeline else {
             return off("Нет расшифровки проекта: вызовите montazhka_transcript projectId и дождитесь её.")
         }
-        let expected = map.words.map { SeamWord(text: $0.text, start: $0.timelineStart, end: $0.timelineEnd) }
         if let heard = try? await makeTranscriptStore().correctedCachedWords(
             for: [MediaReference(path: path)], glossaryURL: store.glossaryURL)
         {
@@ -150,6 +183,7 @@ extension AgentService {
         do {
             let started = try await startJob(.transcribeFile(path: path))
             return CheckWords(
+                expected: expected,
                 status: .object([
                     "status": "pending", "jobId": started.data?["jobId"] ?? .null,
                     "next": "Дождитесь задачи в montazhka_get_job и вызовите montazhka_check снова — сверятся слова.",
@@ -161,77 +195,171 @@ extension AgentService {
 
     /// Одна склейка: звук окна ±`window` файла, яркость кадра до и после, слова рядом.
     private static func checkCut(
-        _ cut: Double, media: CheckMedia, asset: AVAsset, window: Double, words: CheckWords
+        _ cut: CheckCut, context: CheckContext
     ) async throws -> (AgentJSONValue, [CheckProblem]) {
         var problems: [CheckProblem] = []
-        var data: [String: AgentJSONValue] = ["time": .number(rounded(cut)), "audio": .null, "video": .null]
-        if media.hasAudio {
-            let start = max(0, cut - window)
-            let read = try await SeamProbe.samples(url: media.url, from: start, to: min(media.seconds, cut + window))
-            let audio = SeamProbe.audio(samples: read.samples, sampleRate: read.sampleRate, cutOffset: cut - start)
-            data["audio"] = .object([
-                "clickRatio": .number((audio.clickRatio * 100).rounded() / 100), "click": .bool(audio.click),
-                "dropoutMs": .number(audio.dropoutMS), "levelJumpDB": .number((audio.levelJumpDB * 10).rounded() / 10),
-            ])
-            if audio.click {
-                problems.append(
-                    CheckProblem(
-                        time: cut, kind: .click,
-                        evidence: "щелчок: перепад в \(String(format: "%.1f", audio.clickRatio)) раза резче обычного"))
-            }
-            if audio.dropoutMS > 0 {
-                problems.append(
-                    CheckProblem(time: cut, kind: .dropout, evidence: "провал звука \(Int(audio.dropoutMS)) мс"))
-            }
-            if abs(audio.levelJumpDB) >= checkLevelJumpDB {
-                problems.append(
-                    CheckProblem(
-                        time: cut, kind: .levelJump,
-                        evidence: "громкость до склейки \(audio.levelJumpDB > 0 ? "выше" : "ниже") на "
-                            + "\(String(format: "%.1f", abs(audio.levelJumpDB))) дБ"))
-            }
+        var data: [String: AgentJSONValue] = ["time": .number(rounded(cut.time)), "audio": .null, "video": .null]
+        let start = max(0, cut.time - context.window)
+        let end = min(context.media.seconds, cut.time + context.window)
+        var samples: [Float]?
+        if context.media.hasAudio {
+            let read = try await SeamProbe.samples(url: context.media.url, from: start, to: end).samples
+            samples = read
+            data["audio"] = audioFinding(read, cut: cut.time, start: start, context: context, problems: &problems)
         }
-        if media.hasVideo {
-            let times = [max(0, cut - 0.08), min(max(0, media.seconds - 0.01), cut + 0.04)]
-            let luma = try await SeamProbe.meanLuma(asset: asset, times: times)
-            let black = luma.contains(where: SeamProbe.isBlack(meanLuma:))
-            data["video"] = .object([
-                "lumaBefore": .number(rounded(luma[0])), "lumaAfter": .number(rounded(luma[1])), "black": .bool(black),
-            ])
-            if black {
-                problems.append(
-                    CheckProblem(
-                        time: cut, kind: .black,
-                        evidence: "чёрный кадр: яркость до \(String(format: "%.3f", luma[0])), "
-                            + "после \(String(format: "%.3f", luma[1]))"))
-            }
+        if context.media.hasVideo {
+            data["video"] = try await videoFinding(cut, context: context, problems: &problems)
         }
-        data["words"] = wordsFinding(cut, window: window, words: words, problems: &problems)
+        data["words"] = await wordsFinding(
+            cut.time, span: start..<end, samples: samples, context: context, problems: &problems)
         problems.sort { $0.priority < $1.priority }
         data["problems"] = .array(problems.map { .string($0.kind.rawValue) })
         return (.object(data), problems)
     }
 
-    /// Слова ленты, целиком лежащие в окне, против слов файла с запасом 0,3 с по краям:
-    /// слово на краю окна, распознанное чуть шире, не должно считаться пропавшим.
-    private static func wordsFinding(
-        _ cut: Double, window: Double, words: CheckWords, problems: inout [CheckProblem]
+    /// Щелчок, провал и скачок громкости речи. `samples` — звук файла с секунды `start`.
+    private static func audioFinding(
+        _ samples: [Float], cut: Double, start: Double, context: CheckContext, problems: inout [CheckProblem]
     ) -> AgentJSONValue {
-        guard let heard = words.heard else { return .null }
-        let (lower, upper) = (cut - window, cut + window)
+        let audio = SeamProbe.audio(samples: samples, sampleRate: SeamProbe.readSampleRate, cutOffset: cut - start)
+        let jump = speechLevelJumpDB(samples, cut: cut, start: start, context: context)
+        if audio.click {
+            problems.append(
+                CheckProblem(
+                    time: cut, kind: .click,
+                    evidence: "щелчок: перепад в \(String(format: "%.1f", audio.clickRatio)) раза резче обычного"))
+        }
+        if audio.dropoutMS > 0 {
+            problems.append(
+                CheckProblem(time: cut, kind: .dropout, evidence: "провал звука \(Int(audio.dropoutMS)) мс"))
+        }
+        if let jump, abs(jump) >= checkLevelJumpDB {
+            problems.append(
+                CheckProblem(
+                    time: cut, kind: .levelJump,
+                    evidence: "речь до склейки \(jump > 0 ? "громче" : "тише"), чем после, на "
+                        + "\(String(format: "%.1f", abs(jump))) дБ"))
+        }
+        return .object([
+            "clickRatio": .number((audio.clickRatio * 100).rounded() / 100), "click": .bool(audio.click),
+            "dropoutMs": .number(audio.dropoutMS),
+            "levelJumpDB": jump.map { .number(($0 * 10).rounded() / 10) } ?? .null,
+        ])
+    }
+
+    /// Скачок громкости речи. Пауза у склейки — норма: если ближе 0,3 с с одной стороны нет слова
+    /// ленты, сравнивать нечего (nil). Иначе сравнивается громкость слов ленты в пределах 1 с по каждую
+    /// сторону: у короткого слова («с», «а») время из расшифровки часто лежит на паузе, и одно такое
+    /// слово дало бы ложный скачок. Без расшифровки — звучащие окна (`SeamProbe.voicedLevelJumpDB`),
+    /// а с музыкой в проекте не мерится вовсе.
+    private static func speechLevelJumpDB(
+        _ samples: [Float], cut: Double, start: Double, context: CheckContext
+    ) -> Double? {
+        let rate = SeamProbe.readSampleRate
+        guard let words = context.words.expected else {
+            return context.music
+                ? nil : SeamProbe.voicedLevelJumpDB(samples: samples, sampleRate: rate, cutOffset: cut - start)
+        }
+        let edge = 0.005
+        let before = words.filter { $0.end <= cut + edge && $0.end >= cut - SeamProbe.levelPhraseReach }
+        let after = words.filter { $0.start >= cut - edge && $0.start <= cut + SeamProbe.levelPhraseReach }
+        guard before.contains(where: { $0.end >= cut - SeamProbe.levelWordReach }),
+            after.contains(where: { $0.start <= cut + SeamProbe.levelWordReach }),
+            let beforeDB = SeamProbe.spansDB(
+                samples: samples, sampleRate: rate,
+                spans: before.map {
+                    (max($0.start, cut - SeamProbe.levelPhraseReach) - start, min($0.end, cut) - start)
+                }),
+            let afterDB = SeamProbe.spansDB(
+                samples: samples, sampleRate: rate,
+                spans: after.map { (max($0.start, cut) - start, min($0.end, cut + SeamProbe.levelPhraseReach) - start) }
+            )
+        else { return nil }
+        return beforeDB - afterDB
+    }
+
+    /// Чёрный кадр, которого нет в исходнике: тёмная сцена или затемнение, снятые так, — не дефект.
+    /// Исходник не прочитать — дефект, только если чёрная ровно одна сторона склейки.
+    private static func videoFinding(
+        _ cut: CheckCut, context: CheckContext, problems: inout [CheckProblem]
+    ) async throws -> AgentJSONValue {
+        let times = [max(0, cut.time - 0.08), min(max(0, context.media.seconds - 0.01), cut.time + 0.04)]
+        let luma = try await SeamProbe.meanLuma(asset: context.file, times: times)
+        let fileBlack = luma.map(SeamProbe.isBlack(meanLuma:))
+        let source = await sourceLuma(cut)
+        let black: Bool
+        if let source {
+            black = zip(fileBlack, source).contains { $0 && !SeamProbe.isBlack(meanLuma: $1) }
+        } else {
+            black = fileBlack[0] != fileBlack[1]
+        }
+        if black {
+            let seen = source.map { " (в исходнике \(format3($0[0])) и \(format3($0[1])))" } ?? ""
+            problems.append(
+                CheckProblem(
+                    time: cut.time, kind: .black,
+                    evidence: "чёрный кадр, которого нет в исходнике: яркость до \(format3(luma[0])), "
+                        + "после \(format3(luma[1]))\(seen)"))
+        }
+        return .object([
+            "lumaBefore": .number(rounded(luma[0])), "lumaAfter": .number(rounded(luma[1])),
+            "sourceLumaBefore": source.map { .number(rounded($0[0])) } ?? .null,
+            "sourceLumaAfter": source.map { .number(rounded($0[1])) } ?? .null,
+            "black": .bool(black),
+        ])
+    }
+
+    private static func format3(_ value: Double) -> String {
+        String(format: "%.3f", value)
+    }
+
+    /// Яркость исходника в те же моменты ленты: за 0,08 с до конца клипа перед склейкой и через
+    /// 0,04 с от начала клипа после неё. nil — исходник не прочитать.
+    private static func sourceLuma(_ cut: CheckCut) async -> [Double]? {
+        let before = max(cut.before.start, cut.before.end - 0.08)
+        let after = min(cut.after.end, cut.after.start + 0.04)
+        guard let first = try? await SeamProbe.meanLuma(asset: AVURLAsset(url: cut.before.url), times: [before]),
+            let second = try? await SeamProbe.meanLuma(asset: AVURLAsset(url: cut.after.url), times: [after]),
+            let beforeLuma = first.first, let afterLuma = second.first
+        else { return nil }
+        return [beforeLuma, afterLuma]
+    }
+
+    /// Слова ленты, целиком лежащие в окне, против слов файла с запасом 0,3 с по краям:
+    /// слово на краю окна, распознанное чуть шире, не должно считаться пропавшим. Пропавшее
+    /// у склейки слово — дефект `cutWord`, только если в файле его место хотя бы на `checkWordLostDB`
+    /// тише, чем в склейке проекта (`lostDB`): под музыкой распознавание теряет и слова, которые звучат.
+    private static func wordsFinding(
+        _ cut: Double, span: Range<Double>, samples: [Float]?, context: CheckContext,
+        problems: inout [CheckProblem]
+    ) async -> AgentJSONValue {
+        guard let heard = context.words.heard, let expected = context.words.expected else { return .null }
+        let (lower, upper) = (cut - context.window, cut + context.window)
         let finding = SeamProbe.words(
-            expected: words.expected.filter { $0.start >= lower && $0.end <= upper },
+            expected: expected.filter { $0.start >= lower && $0.end <= upper },
             heard: heard.filter { $0.end > lower - 0.3 && $0.start < upper + 0.3 }, cut: cut)
-        if finding.suspect {
+        var lostDB: Double?
+        if finding.suspect, let samples, let source = context.source,
+            let project = try? await SeamProbe.samples(asset: source, from: span.lowerBound, to: span.upperBound)
+        {
+            lostDB = finding.atCut.compactMap { word in
+                SeamProbe.wordDeficitDB(
+                    file: samples, source: project.samples, sampleRate: project.sampleRate,
+                    from: word.start - span.lowerBound, to: word.end - span.lowerBound)
+            }.max()
+        }
+        if let lostDB, lostDB >= checkWordLostDB {
             problems.append(
                 CheckProblem(
                     time: cut, kind: .cutWord,
-                    evidence: "у склейки не слышно: «\(finding.missing.joined(separator: " "))»"))
+                    evidence: "у склейки не слышно «\(finding.atCut.map(\.text).joined(separator: " "))»: "
+                        + "в файле это место тише, чем в проекте, на \(String(format: "%.1f", lostDB)) дБ"))
         }
         return .object([
             "expected": .array(finding.expected.map { .string($0) }),
             "heard": .array(finding.heard.map { .string($0) }),
             "missing": .array(finding.missing.map { .string($0) }), "suspect": .bool(finding.suspect),
+            "lostDB": lostDB.map { .number(($0 * 10).rounded() / 10) } ?? .null,
         ])
     }
 

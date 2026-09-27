@@ -551,6 +551,8 @@ enum AgentDocumentation {
            и `montazhka_audio` с `filePath` готового MP4 (`audio` с `filePath` даёт и `loudness`).
         8. `montazhka_check projectId filePath` — каждая склейка готового файла: `problems` с уликами (обрезанное
            слово, щелчок, провал звука, чёрный кадр, скачок громкости), `loudness` и сетка кадров у склеек.
+           Пауза у склейки, тёмная сцена из исходника и слово, которое звучит, но не распозналось, проблемой
+           не считаются: каждая запись `problems` — дефект, созданный монтажом.
            Больше 40 склеек — повторите с `from=nextFrom`; `wordsCheck.status=pending` — дождитесь `jobId` и
            вызовите снова. Сервер без `montazhka_check` (старая версия) —
            `montazhka_frames projectId filePath aroundCuts=true`. Затем — критик (раздел ниже).

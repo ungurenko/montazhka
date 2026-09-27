@@ -129,6 +129,39 @@ struct SeamProbeTests {
         #expect(abs(SeamProbe.audio(samples: louderAfter, sampleRate: rate, cutOffset: cut).levelJumpDB + 6.02) < 0.1)
     }
 
+    @Test("voiced level jump compares speech on both sides and skips a side that is a pause")
+    func voicedLevelJump() {
+        let louderBefore = sine(cut, amplitude: 0.5) + sine(cut, amplitude: 0.05, from: cut)
+        let jump = SeamProbe.voicedLevelJumpDB(samples: louderBefore, sampleRate: rate, cutOffset: cut)
+        #expect(abs((jump ?? 0) - 20) < 0.5)
+
+        // 280 мс тишины и 20 мс начала слова перед склейкой: речи с этой стороны мало — не сравниваем.
+        var pause = sine(2 * cut)
+        pause.replaceSubrange(index(cut - 0.3)..<index(cut - 0.02), with: repeatElement(0, count: index(0.28)))
+        #expect(SeamProbe.voicedLevelJumpDB(samples: pause, sampleRate: rate, cutOffset: cut) == nil)
+    }
+
+    @Test("span level and word deficit: a word gone from the file is far quieter, a louder file is not")
+    func wordDeficit() {
+        let source = sine(2 * cut, amplitude: 0.3)
+        #expect(abs((SeamProbe.spanDB(samples: source, sampleRate: rate, from: 0, to: 1) ?? 0) + 13.47) < 0.1)
+        #expect(SeamProbe.spanDB(samples: source, sampleRate: rate, from: 1, to: 1.01) == nil)
+        // Два участка, один из них внутри другого: считаются один раз; вместе короче 20 мс — nil.
+        let spans = SeamProbe.spansDB(samples: source, sampleRate: rate, spans: [(0, 1), (0.2, 0.4)])
+        #expect(abs((spans ?? 0) + 13.47) < 0.1)
+        #expect(SeamProbe.spansDB(samples: source, sampleRate: rate, spans: [(1, 1.005), (2, 2.005)]) == nil)
+
+        var lost = sine(2 * cut, amplitude: 0.3)
+        lost.replaceSubrange(index(cut)..<index(cut + 0.4), with: repeatElement(0, count: index(0.4)))
+        let deficit = SeamProbe.wordDeficitDB(file: lost, source: source, sampleRate: rate, from: cut, to: cut + 0.4)
+        #expect((deficit ?? 0) > 50)
+
+        // Экспорт поднял всё на 8 дБ: само слово не тише остального окна.
+        let louder = source.map { $0 * 2.5 }
+        let same = SeamProbe.wordDeficitDB(file: louder, source: source, sampleRate: rate, from: cut, to: cut + 0.4)
+        #expect(abs(same ?? 99) < 0.1)
+    }
+
     // MARK: - Words
 
     private func words(_ items: [(String, Double, Double)]) -> [SeamWord] {
@@ -145,6 +178,7 @@ struct SeamProbeTests {
         let finding = SeamProbe.words(expected: expected, heard: heard, cut: 1.0)
         #expect(finding.missing == ["поговорим"])
         #expect(finding.suspect)
+        #expect(finding.atCut == [SeamWord(text: "поговорим", start: 0.7, end: 0.95)])
         #expect(finding.expected == ["сегодня", "мы", "поговорим", "о", "монтаже"])
         #expect(finding.heard == ["сегодня", "мы", "о", "монтаже"])
     }
