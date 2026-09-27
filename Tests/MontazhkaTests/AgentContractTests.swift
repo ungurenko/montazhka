@@ -142,6 +142,32 @@ struct AgentContractTests {
         #expect(unset == nil && unsetBurn == nil, "без полей — как в настройках проекта")
     }
 
+    @Test("CLI export flags force loudness and burned subtitles either way; no flag keeps the project setting")
+    func cliExportFlagsBothWays() throws {
+        func flag(_ args: [String]) throws -> Bool? {
+            try AgentCommand.exportFlag(on: "--burn-subtitles", off: "--no-burn-subtitles", in: args)
+        }
+        #expect(try flag(["export", "--burn-subtitles"]) == true)
+        #expect(try flag(["export", "--no-burn-subtitles"]) == false)
+        #expect(try flag(["export", "--no-normalize-loudness"]) == nil)
+        #expect(
+            try AgentCommand.exportFlag(
+                on: "--normalize-loudness", off: "--no-normalize-loudness", in: ["export", "--normalize-loudness"])
+                == true)
+    }
+
+    @Test(
+        "CLI export refuses contradictory flag pairs before touching any project",
+        arguments: [
+            ["--normalize-loudness", "--no-normalize-loudness"], ["--burn-subtitles", "--no-burn-subtitles"],
+        ])
+    func cliContradictoryExportFlags(_ flags: [String]) async {
+        let response = await AgentCommand.execute(["export", "--project", UUID().uuidString] + flags)
+
+        #expect(response.error?.code == "INVALID_INPUT", "\(String(describing: response.error))")
+        #expect(response.error?.message.contains(flags[0]) == true)
+    }
+
     @Test("Agent runs survive a new store instance")
     func runPersistence() async throws {
         let root = FileManager.default.temporaryDirectory

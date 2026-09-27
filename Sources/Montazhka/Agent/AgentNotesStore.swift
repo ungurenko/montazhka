@@ -22,17 +22,39 @@ actor AgentNotesStore {
         (try? existing(projectID)) ?? nil
     }
 
+    /// Правка заметок: дописать под заголовком с датой или переписать целиком.
+    enum Edit: Sendable, Equatable {
+        /// "\n## yyyy-MM-dd HH:mm\n" + текст в конец.
+        case append(String)
+        /// Весь текст; пустой (или одни пробелы) очищает заметки.
+        case replace(String)
+    }
+
     /// Дописывает заметку под заголовком с датой: "\n## yyyy-MM-dd HH:mm\n" + текст.
     func append(_ projectID: UUID, text: String, at date: Date) throws {
-        try locked(projectID) {
-            try write(projectID, (existing(projectID) ?? "") + "\n## \(Self.stamp(date))\n" + text)
-        }
+        try apply(projectID, [.append(text)], at: date)
     }
 
     /// Переписывает заметки целиком. Пустой текст (или одни пробелы) удаляет файл.
     func replace(_ projectID: UUID, text: String) throws {
+        try apply(projectID, [.replace(text)], at: Date())
+    }
+
+    /// Правки одной пачки: применяются к тексту в памяти по порядку, длина проверяется
+    /// один раз по итогу, файл пишется один раз под блокировкой — либо все правки, либо
+    /// ни одной. Итог из одних пробелов удаляет файл.
+    func apply(_ projectID: UUID, _ edits: [Edit], at date: Date) throws {
         try locked(projectID) {
-            guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            var text = try existing(projectID) ?? ""
+            for edit in edits {
+                switch edit {
+                case .append(let note):
+                    text += "\n## \(Self.stamp(date))\n" + note
+                case .replace(let whole):
+                    text = whole.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "" : whole
+                }
+            }
+            guard !text.isEmpty else {
                 let url = fileURL(projectID)
                 if FileManager.default.fileExists(atPath: url.path) { try FileManager.default.removeItem(at: url) }
                 return

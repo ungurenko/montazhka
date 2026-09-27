@@ -196,7 +196,11 @@ extension AgentService {
                 await revisions.drop(projectID: projectID, steps: 1)
                 throw error
             }
-            overlayCopies = []  // проект сохранён и ссылается на копии
+            // Проект сохранён: копии этой пачки, на которые он не ссылается (анимацию убрали
+            // той же пачкой), больше никому не нужны — в прежних ревизиях их тоже нет.
+            let used = Set(project.overlays.map(\.media.lastKnownPath))
+            for copy in overlayCopies where !used.contains(copy.path) { try? FileManager.default.removeItem(at: copy) }
+            overlayCopies = []
             if transcriptWords == nil {
                 warnings.append("Расшифровки нет в кэше — резы посреди слов не проверялись.")
             }
@@ -218,33 +222,22 @@ extension AgentService {
         }
     }
 
-    /// Запись заметки: дописать (`note`) или переписать целиком (`setNotes`).
-    private struct NoteWrite: Sendable {
-        let text: String
-        let replaces: Bool
-    }
-
-    /// Проверяет операцию заметки до любых изменений: у `note` нужен непустой текст,
-    /// у `setNotes` — поле text (пустое очищает заметки).
-    private static func noteWrite(_ operation: AgentEditOperation) throws -> NoteWrite {
+    /// Проверяет операцию заметки до любых изменений: `note` дописывает непустой текст,
+    /// `setNotes` переписывает заметки целиком (пустой text очищает их).
+    private static func noteWrite(_ operation: AgentEditOperation) throws -> AgentNotesStore.Edit {
         guard let text = operation.text else {
             throw AgentServiceError.invalidInput("Операции \(operation.op) нужно поле text.")
         }
-        let replaces = operation.op == "setNotes"
-        guard replaces || !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        if operation.op == "setNotes" { return .replace(text) }
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw AgentServiceError.invalidInput("note: пустой text. Очистить заметки — setNotes с пустым text.")
         }
-        return NoteWrite(text: text, replaces: replaces)
+        return .append(text)
     }
 
-    private func writeNotes(_ writes: [NoteWrite], projectID: UUID) async throws {
-        for write in writes {
-            if write.replaces {
-                try await notes.replace(projectID, text: write.text)
-            } else {
-                try await notes.append(projectID, text: write.text, at: Date())
-            }
-        }
+    /// Все заметки пачки — одной записью: либо все, либо ни одной.
+    private func writeNotes(_ edits: [AgentNotesStore.Edit], projectID: UUID) async throws {
+        try await notes.apply(projectID, edits, at: Date())
     }
 
     /// `deleteWords` → резы по ленте. Номера слов верны только для той ленты,

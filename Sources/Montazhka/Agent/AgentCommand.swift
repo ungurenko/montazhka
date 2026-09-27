@@ -88,13 +88,19 @@ enum AgentCommand {
             guard let id = value("--project", in: args).flatMap(UUID.init(uuidString:)) else {
                 return .failure(command: "export", code: "INVALID_PROJECT_ID", message: "Укажите --project.")
             }
+            let normalize: Bool?
+            let burn: Bool?
+            do {
+                normalize = try exportFlag(on: "--normalize-loudness", off: "--no-normalize-loudness", in: args)
+                burn = try exportFlag(on: "--burn-subtitles", off: "--no-burn-subtitles", in: args)
+            } catch {
+                return .failure(command: "export", code: "INVALID_INPUT", message: error.localizedDescription)
+            }
             return await service.export(
                 projectID: id, outputPath: value("--output", in: args),
                 quality: value("--quality", in: args) ?? (args.contains("--final") ? "high" : "compact"),
                 final: args.contains("--final"), confirmFinal: args.contains("--confirm-final"),
-                overwrite: args.contains("--overwrite"),
-                normalizeLoudness: args.contains("--no-normalize-loudness") ? false : nil,
-                burnSubtitles: args.contains("--burn-subtitles") ? true : nil)
+                overwrite: args.contains("--overwrite"), normalizeLoudness: normalize, burnSubtitles: burn)
         case "check":
             guard let id = value("--project", in: args).flatMap(UUID.init(uuidString:)) else {
                 return .failure(command: "check", code: "INVALID_PROJECT_ID", message: "Укажите --project.")
@@ -189,6 +195,18 @@ enum AgentCommand {
     private static func value(_ flag: String, in args: [String]) -> String? {
         guard let index = args.firstIndex(of: flag), index + 1 < args.count else { return nil }
         return args[index + 1]
+    }
+
+    /// Разовый параметр экспорта из пары флагов: `on` — true, `off` — false, ни одного — nil
+    /// (как в проекте). Оба сразу — ошибка.
+    static func exportFlag(on: String, off: String, in args: [String]) throws -> Bool? {
+        switch (args.contains(on), args.contains(off)) {
+        case (true, true):
+            throw AgentServiceError.invalidInput("Флаги \(on) и \(off) противоречат друг другу — оставьте один.")
+        case (true, false): return true
+        case (false, true): return false
+        case (false, false): return nil
+        }
     }
 
     private static func number(_ flag: String, in args: [String]) -> Double? {

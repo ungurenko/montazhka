@@ -185,6 +185,36 @@ struct AgentOverlayTests {
         #expect(listed?["timelineStart"] == .null)
     }
 
+    @Test("copies a batch made but the saved project does not use are deleted: cleared in the batch or batch failed")
+    func unusedOverlayCopiesAreDeleted() async throws {
+        let fixture = try await fixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let file = try await straightAlphaOverlay(in: fixture.root)
+        let timeline = await transcriptTimeline(fixture)
+        let overlaysDir = await fixture.service.store.directories.overlays
+        func copies() -> [String] { (try? FileManager.default.contentsOfDirectory(atPath: overlaysDir.path)) ?? [] }
+
+        let cleared = await fixture.service.applyEdits(
+            projectID: fixture.project.id,
+            operations: [addOverlay(file: file, word: 2, timeline: timeline), AgentEditOperation(op: "clearOverlays")])
+
+        #expect(cleared.ok, "\(String(describing: cleared.error))")
+        #expect(copies().isEmpty, "копия, убранная той же пачкой, удалена: \(copies())")
+
+        var missing = AgentEditOperation(op: "removeOverlay")
+        missing.overlay = UUID().uuidString
+        let failed = await fixture.service.applyEdits(
+            projectID: fixture.project.id, operations: [addOverlay(file: file, word: 2, timeline: timeline), missing])
+
+        #expect(!failed.ok)
+        #expect(copies().isEmpty, "копия несохранённой пачки удалена: \(copies())")
+
+        let kept = await fixture.service.applyEdits(
+            projectID: fixture.project.id, operations: [addOverlay(file: file, word: 2, timeline: timeline)])
+        #expect(kept.ok, "\(String(describing: kept.error))")
+        #expect(copies().count == 1, "копия, на которую ссылается проект, на месте")
+    }
+
     @Test("addOverlay on a shorts draft is refused")
     func draftRefusesOverlays() async throws {
         let fixture = try await fixture()

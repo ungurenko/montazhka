@@ -122,6 +122,45 @@ struct AgentNotesTests {
             })
     }
 
+    @Test("several note ops in one batch are saved all together or not at all")
+    func noteBatchIsAllOrNothing() async throws {
+        let fixture = try await fixture(realVideo: false)
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let id = fixture.project.id
+        let tooLong = String(repeating: "а", count: AgentNotesStore.maxCharacters + 1)
+
+        let refused = await fixture.service.applyEdits(projectID: id, operations: [note("первая"), note(tooLong)])
+
+        #expect(!refused.ok)
+        #expect(await fixture.service.inspect(projectID: id).data?["notes"] == .null, "первая заметка не записана")
+
+        // Длина проверяется по итогу пачки: длинный промежуточный текст, сжатый setNotes, проходит.
+        let long = String(repeating: "б", count: AgentNotesStore.maxCharacters - 5)
+        #expect(await fixture.service.applyEdits(projectID: id, operations: [note(long, op: "setNotes")]).ok)
+        let compressed = await fixture.service.applyEdits(
+            projectID: id, operations: [note("ещё решение"), note("сжато", op: "setNotes"), note("итог")])
+        #expect(compressed.ok, "\(String(describing: compressed.error))")
+        let text = try #require(await notesText(fixture))
+        #expect(text.hasPrefix("сжато\n## "))
+        #expect(text.hasSuffix("\nитог"))
+        #expect(!text.contains("ещё решение"))
+    }
+
+    @Test("a mixed batch whose notes do not fit saves the edit, no note, and says notesSaved false")
+    func mixedBatchNotesSavedIsTruthful() async throws {
+        let fixture = try await fixture(realVideo: true)
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let tooLong = String(repeating: "а", count: AgentNotesStore.maxCharacters + 1)
+
+        let response = await fixture.service.applyEdits(
+            projectID: fixture.project.id, operations: [split(at: 1), note("разрезал"), note(tooLong)])
+
+        #expect(response.ok, "\(String(describing: response.error))")
+        #expect(response.data?["clipCount"] == .number(2))
+        #expect(response.data?["notesSaved"] == .bool(false))
+        #expect(await notesText(fixture) == nil, "ни одна заметка пачки не записана")
+    }
+
     @Test("setNotes replaces the notes, an empty text clears them, a note needs text")
     func setNotesReplacesAndClears() async throws {
         let fixture = try await fixture(realVideo: false)
