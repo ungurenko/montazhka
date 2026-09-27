@@ -20,9 +20,11 @@ extension AgentService {
                 sourcePaths: paths,
                 stage: "Подготовка проекта")
             activeRunID = run.id
-            var project = try await makeProject(request: request, paths: paths)
+            let made = try await makeProject(request: request, paths: paths)
+            var project = made.project
+            let original = made.original
             if request.aiMode == .external {
-                return try await prepareExternalEdit(project: project, runID: run.id)
+                return try await prepareExternalEdit(project: project, original: original, runID: run.id)
             }
             if request.aiMode == .builtIn {
                 project = try await applyingSmartEdit(to: project, runID: run.id)
@@ -33,25 +35,28 @@ extension AgentService {
             try applyMusic(request.musicPath, to: &project)
             guard !project.clips.isEmpty else { throw AgentServiceError.emptyProject }
             try await store.save(project)
+            let notesWarning = await copyNotes(from: original, to: project.id)
             let report = try await writeReport(runID: run.id, project: project, profile: request.profile)
             try await runs.update(id: run.id) {
                 $0.status = .completed; $0.progress = 1; $0.stage = "Проект готов"
                 $0.projectID = project.id; $0.summary = "Создана копия проекта с \(project.clips.count) клипами."
+                if let notesWarning { $0.summary? += " " + notesWarning }
                 $0.artifacts["report"] = report.path
             }
-            return .success(
+            let response = AgentResponse.success(
                 command: "edit_video",
                 data: [
                     "jobId": .string(run.id.uuidString), "projectId": .string(project.id.uuidString),
                     "status": .string("completed"), "report": .string("montazhka://runs/\(run.id.uuidString)/report"),
                 ])
+            return notesWarning.map(response.addingWarning) ?? response
         } catch {
             if let activeRunID { await failRun(id: activeRunID, error: error) }
             return failure("edit_video", error)
         }
     }
 
-    private func prepareExternalEdit(project: Project, runID: UUID) async throws -> AgentResponse {
+    private func prepareExternalEdit(project: Project, original: Project?, runID: UUID) async throws -> AgentResponse {
         let transcriptStore = makeTranscriptStore()
         var seen = Set<UUID>()
         let sources = project.clips.compactMap { clip in
@@ -69,6 +74,7 @@ extension AgentService {
         }
         guard !words.isEmpty else { throw SmartEditError.emptyTranscript }
         try await store.save(project)
+        let notesWarning = await copyNotes(from: original, to: project.id)
         let directory = try await runs.artifactDirectory(id: runID)
         let transcriptURL = directory.appendingPathComponent("transcript.json")
         try JSONEncoder().encode(TranscriptDocument(words: words)).write(
@@ -79,9 +85,10 @@ extension AgentService {
             $0.stage = "Ожидаются точные резы"
             $0.projectID = project.id
             $0.summary = "Расшифровка готова. Передайте резы в montazhka_edit_project."
+            if let notesWarning { $0.summary? += " " + notesWarning }
             $0.artifacts["transcript"] = transcriptURL.path
         }
-        return .success(
+        let response = AgentResponse.success(
             command: "edit_video",
             data: [
                 "jobId": .string(runID.uuidString),
@@ -89,6 +96,21 @@ extension AgentService {
                 "status": .string(AgentRunStatus.waitingForApproval.rawValue),
                 "transcript": .string("montazhka://runs/\(runID.uuidString)/transcript"),
             ])
+        return notesWarning.map(response.addingWarning) ?? response
+    }
+
+    /// Копия проекта получает копию заметок под заголовком об источнике. Копия уже
+    /// сохранена, поэтому сбой не отменяет её — возвращается текст предупреждения.
+    private func copyNotes(from original: Project?, to copyID: UUID) async -> String? {
+        guard let original else { return nil }
+        do {
+            try await notes.copy(
+                from: original.id, to: copyID,
+                header: "Копия проекта «\(original.name)» (\(original.id.uuidString))")
+            return nil
+        } catch {
+            return "Заметки проекта не скопированы: \(error.localizedDescription)"
+        }
     }
 
     private func applyingSmartEdit(to project: Project, runID: UUID) async throws -> Project {
@@ -156,18 +178,23 @@ extension AgentService {
             enabled: true, customMedia: MediaReference(path: path), volume: 18)
     }
 
-    private func makeProject(request: AgentEditRequest, paths: [String]) async throws -> Project {
+    /// Новый проект из файлов или копия проекта `request.projectID`; `original` — проект,
+    /// с которого снята копия (nil для проекта из файлов).
+    private func makeProject(
+        request: AgentEditRequest, paths: [String]
+    ) async throws -> (project: Project, original: Project?) {
         if let id = request.projectID {
             let lock = try AgentProjectLock(projectID: id, directory: store.projectsDir)
             defer { withExtendedLifetime(lock) {} }
-            var source = try await store.load(id: id)
+            let original = try await store.load(id: id)
+            var source = original
             source.id = UUID(); source.name = request.name ?? "\(source.name) — AI-черновик"
             source.createdAt = Date(); source.updatedAt = Date()
             // У копии черновика шортса свой MP4: иначе её экспорт перезаписал бы ролик оригинала.
             if let path = source.shorts?.exportPath {
                 source.shorts?.exportPath = ShortsExporter.copyURL(for: URL(fileURLWithPath: path)).path
             }
-            return source
+            return (source, original)
         }
         guard !paths.isEmpty else {
             throw AgentServiceError.invalidInput("Нужен projectId или хотя бы один sourcePath.")
@@ -180,7 +207,7 @@ extension AgentService {
             }
             clips.append(Clip(sourcePath: path, start: 0, end: duration))
         }
-        return Project(name: request.name ?? ProjectStore.defaultProjectName(), clips: clips)
+        return (Project(name: request.name ?? ProjectStore.defaultProjectName(), clips: clips), nil)
     }
 
     private func removePauses(from project: Project, profile: AgentEditProfile) async -> Project {

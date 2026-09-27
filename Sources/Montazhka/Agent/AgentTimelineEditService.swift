@@ -33,6 +33,8 @@ struct AgentEditOperation: Codable, Sendable {
 
     var isUndo: Bool { op == "undo" }
     var isWordDelete: Bool { op == "deleteWords" }
+    /// `note{text}` дописывает заметку проекта, `setNotes{text}` переписывает их целиком.
+    var isNoteOp: Bool { op == "note" || op == "setNotes" }
     /// Операции, которые меняют не ленту, а текст расшифровки или оформление.
     var isProjectOp: Bool { op == "fixWords" || Self.draftOps.contains(op) }
     static let draftOps: Set<String> = ["setHook", "setLayout", "setSubtitles", "zoom", "clearZooms", "setMusic"]
@@ -106,9 +108,19 @@ extension AgentService {
                 return try await editResponse(project, warnings: [])
             }
 
+            // Заметки не входят в ленту: пачка из одних заметок не сохраняет проект,
+            // не пишет ревизию и не требует доступных исходников.
+            let noteOps = try operations.filter(\.isNoteOp).map(Self.noteWrite)
+            if noteOps.count == operations.count {
+                try await writeNotes(noteOps, projectID: projectID)
+                return try await editResponse(project, warnings: [], notesSaved: true)
+            }
+
             // Правки по словам превращаются в delete по ходу пачки: номера слов
             // считаются по ленте на момент операции. Остальные проверяем сразу.
-            let prepared = try operations.map { $0.isWordDelete || $0.isProjectOp ? nil : try $0.timelineOp() }
+            let prepared = try operations.map {
+                $0.isWordDelete || $0.isProjectOp || $0.isNoteOp ? nil : try $0.timelineOp()
+            }
             var durations: [String: Double] = [:]
             let paths = Set(project.clips.map(\.sourcePath)).union(
                 prepared.compactMap {
@@ -129,6 +141,7 @@ extension AgentService {
             let previousIDs = Set(project.clips.map(\.id))
             var clips = project.clips
             for (index, operation) in operations.enumerated() {
+                if operation.isNoteOp { continue }
                 if operation.op == "fixWords" {
                     try await fixWords(operation, clips: clips)
                     continue
@@ -168,8 +181,48 @@ extension AgentService {
             if transcriptWords == nil {
                 warnings.append("Расшифровки нет в кэше — резы посреди слов не проверялись.")
             }
-            return try await editResponse(project, warnings: warnings)
+            // Лента уже сохранена: сбой заметки не отменяет правку, а только предупреждает.
+            var notesSaved: Bool?
+            if !noteOps.isEmpty {
+                do {
+                    try await writeNotes(noteOps, projectID: projectID)
+                    notesSaved = true
+                } catch {
+                    notesSaved = false
+                    warnings.append("Заметка не записана: \(error.localizedDescription)")
+                }
+            }
+            return try await editResponse(project, warnings: warnings, notesSaved: notesSaved)
         } catch { return failure("apply_edits", error) }
+    }
+
+    /// Запись заметки: дописать (`note`) или переписать целиком (`setNotes`).
+    private struct NoteWrite: Sendable {
+        let text: String
+        let replaces: Bool
+    }
+
+    /// Проверяет операцию заметки до любых изменений: у `note` нужен непустой текст,
+    /// у `setNotes` — поле text (пустое очищает заметки).
+    private static func noteWrite(_ operation: AgentEditOperation) throws -> NoteWrite {
+        guard let text = operation.text else {
+            throw AgentServiceError.invalidInput("Операции \(operation.op) нужно поле text.")
+        }
+        let replaces = operation.op == "setNotes"
+        guard replaces || !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw AgentServiceError.invalidInput("note: пустой text. Очистить заметки — setNotes с пустым text.")
+        }
+        return NoteWrite(text: text, replaces: replaces)
+    }
+
+    private func writeNotes(_ writes: [NoteWrite], projectID: UUID) async throws {
+        for write in writes {
+            if write.replaces {
+                try await notes.replace(projectID, text: write.text)
+            } else {
+                try await notes.append(projectID, text: write.text, at: Date())
+            }
+        }
     }
 
     /// `deleteWords` → резы по ленте. Номера слов верны только для той ленты,
@@ -314,7 +367,10 @@ extension AgentService {
             })
     }
 
-    private func editResponse(_ project: Project, warnings: [String]) async throws -> AgentResponse {
+    /// `notesSaved` — только у пачки с заметками: записались ли они.
+    private func editResponse(
+        _ project: Project, warnings: [String], notesSaved: Bool? = nil
+    ) async throws -> AgentResponse {
         let shown = min(Self.editResponseClips, project.clips.count)
         var data: [String: AgentJSONValue] = [
             "projectId": .string(project.id.uuidString),
@@ -325,6 +381,7 @@ extension AgentService {
             "clips": clipsData(project, limit: shown),
             "warnings": .array(warnings.map { .string($0) }),
         ]
+        if let notesSaved { data["notesSaved"] = .bool(notesSaved) }
         if project.shorts != nil { data["shorts"] = Self.shortsData(project) }
         if shown < project.clips.count {
             data["more"] = .string("Показаны первые \(shown) клипов. Остальные — montazhka_inspect с offset=\(shown).")

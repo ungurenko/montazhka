@@ -107,13 +107,12 @@ enum AgentCommand {
                 return .failure(command: "make_shorts", code: "INVALID_REQUEST", message: error.localizedDescription)
             }
         case "transcript":
-            guard let id = value("--project", in: args).flatMap(UUID.init(uuidString:)) else {
-                return .failure(command: "transcript", code: "INVALID_PROJECT_ID", message: "Укажите --project.")
-            }
             return await service.transcriptOrStartJob(
-                projectID: id, from: number("--from", in: args), to: number("--to", in: args),
-                query: value("--query", in: args),
-                confirmModelDownload: args.contains("--confirm-model-download"))
+                AgentTranscriptRequest(
+                    target: target(args), from: number("--from", in: args), to: number("--to", in: args),
+                    query: value("--query", in: args), phrases: args.contains("--phrases"),
+                    retakes: args.contains("--retakes"),
+                    confirmModelDownload: args.contains("--confirm-model-download")))
         case "frames":
             return await service.frames(
                 AgentFramesRequest(
@@ -337,13 +336,13 @@ private struct AgentMCPServer {
                 return .failure(command: "make_shorts", code: "JOB_START_FAILED", message: error.localizedDescription)
             }
         case "montazhka_transcript":
-            guard let id = arguments["projectId"]?.stringValue.flatMap(UUID.init(uuidString:)) else {
-                return .failure(command: "transcript", code: "INVALID_PROJECT_ID", message: "Нужен projectId.")
-            }
             return await service.transcriptOrStartJob(
-                projectID: id, from: Self.double(arguments["from"]), to: Self.double(arguments["to"]),
-                query: arguments["query"]?.stringValue,
-                confirmModelDownload: arguments["confirmModelDownload"]?.boolValue ?? false)
+                AgentTranscriptRequest(
+                    target: Self.target(arguments), from: Self.double(arguments["from"]),
+                    to: Self.double(arguments["to"]), query: arguments["query"]?.stringValue,
+                    phrases: arguments["phrases"]?.boolValue ?? false,
+                    retakes: arguments["retakes"]?.boolValue ?? false,
+                    confirmModelDownload: arguments["confirmModelDownload"]?.boolValue ?? false))
         case "montazhka_frames":
             return await service.frames(
                 AgentFramesRequest(
@@ -447,6 +446,12 @@ enum AgentDocumentation {
         сам дождётся смены этапа. Большие материалы — `montazhka://runs/{jobId}/{artifact}`.
         Поле `warnings` в ответе читайте всегда: там, например, просьба перезапустить сессию.
 
+        ## Заметки проекта
+        Пользователь их не видит. В начале работы прочитайте `notes` в `montazhka_inspect`; в конце сессии
+        допишите `{"op":"note","text":"…"}` (`montazhka_apply_edits`): бриф пользователя, стратегия, решения,
+        просьбы, что осталось. `setNotes` переписывает целиком, когда пора сжать (лимит 20 000 знаков).
+        `undo` заметки не откатывает, копия проекта получает их копию.
+
         ## Самостоятельный монтаж
         Все инструменты ниже работают во времени ленты проекта (секунды итогового ролика).
         1. `montazhka_edit_video` (паузы убраны) → `montazhka_inspect`: клипы с номерами и временем
@@ -475,6 +480,14 @@ enum AgentDocumentation {
         Термины, которые распознавание пишет по-русски («клод код», «чат ГПТ»), исправляет словарь.
         Остальные ошибки чините `{"op":"fixWords","words":[{"from":12,"to":13}],"timeline":"…","text":"Cursor",
         "remember":true}`: номера слов не сдвигаются, `remember` запоминает замену навсегда.
+
+        ## Дубли
+        `montazhka_transcript retakes=true` находит соседние похожие фразы: `restart` — оборванное начало,
+        `repeat` — фраза сказана заново. Это кандидаты; какой дубль оставить, решаете вы: обычно последний целый,
+        без запинок; сомневаетесь — послушайте `montazhka_audio` и посмотрите `frames`. Лишние дубли режьте одним
+        `deleteWords`: `from`/`to` дубля — номера слов. `phrases=true` показывает расшифровку фразами
+        `¶номер #первое–#последнее начало конец текст`. Дубли в разных файлах:
+        `edit_video sourcePaths=[…] removePauses=false` или `transcript filePath=` + `insert`.
 
         ## Шортсы и Reels
         Моменты выбираете вы сами — встроенный платный отбор не вызывается.
@@ -519,6 +532,9 @@ enum AgentDocumentation {
         ---
         # Монтажка
         Сначала вызови `montazhka_doctor` и прочитай ресурс `montazhka://guide` — там полный порядок монтажа.
+        В начале работы с проектом прочитай его заметки (`notes` в `montazhka_inspect`), в конце сессии допиши
+        бриф, решения и что осталось операцией `note` в `montazhka_apply_edits`.
+        Дубли ищи через `montazhka_transcript retakes=true` — это кандидаты, какой дубль оставить, решаешь сам.
         Для обычной речи используй профиль `clean-speech`, для энергичного ролика — `dynamic`.
         Шортсы и Reels: моменты выбираешь сам по расшифровке, показываешь пользователю список и спрашиваешь про
         субтитры, потом `montazhka_make_shorts` — порядок в разделе «Шортсы и Reels» гайда.

@@ -18,6 +18,30 @@ struct AgentFramesRequest: Sendable {
     var aroundCuts = false
 }
 
+/// Запрос `montazhka_transcript`: ровно одно из `target.projectID` (время ленты)
+/// и `target.filePath` (любой файл, время файла).
+struct AgentTranscriptRequest: Sendable {
+    var target: AgentMediaTarget
+    var from: Double?
+    var to: Double?
+    var query: String?
+    /// Строки фраз вместо строк слов.
+    var phrases = false
+    /// Подсказки о дублях по всей расшифровке, а не только по странице.
+    var retakes = false
+    var confirmModelDownload = false
+}
+
+/// Слова, которые показывает transcript, и то, что нужно для их вывода.
+private struct TranscriptView {
+    let words: [MappedTranscriptWord]
+    let clips: [Clip]
+    let thresholdDB: Double
+    /// Чьи слова: projectId и отпечаток ленты или filePath и `timeBase=file`.
+    let identity: [String: AgentJSONValue]
+    let timeUnit: String
+}
+
 extension AgentService {
     static let transcriptPageWords = 1500
 
@@ -158,82 +182,173 @@ extension AgentService {
         }
     }
 
-    func transcript(projectID: UUID, from: Double?, to: Double?, query: String? = nil) async -> AgentResponse {
+    /// Расшифровка из кэша: страница слов или фраз, поиск `query`, дубли `retakes`.
+    /// Нет расшифровки — `TRANSCRIPT_NOT_READY` (её запускает `transcriptOrStartJob`).
+    func transcript(_ request: AgentTranscriptRequest) async -> AgentResponse {
+        guard (request.target.projectID == nil) != (request.target.filePath == nil) else {
+            return .failure(
+                command: "transcript", code: "INVALID_INPUT",
+                message: "Передайте ровно одно: projectId (проект) или filePath (любой файл).")
+        }
         do {
-            let project = try await store.load(id: projectID)
-            guard let map = try await cachedTimelineTranscript(for: project) else {
+            guard let view = try await transcriptView(request.target) else {
                 return .failure(
                     command: "transcript", code: "TRANSCRIPT_NOT_READY",
-                    message: "Расшифровка этого проекта ещё не готова.",
+                    message:
+                        "Расшифровка этого \(request.target.projectID == nil ? "файла" : "проекта") ещё не готова.",
                     recovery: "montazhka_transcript сам запускает её в фоне; дождитесь задачи в montazhka_get_job.")
             }
-            let timeline = AgentWordCuts.fingerprint(project.clips)
-            if let query, !query.trimmingCharacters(in: .whitespaces).isEmpty {
-                return transcriptSearch(query, map: map, projectID: project.id, timeline: timeline)
+            var data = view.identity
+            if let query = request.query, !query.trimmingCharacters(in: .whitespaces).isEmpty {
+                data.merge(Self.transcriptSearch(query, words: view.words)) { _, new in new }
+            } else {
+                let page = await transcriptPage(view, from: request.from, to: request.to, phrases: request.phrases)
+                data.merge(page) { _, new in new }
             }
-            let lower = from ?? 0
-            let upper = to ?? project.totalDuration
-            let inRange = map.words.enumerated().filter {
-                $0.element.timelineEnd > lower && $0.element.timelineStart < upper
-            }
-            let page = inRange.prefix(Self.transcriptPageWords)
-            var peaksBySource: [UUID: [Float]] = [:]
-            for clip in project.clips where peaksBySource[clip.source.id] == nil {
-                peaksBySource[clip.source.id] = await waveforms.ensure(path: clip.sourcePath)
-            }
-            var lines: [String] = []
-            var previous: MappedTranscriptWord?
-            for (number, word) in page {
-                if let previous {
-                    if previous.clipID != word.clipID {
-                        lines.append("--- склейка \(Self.format(word.timelineStart)) ---")
-                    }
-                    let gap = word.timelineStart - previous.timelineEnd
-                    let hum =
-                        previous.clipID == word.clipID
-                        ? peaksBySource[word.sourceID].flatMap {
-                            FillerDetector.voicedSpan(
-                                from: previous.sourceEnd, to: word.sourceStart, peaks: $0,
-                                thresholdDB: project.detection.thresholdDB)
-                        } : nil
-                    if let hum {
-                        // Звук без слов: скорее всего «эээ». Время — на ленте.
-                        let shift = word.timelineStart - word.sourceStart
-                        lines.append(
-                            "--- звук без слов \(Self.format(hum.lowerBound + shift))–\(Self.format(hum.upperBound + shift)) ---"
-                        )
-                    } else if gap >= 0.4 {
-                        lines.append("--- пауза \(String(format: "%.1f", gap)) с ---")
-                    }
-                }
-                // Пустое слово — хвост исправленного термина («клод код» → «Claude Code»).
-                let text = word.text.isEmpty ? "·" : word.text
-                lines.append(
-                    "#\(number + 1) \(Self.format(word.timelineStart)) \(Self.format(word.timelineEnd)) \(text)")
-                previous = word
-            }
-            let next = inRange.count > page.count ? inRange[page.count].element.timelineStart : nil
-            return .success(
-                command: "transcript",
-                data: [
-                    "projectId": .string(project.id.uuidString),
-                    "format": "#номер начало конец слово (секунды ленты)",
-                    "timeline": .string(timeline),
-                    "wordCount": .number(Double(page.count)),
-                    "text": .string(lines.joined(separator: "\n")),
-                    "nextFrom": next.map { .number(Self.rounded($0)) } ?? .null,
-                ])
+            if request.retakes { data["retakes"] = Self.retakesData(view.words) }
+            return .success(command: "transcript", data: data)
         } catch { return failure("transcript", error) }
+    }
+
+    /// Слова проекта во времени ленты или слова файла во времени файла; nil — расшифровки нет в кэше.
+    private func transcriptView(_ target: AgentMediaTarget) async throws -> TranscriptView? {
+        if let projectID = target.projectID {
+            let project = try await store.load(id: projectID)
+            guard let map = try await cachedTimelineTranscript(for: project) else { return nil }
+            return TranscriptView(
+                words: map.words, clips: project.clips, thresholdDB: project.detection.thresholdDB,
+                identity: [
+                    "projectId": .string(project.id.uuidString),
+                    "timeline": .string(AgentWordCuts.fingerprint(project.clips)),
+                ],
+                timeUnit: "секунды ленты")
+        }
+        let path = Self.transcriptFilePath(target)
+        guard FileManager.default.fileExists(atPath: path) else { throw AgentServiceError.missingFile(path) }
+        let media = MediaReference(path: path)
+        guard
+            let words = try await makeTranscriptStore().correctedCachedWords(
+                for: [media], glossaryURL: store.glossaryURL)
+        else { return nil }
+        // Один клип на весь файл: время «ленты» совпадает со временем файла, склеек нет.
+        let clip = Clip(source: media, start: 0, end: words.map(\.end).max() ?? 0)
+        return TranscriptView(
+            words: TranscriptTimelineMapper.make(clips: [clip], transcripts: words).words, clips: [clip],
+            thresholdDB: DetectionSettings().thresholdDB,
+            identity: ["filePath": .string(path), "timeBase": "file"], timeUnit: "секунды файла")
+    }
+
+    /// Путь файла для расшифровки. Один и тот же и для чтения, и для фоновой задачи:
+    /// кэш расшифровки ищется по пути.
+    private static func transcriptFilePath(_ target: AgentMediaTarget) -> String {
+        URL(fileURLWithPath: target.filePath ?? "").standardized.path
+    }
+
+    /// Страница до `transcriptPageWords` слов в `from…to`: строки слов или строки фраз.
+    private func transcriptPage(
+        _ view: TranscriptView, from: Double?, to: Double?, phrases: Bool
+    ) async -> [String: AgentJSONValue] {
+        let lower = from ?? 0
+        let upper = to ?? .infinity
+        let inRange = view.words.enumerated().filter {
+            $0.element.timelineEnd > lower && $0.element.timelineStart < upper
+        }
+        let page = Array(inRange.prefix(Self.transcriptPageWords))
+        let lines = phrases ? Self.phraseLines(page, words: view.words) : await wordLines(page, view: view)
+        let next = inRange.count > page.count ? inRange[page.count].element.timelineStart : nil
+        return [
+            "format": .string(
+                phrases
+                    ? "¶фраза #первое–#последнее начало конец текст (\(view.timeUnit))"
+                    : "#номер начало конец слово (\(view.timeUnit))"),
+            "wordCount": .number(Double(page.count)),
+            "text": .string(lines.joined(separator: "\n")),
+            "nextFrom": next.map { .number(Self.rounded($0)) } ?? .null,
+        ]
+    }
+
+    /// Строки `#номер начало конец слово` с отметками склеек, пауз и звука без слов.
+    private func wordLines(
+        _ page: [(offset: Int, element: MappedTranscriptWord)], view: TranscriptView
+    ) async -> [String] {
+        var peaksBySource: [UUID: [Float]] = [:]
+        for clip in view.clips where peaksBySource[clip.source.id] == nil {
+            peaksBySource[clip.source.id] = await waveforms.ensure(path: clip.sourcePath)
+        }
+        var lines: [String] = []
+        var previous: MappedTranscriptWord?
+        for (number, word) in page {
+            if let previous {
+                if previous.clipID != word.clipID {
+                    lines.append("--- склейка \(Self.format(word.timelineStart)) ---")
+                }
+                let gap = word.timelineStart - previous.timelineEnd
+                let hum =
+                    previous.clipID == word.clipID
+                    ? peaksBySource[word.sourceID].flatMap {
+                        FillerDetector.voicedSpan(
+                            from: previous.sourceEnd, to: word.sourceStart, peaks: $0,
+                            thresholdDB: view.thresholdDB)
+                    } : nil
+                if let hum {
+                    // Звук без слов: скорее всего «эээ». Время — на ленте.
+                    let shift = word.timelineStart - word.sourceStart
+                    lines.append(
+                        "--- звук без слов \(Self.format(hum.lowerBound + shift))–\(Self.format(hum.upperBound + shift)) ---"
+                    )
+                } else if gap >= 0.4 {
+                    lines.append("--- пауза \(String(format: "%.1f", gap)) с ---")
+                }
+            }
+            // Пустое слово — хвост исправленного термина («клод код» → «Claude Code»).
+            let text = word.text.isEmpty ? "·" : word.text
+            lines.append(
+                "#\(number + 1) \(Self.format(word.timelineStart)) \(Self.format(word.timelineEnd)) \(text)")
+            previous = word
+        }
+        return lines
+    }
+
+    /// Фразы, задетые страницей, целиком: `¶номер #первое–#последнее начало конец текст`.
+    /// Номера с 1, как у слов: `#первое`–`#последнее` сразу годятся для deleteWords.
+    private static func phraseLines(
+        _ page: [(offset: Int, element: MappedTranscriptWord)], words: [MappedTranscriptWord]
+    ) -> [String] {
+        guard let first = page.first?.offset, let last = page.last?.offset else { return [] }
+        return RetakeFinder.phrases(words).filter { $0.lastWord >= first && $0.firstWord <= last }.map {
+            "¶\($0.index + 1) #\($0.firstWord + 1)–#\($0.lastWord + 1) \(format($0.start)) \(format($0.end)) \($0.text)"
+        }
+    }
+
+    /// Вероятные дубли по всей расшифровке. `RetakeFinder` считает с 0, агент — с 1:
+    /// `from`/`to` дубля — номера слов для deleteWords, `phrase` — номер строки `¶`.
+    static func retakesData(_ words: [MappedTranscriptWord]) -> AgentJSONValue {
+        let phrases = RetakeFinder.phrases(words)
+        return .array(
+            RetakeFinder.retakes(phrases, words: words).map { group in
+                .object([
+                    "kind": .string(group.kind.rawValue),
+                    "similarity": .number((group.similarity * 100).rounded() / 100),
+                    "takes": .array(
+                        group.phrases.map { index in
+                            let phrase = phrases[index]
+                            return .object([
+                                "phrase": .number(Double(phrase.index + 1)),
+                                "from": .number(Double(phrase.firstWord + 1)),
+                                "to": .number(Double(phrase.lastWord + 1)),
+                                "start": .number(rounded(phrase.start)), "end": .number(rounded(phrase.end)),
+                                "text": .string(phrase.text),
+                            ])
+                        }),
+                ])
+            })
     }
 
     static let searchMatchLimit = 30
     private static let searchContextWords = 6
 
-    /// Где в ролике звучит фраза: номера слов для deleteWords, время ленты и контекст.
-    private func transcriptSearch(
-        _ query: String, map: TranscriptTimelineMap, projectID: UUID, timeline: String
-    ) -> AgentResponse {
-        let words = map.words
+    /// Где звучит фраза: номера слов для deleteWords, время и контекст.
+    private static func transcriptSearch(_ query: String, words: [MappedTranscriptWord]) -> [String: AgentJSONValue] {
         let found = TranscriptSearch.matches(of: query, in: words.map(\.text))
         let matches = found.prefix(Self.searchMatchLimit).map { range -> AgentJSONValue in
             let before = words[max(0, range.lowerBound - Self.searchContextWords)..<range.lowerBound].map(\.text)
@@ -247,27 +362,27 @@ extension AgentService {
                 "text": .string((before + ["[\(hit)]"] + after).joined(separator: " ")),
             ])
         }
-        return .success(
-            command: "transcript",
-            data: [
-                "projectId": .string(projectID.uuidString), "query": .string(query),
-                "timeline": .string(timeline), "matchCount": .number(Double(found.count)),
-                "matches": .array(Array(matches)),
-            ])
+        return [
+            "query": .string(query), "matchCount": .number(Double(found.count)),
+            "matches": .array(Array(matches)),
+        ]
     }
 
     /// Точка входа инструмента: готовая расшифровка сразу, иначе фоновая задача.
     /// Расшифровка длинного ролика идёт минутами — дольше, чем живёт один вызов.
-    func transcriptOrStartJob(
-        projectID: UUID, from: Double?, to: Double?, query: String? = nil, confirmModelDownload: Bool
-    ) async -> AgentResponse {
-        let response = await transcript(projectID: projectID, from: from, to: to, query: query)
+    func transcriptOrStartJob(_ request: AgentTranscriptRequest) async -> AgentResponse {
+        let response = await transcript(request)
         guard response.error?.code == "TRANSCRIPT_NOT_READY" else { return response }
-        if let refusal = await refusalIfModelNeedsDownload(command: "transcript", confirmed: confirmModelDownload) {
+        if let refusal = await refusalIfModelNeedsDownload(
+            command: "transcript", confirmed: request.confirmModelDownload)
+        {
             return refusal
         }
+        let job: AgentWorkerRequest =
+            request.target.projectID.map { .transcribe(projectID: $0) }
+            ?? .transcribeFile(path: Self.transcriptFilePath(request.target))
         do {
-            let started = try await AgentBackgroundJob.submit(.transcribe(projectID: projectID))
+            let started = try await startJob(job)
             var data = started.data ?? [:]
             data["next"] = "Дождитесь status=completed в montazhka_get_job и вызовите montazhka_transcript снова."
             return .success(command: "transcript", data: data)
@@ -308,11 +423,33 @@ extension AgentService {
         }
     }
 
-    /// Фоновая часть расшифровки любого файла. Пока не готова.
+    /// Фоновая часть расшифровки любого файла (не проекта): распознать и сохранить в кэш.
     func transcribeFile(path: String, runMode: AgentRunMode) async -> AgentResponse {
-        .failure(
-            command: "transcribe", code: "NOT_IMPLEMENTED",
-            message: "Расшифровка отдельного файла ещё не реализована: \(path)")
+        var activeRunID: UUID?
+        do {
+            let run = try await beginRun(mode: runMode, kind: .transcribe, sourcePaths: [path], stage: "Расшифровка")
+            activeRunID = run.id
+            guard FileManager.default.fileExists(atPath: path) else { throw AgentServiceError.missingFile(path) }
+            let source = MediaReference(path: path)
+            let transcriptStore = makeTranscriptStore()
+            _ = try await transcriptStore.ensure(source: source)
+            // Словарь терминов и ручные исправления — так же, как у расшифровки проекта.
+            let words =
+                try await transcriptStore.correctedCachedWords(for: [source], glossaryURL: store.glossaryURL) ?? []
+            try await runs.update(id: run.id) {
+                $0.status = .completed; $0.progress = 1; $0.stage = "Расшифровка готова"
+                $0.summary = "Слов: \(words.count). Вызовите montazhka_transcript с filePath ещё раз."
+            }
+            return .success(
+                command: "transcribe",
+                data: [
+                    "jobId": .string(run.id.uuidString), "status": .string("completed"),
+                    "wordCount": .number(Double(words.count)),
+                ])
+        } catch {
+            if let activeRunID { await failRun(id: activeRunID, error: error) }
+            return failure("transcribe", error)
+        }
     }
 
     func uniqueSources(_ clips: [Clip]) -> [MediaReference] {

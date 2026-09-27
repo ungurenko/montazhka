@@ -120,11 +120,17 @@ private struct AgentResourcePage: Encodable {
     let nextUri: String?
 }
 
+/// Запуск фоновой задачи отдельным процессом; тесты подменяют его, чтобы не запускать расшифровку.
+typealias AgentJobStarter = @Sendable (AgentWorkerRequest) async throws -> AgentResponse
+
 actor AgentService {
     let store: ProjectStore
     let runs: AgentRunStore
     let waveforms: WaveformStore
     let revisions: AgentRevisionStore
+    /// Заметки агента о проектах; в ревизии не входят, поэтому `undo` их не трогает.
+    let notes: AgentNotesStore
+    let startJob: AgentJobStarter
 
     var transcriptionModelsDirectory: URL {
         AgentModelLocator.findCompatibleModel()?.deletingLastPathComponent() ?? store.modelsDir
@@ -148,7 +154,10 @@ actor AgentService {
             recovery: "Повторите вызов с confirmModelDownload=true.")
     }
 
-    init(baseDirectory: URL? = nil) {
+    init(
+        baseDirectory: URL? = nil,
+        startJob: @escaping AgentJobStarter = { try await AgentBackgroundJob.submit($0) }
+    ) {
         store = ProjectStore(baseDirectory: baseDirectory)
         let base =
             baseDirectory
@@ -157,6 +166,8 @@ actor AgentService {
         runs = AgentRunStore(baseDirectory: base.appendingPathComponent("AgentRuns", isDirectory: true))
         waveforms = WaveformStore(cacheDir: store.waveformsDir)
         revisions = AgentRevisionStore(baseDirectory: base.appendingPathComponent("AgentRevisions", isDirectory: true))
+        notes = AgentNotesStore(baseDirectory: base.appendingPathComponent("AgentNotes", isDirectory: true))
+        self.startJob = startJob
     }
 
     func doctor() async -> AgentResponse {
@@ -266,6 +277,7 @@ actor AgentService {
                             ])
                         }),
                     "shorts": Self.shortsData(project),
+                    "notes": await notes.read(project.id).map { .string($0) } ?? .null,
                 ])
         } catch { return failure("inspect", error) }
     }

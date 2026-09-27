@@ -90,7 +90,8 @@ struct TranscriptCorrectionTests {
         let response = await service.applyEdits(projectID: project.id, operations: [fix])
         #expect(response.ok, "\(String(describing: response.error))")
 
-        let transcript = await service.transcript(projectID: project.id, from: nil, to: nil)
+        let transcript = await service.transcript(
+            AgentTranscriptRequest(target: AgentMediaTarget(projectID: project.id)))
         guard case .string(let text)? = transcript.data?["text"] else {
             Issue.record("нет текста расшифровки: \(String(describing: transcript.data))")
             return

@@ -33,6 +33,32 @@ struct AgentContractTests {
         #expect(editProject.isDestructive)
     }
 
+    @Test("transcript takes a project or any file with phrases and retakes; notes ops are listed")
+    func transcriptAndNotesContract() throws {
+        let tools = AgentToolCatalog.definitions
+        let transcript = try #require(tools.first { $0.name == "montazhka_transcript" })
+        #expect(transcript.inputSchema["required"] == .array([]))
+        guard case .object(let properties)? = transcript.inputSchema["properties"] else {
+            Issue.record("у transcript нет properties")
+            return
+        }
+        for key in ["projectId", "filePath", "phrases", "retakes"] {
+            #expect(properties[key] != nil, "transcript без поля \(key)")
+        }
+        let edits = try #require(tools.first { $0.name == "montazhka_apply_edits" })
+        let encoded = String(decoding: try JSONEncoder().encode(edits.inputSchema), as: UTF8.self)
+        #expect(encoded.contains("\"setNotes\"") && encoded.contains("\"note\""))
+
+        let guide = AgentDocumentation.guide
+        for phrase in [
+            "## Заметки проекта", "## Дубли", #"{"op":"note","text":"#, "setNotes", "retakes=true", "filePath",
+        ] {
+            #expect(guide.contains(phrase), "в гайде нет «\(phrase)»")
+        }
+        #expect(AgentDocumentation.skill.contains("notes"))
+        #expect(AgentDocumentation.skill.contains("retakes"))
+    }
+
     @Test("Agent runs survive a new store instance")
     func runPersistence() async throws {
         let root = FileManager.default.temporaryDirectory
