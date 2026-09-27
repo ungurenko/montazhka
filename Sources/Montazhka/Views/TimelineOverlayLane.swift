@@ -55,7 +55,6 @@ private struct OverlayCapsule: View {
                 .frame(width: width, height: TimelineOverlayLane.height)
         }
         .buttonStyle(OverlayCapsuleStyle())
-        .offset(x: CGFloat(start) * pps)
         .help(description)
         .contextMenu {
             Button("Удалить анимацию", role: .destructive) { onRemove(resolved.overlay.id) }
@@ -63,6 +62,8 @@ private struct OverlayCapsule: View {
         .accessibilityLabel(description)
         .accessibilityHint("Активируй, чтобы перейти к началу анимации")
         .accessibilityAction(named: "Удалить анимацию") { onRemove(resolved.overlay.id) }
+        // Сдвиг последним: подсказка и правый клик живут на самой капсуле, как у клипов.
+        .offset(x: CGFloat(start) * pps)
     }
 }
 
