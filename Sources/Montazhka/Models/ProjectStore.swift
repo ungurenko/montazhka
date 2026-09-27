@@ -114,6 +114,7 @@ final class ProjectStore: ProjectRepository, Sendable {
             try FileManager.default.createDirectory(at: transcriptsDir, withIntermediateDirectories: true)
             try FileManager.default.createDirectory(at: modelsDir, withIntermediateDirectories: true)
             try FileManager.default.createDirectory(at: shortsAnalysisDir, withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(at: directories.overlays, withIntermediateDirectories: true)
         } catch {
             throw ProjectStoreError.prepareDirectory(String(reflecting: error))
         }

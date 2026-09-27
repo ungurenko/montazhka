@@ -18,6 +18,8 @@ extension ProjectDirectories {
     var glossary: URL { base.appendingPathComponent("glossary.json") }
     /// Кэш найденных лиц для черновиков шортсов.
     var faceTracks: URL { base.appendingPathComponent("FaceTracks", isDirectory: true) }
+    /// Файлы анимаций поверх видео (например, из HyperFrames).
+    var overlays: URL { base.appendingPathComponent("Overlays", isDirectory: true) }
 }
 
 /// Единственная точка доступа к проектам. Все операции одного адаптера выполняются
