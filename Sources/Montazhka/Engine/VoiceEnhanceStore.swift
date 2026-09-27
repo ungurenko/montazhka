@@ -73,6 +73,7 @@ actor VoiceEnhanceStore {
                 throw CocoaError(.fileWriteUnknown, userInfo: [NSFilePathErrorKey: url.path])
             }
             Self.evictOldVariants(dir: dir, sourceHash: sourceHash, keep: url)
+            Self.removeStaleWorkFolders(dir: dir)
             return url
         }
         let operation = InFlight(id: UUID(), task: task)
@@ -103,6 +104,18 @@ actor VoiceEnhanceStore {
 
     private static func hash(_ key: String) -> String {
         SHA256.hash(data: Data(key.utf8)).hex
+    }
+
+    /// Рабочая папка обработки, которую не убрали за сутки, осталась от упавшего процесса:
+    /// обработка голоса идёт минуты, а не сутки.
+    private static func removeStaleWorkFolders(dir: URL) {
+        let keys: [URLResourceKey] = [.contentModificationDateKey]
+        let items = (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: keys)) ?? []
+        let dayAgo = Date().addingTimeInterval(-24 * 3600)
+        for item in items where item.lastPathComponent.hasPrefix(".work-") {
+            let modified = (try? item.resourceValues(forKeys: Set(keys)).contentModificationDate) ?? Date()
+            if modified < dayAgo { try? FileManager.default.removeItem(at: item) }
+        }
     }
 
     /// Держим один вариант настроек на исходник — CAF большие. Вариант, который читает

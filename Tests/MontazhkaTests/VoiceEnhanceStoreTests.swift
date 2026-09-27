@@ -108,6 +108,29 @@ extension VoiceEnhanceStoreTests {
     }
 }
 
+extension VoiceEnhanceStoreTests {
+    @Test("work folders left by a crashed render are cleaned up after a day; fresh ones stay")
+    func staleWorkFoldersAreRemoved() async throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let cache = root.appendingPathComponent("cache")
+        let stale = cache.appendingPathComponent(".work-\(UUID().uuidString)", isDirectory: true)
+        let fresh = cache.appendingPathComponent(".work-\(UUID().uuidString)", isDirectory: true)
+        for folder in [stale, fresh] {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            try Data("начало".utf8).write(to: folder.appendingPathComponent("voice.caf"))
+        }
+        try FileManager.default.setAttributes(
+            [.modificationDate: Date().addingTimeInterval(-2 * 24 * 3600)], ofItemAtPath: stale.path)
+        let store = VoiceEnhanceStore(cacheDir: cache, render: RenderGate.immediate)
+
+        _ = try await store.ensure(source: try source(in: root), settings: VoiceEnhanceSettings(enabled: true))
+
+        #expect(!FileManager.default.fileExists(atPath: stale.path), "остаток упавшей обработки убран")
+        #expect(FileManager.default.fileExists(atPath: fresh.path), "идущую обработку не трогаем")
+    }
+}
+
 /// Подменённый рендер: пишет файл и ждёт, пока тест откроет ворота.
 private actor RenderGate {
     private(set) var targets: [URL] = []
