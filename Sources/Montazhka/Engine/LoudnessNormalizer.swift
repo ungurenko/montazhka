@@ -220,7 +220,11 @@ enum LoudnessNormalizer {
         isCancelled: @escaping @Sendable () -> Bool,
         progress: (@Sendable (MasteringPass, Double) -> Void)? = nil
     ) async throws -> MasteredAudio? {
-        let tracks = try await asset.loadTracks(withMediaType: .audio)
+        // Пустые дорожки (голос ролика без звука) ридер не переваривает — как в Transcoder.
+        var tracks: [AVAssetTrack] = []
+        for track in try await asset.loadTracks(withMediaType: .audio) {
+            if try await track.load(.timeRange).duration.seconds > 0 { tracks.append(track) }
+        }
         let frames = Int((duration * sampleRate).rounded())
         guard !tracks.isEmpty, frames > 0 else { return nil }
         let source = MixSource(asset: asset, tracks: tracks, audioMix: audioMix, frames: frames)

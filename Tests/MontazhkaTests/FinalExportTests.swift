@@ -28,6 +28,21 @@ struct FinalExportTests {
             root: root, video: video, input: ExportInput(composition: built.composition, audioMix: built.audioMix))
     }
 
+    /// Ролик без звуковой дорожки — как запись экрана без микрофона.
+    private func silentVideo(seconds: Double, in root: URL) async throws -> URL {
+        let url = root.appendingPathComponent("screen.mov")
+        let (width, height) = (320, 180)
+        let frame = try TestOverlayFactory.pixelBuffer(width: width, height: height, format: kCVPixelFormatType_32BGRA)
+        CVPixelBufferLockBaseAddress(frame, [])
+        memset(CVPixelBufferGetBaseAddress(frame), 0x40, CVPixelBufferGetDataSize(frame))
+        CVPixelBufferUnlockBaseAddress(frame, [])
+        try await TestOverlayFactory.writeStill(
+            frame,
+            settings: [AVVideoCodecKey: AVVideoCodecType.h264, AVVideoWidthKey: width, AVVideoHeightKey: height],
+            fileType: .mov, frameCount: Int(seconds * 30), frameDuration: CMTime(value: 1, timescale: 30), to: url)
+        return url
+    }
+
     private func cue(_ text: String, _ start: Double, _ end: Double) -> ShortsSubtitleCue {
         ShortsSubtitleCue(words: [ShortsSubtitleWord(text: text, start: start, end: end)], start: start, end: end)
     }
@@ -96,6 +111,49 @@ struct FinalExportTests {
         let integrated = try #require(report.loudness?.integratedLUFS)
         let source = try #require(try await LoudnessMeter.measure(url: fixture.video).integratedLUFS)
         #expect(abs(integrated - source) < 0.5, "громкость не тронута: \(integrated) LUFS, в исходнике \(source)")
+    }
+}
+
+extension FinalExportTests {
+    @Test("a video without sound exports with loudness on as before: untouched, no warning")
+    func videoWithoutSound() async throws {
+        let fixture = try await fixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let silent = try await silentVideo(seconds: 2, in: fixture.root)
+        let built = await CompositionBuilder.build(clips: [Clip(sourceURL: silent, start: 0, end: 2)])
+        let output = fixture.root.appendingPathComponent("экран.mp4")
+
+        let report = try await FinalExport.run(
+            job(ExportInput(composition: built.composition, audioMix: built.audioMix), cues: nil, normalize: true),
+            to: output, progress: { _ in })
+
+        #expect(!report.normalized)
+        #expect(report.loudness == nil)
+        #expect(report.targetMet == nil)
+        #expect(report.gainDB == 0)
+        #expect(report.warnings.isEmpty)
+        let duration = try await AVURLAsset(url: output).load(.duration).seconds
+        #expect(abs(duration - 2) < 0.1)
+    }
+
+    @Test("a silent clip beside a voiced one and a silent video under music are still mastered")
+    func silentPartsWithSound() async throws {
+        let fixture = try await fixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let silent = try await silentVideo(seconds: 2, in: fixture.root)
+        let mixed = await CompositionBuilder.build(clips: [
+            Clip(sourceURL: silent, start: 0, end: 2), Clip(sourceURL: fixture.video, start: 0, end: Self.seconds),
+        ])
+        let underMusic = await CompositionBuilder.build(
+            clips: [Clip(sourceURL: silent, start: 0, end: 2)], music: MusicInput(url: fixture.video, volume: 1))
+
+        for (name, built) in [("склейка", mixed), ("музыка", underMusic)] {
+            let report = try await FinalExport.run(
+                job(ExportInput(composition: built.composition, audioMix: built.audioMix), cues: nil, normalize: true),
+                to: fixture.root.appendingPathComponent("\(name).mp4"), progress: { _ in })
+            #expect(report.normalized, "\(name): звук выровнен")
+            #expect(report.loudness?.integratedLUFS != nil, "\(name): громкость замерена")
+        }
     }
 }
 
