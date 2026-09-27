@@ -1,5 +1,4 @@
 import CryptoKit
-import Darwin
 import Foundation
 
 /// Ассоциированное значение — техническая причина для лога.
@@ -122,13 +121,11 @@ final class ProjectStore: ProjectRepository, Sendable {
 
     /// Критическая секция записи файла проекта для всех процессов и экземпляров хранилища.
     private func withSaveLock<T>(for id: UUID, _ body: () throws -> T) throws -> T {
-        let descriptor = Darwin.open(saveLockURL(for: id).path, O_CREAT | O_RDWR | O_CLOEXEC, S_IRUSR | S_IWUSR)
-        guard descriptor >= 0 else { throw ProjectStoreError.write("save lock: errno \(errno)") }
-        defer { Darwin.close(descriptor) }
-        while flock(descriptor, LOCK_EX) != 0 {
-            guard errno == EINTR else { throw ProjectStoreError.write("save lock: errno \(errno)") }
+        let lock: FileLock
+        do { lock = try FileLock(lockFile: saveLockURL(for: id)) } catch {
+            throw ProjectStoreError.write(String(reflecting: error))
         }
-        defer { flock(descriptor, LOCK_UN) }
+        defer { withExtendedLifetime(lock) {} }
         return try body()
     }
 

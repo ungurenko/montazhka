@@ -161,7 +161,7 @@ enum AgentToolCatalog {
             "Правки ленты по порядку. deleteWords{words[{from,to}],timeline} — по номерам слов из transcript, "
                 + "рез в тишине между словами. Время ленты: delete{ranges[{from,to}]}, split{at}, move{clip,to}, "
                 + "trim{clip,edge,seconds}, insert{sourcePath,start,end,at}. fixWords{words,timeline,text,remember} — "
-                + "исправить распознанный текст. Черновик шортса: setHook{text}, setLayout{layout}, setSubtitles{on}, "
+                + "исправить распознанный текст, отдельным вызовом. Черновик шортса: setHook{text}, setLayout{layout}, setSubtitles{on}, "
                 + "zoom{words,timeline}, clearZooms, setMusic{track,volume}. Обычный проект: setSubtitles{on} — вшить; "
                 + "анимации addOverlay{file,words+timeline|at,align,payoffAt,position,scale}, removeOverlay{overlay}, "
                 + "clearOverlays. Заметки: note{text} дописать, setNotes{text} переписать. undo{steps} — отдельно.",

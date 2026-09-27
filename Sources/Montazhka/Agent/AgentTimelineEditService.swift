@@ -105,6 +105,24 @@ extension AgentService {
             var project = loaded.project
             let original = project
 
+            // Исправления слов меняют общие файлы исходника и словарь, а не ленту: отдельным
+            // вызовом, до любых записей — иначе ошибка следующей операции прятала бы их.
+            if operations.contains(where: { $0.op == "fixWords" }) {
+                guard operations.count == 1 else {
+                    throw AgentServiceError.invalidInput("fixWords передаётся отдельным вызовом, без других операций.")
+                }
+                var warnings = try await fixWords(operations[0], clips: project.clips)
+                // Окно перечитывает проект, когда меняется его файл, — и показывает исправленные слова.
+                // Ленту исправление не меняет, поэтому ревизии для отмены нет.
+                project.updatedAt = Date()
+                do {
+                    _ = try await store.save(project, expected: loaded.revision)
+                } catch {
+                    warnings.append("Исправление сохранено; окно Монтажки покажет его после перечитывания проекта.")
+                }
+                return try await editResponse(project, warnings: warnings)
+            }
+
             if operations.contains(where: \.isUndo) {
                 guard operations.count == 1 else {
                     throw AgentServiceError.invalidInput("undo передаётся отдельным вызовом, без других операций.")
@@ -156,10 +174,6 @@ extension AgentService {
             var clips = project.clips
             for (index, operation) in operations.enumerated() {
                 if operation.isNoteOp { continue }
-                if operation.op == "fixWords" {
-                    try await fixWords(operation, clips: clips)
-                    continue
-                }
                 if operation.isOverlayOp {
                     let added = try await applyOverlayOp(operation, to: &project, clips: clips, words: transcriptWords)
                     overlayCopies += added.copy.map { [$0] } ?? []
@@ -330,7 +344,8 @@ extension AgentService {
     /// `fixWords`: слова #from…#to становятся одним словом `text` (остальные
     /// скрываются). Исправление хранится у исходника, а не в проекте, поэтому
     /// видно во всех его проектах и не откатывается `undo` — только новым fixWords.
-    private func fixWords(_ operation: AgentEditOperation, clips: [Clip]) async throws {
+    /// Возвращает предупреждения: словарь не записался — исправление всё равно сохранено.
+    private func fixWords(_ operation: AgentEditOperation, clips: [Clip]) async throws -> [String] {
         guard let range = operation.words?.first, operation.words?.count == 1, range.from <= range.to else {
             throw AgentServiceError.invalidInput("fixWords: нужен один диапазон words: [{from, to}].")
         }
@@ -357,18 +372,22 @@ extension AgentService {
         let transcriptStore = makeTranscriptStore()
         let raw = try await transcriptStore.ensure(source: source)
         let fixesURL = TranscriptCorrections.url(forTranscript: await transcriptStore.cacheURL(for: source))
-        var fixes = TranscriptCorrections.load(from: fixesURL)
         let indices = chosen.compactMap { word in raw.firstIndex { abs($0.start - word.sourceStart) < 0.0005 } }
         guard indices.count == chosen.count else {
             throw AgentServiceError.invalidInput("fixWords: не удалось сопоставить слова с расшифровкой.")
         }
-        for (offset, index) in indices.enumerated() { fixes[index] = offset == 0 ? text : "" }
-        try TranscriptCorrections.save(fixes, to: fixesURL)
+        try TranscriptCorrections.update(at: fixesURL) { fixes in
+            for (offset, index) in indices.enumerated() { fixes[index] = offset == 0 ? text : "" }
+        }
 
-        if operation.remember == true {
-            var glossary = Glossary.load(from: store.glossaryURL)
-            glossary.remember(original: indices.map { raw[$0].text }, replacement: text)
-            try glossary.save(to: store.glossaryURL)
+        guard operation.remember == true else { return [] }
+        do {
+            try Glossary.update(at: store.glossaryURL) { glossary in
+                glossary.remember(original: indices.map { raw[$0].text }, replacement: text)
+            }
+            return []
+        } catch {
+            return ["Исправление слов сохранено, но словарь не записался: \(error.localizedDescription)"]
         }
     }
 

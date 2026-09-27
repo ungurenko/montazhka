@@ -51,6 +51,16 @@ struct Glossary: Equatable, Sendable {
         try encoder.encode(entries).write(to: url, options: .atomic)
     }
 
+    /// Прочитать, изменить и записать словарь под общей блокировкой: словарь один на все
+    /// проекты, и правки из разных окон и агентов не затирают друг друга.
+    static func update(at url: URL, _ change: (inout Glossary) -> Void) throws {
+        try FileLock.withLock(guarding: url) {
+            var glossary = load(from: url)
+            change(&glossary)
+            try glossary.save(to: url)
+        }
+    }
+
     /// Запоминает замену: то, как слова распознались, → как их писать.
     mutating func remember(original: [String], replacement: String) {
         let pattern = original.map(Self.normalized).filter { !$0.isEmpty }.joined(separator: " ")
@@ -135,6 +145,16 @@ enum TranscriptCorrections {
 
     static func save(_ fixes: [Int: String], to url: URL) throws {
         try JSONEncoder().encode(fixes).write(to: url, options: .atomic)
+    }
+
+    /// Прочитать, изменить и записать исправления под общей блокировкой: один исходник
+    /// бывает в нескольких проектах, и его правят разные агенты.
+    static func update(at url: URL, _ change: (inout [Int: String]) -> Void) throws {
+        try FileLock.withLock(guarding: url) {
+            var fixes = load(from: url)
+            change(&fixes)
+            try save(fixes, to: url)
+        }
     }
 
     static func apply(_ fixes: [Int: String], to words: [TranscriptWord]) -> [TranscriptWord] {

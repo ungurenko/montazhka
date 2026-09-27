@@ -101,3 +101,113 @@ struct TranscriptCorrectionTests {
         #expect(Glossary.load(from: glossaryURL).entries.contains { $0.replace == "вайбкодинг" })
     }
 }
+
+/// `fixWords` меняет общие файлы (исправления расшифровки и словарь), а не ленту:
+/// идёт отдельным вызовом, не прячет частично сохранённое и не теряет чужие правки.
+extension TranscriptCorrectionTests {
+    private struct Fixture {
+        let root: URL
+        let service: AgentService
+        let project: Project
+        let media: MediaReference
+    }
+
+    private func fixture() async throws -> Fixture {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let video = root.appendingPathComponent("talk.mov")
+        try await TestVideoFactory.make(segments: [(duration: 4, loud: true)], to: video)
+        let service = AgentService(baseDirectory: root)
+        let media = MediaReference(url: video)
+        let project = Project(name: "Термины", clips: [Clip(source: media, start: 0, end: 4)])
+        try await service.store.save(project)
+        let spoken = ["вот", "мой", "вайб", "кодинг"].enumerated().map { index, text in
+            TranscriptWord(
+                sourceID: media.id, text: text, start: Double(index) * 0.8, end: Double(index) * 0.8 + 0.5,
+                confidence: 1)
+        }
+        let cacheURL = await service.makeTranscriptStore().cacheURL(for: media)
+        try FileManager.default.createDirectory(
+            at: cacheURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try JSONEncoder().encode(TranscriptDocument(words: spoken)).write(to: cacheURL)
+        return Fixture(root: root, service: service, project: project, media: media)
+    }
+
+    private func fix(_ fixture: Fixture, words: AgentWordRange, text: String, remember: Bool) -> AgentEditOperation {
+        var fix = AgentEditOperation(op: "fixWords")
+        fix.words = [words]
+        fix.text = text
+        fix.remember = remember
+        fix.timeline = AgentWordCuts.fingerprint(fixture.project.clips)
+        return fix
+    }
+
+    private func fixesURL(_ fixture: Fixture) async -> URL {
+        TranscriptCorrections.url(
+            forTranscript: await fixture.service.makeTranscriptStore().cacheURL(for: fixture.media))
+    }
+
+    @Test("fixWords mixed with other operations is refused before anything is written")
+    func mixedBatchWritesNothing() async throws {
+        let fixture = try await fixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        var layout = AgentEditOperation(op: "setLayout")
+        layout.layout = "diagonal"
+
+        let response = await fixture.service.applyEdits(
+            projectID: fixture.project.id,
+            operations: [
+                fix(fixture, words: AgentWordRange(from: 3, to: 4), text: "вайбкодинг", remember: true), layout,
+            ])
+
+        #expect(!response.ok)
+        #expect(response.error?.message.contains("fixWords") == true)
+        #expect(!FileManager.default.fileExists(atPath: await fixesURL(fixture).path), "исправления не записаны")
+        let glossaryURL = await fixture.service.store.glossaryURL
+        #expect(!FileManager.default.fileExists(atPath: glossaryURL.path), "словарь не тронут")
+    }
+
+    @Test("a dictionary that cannot be written does not hide the fix that was saved")
+    func glossaryFailureKeepsFixReported() async throws {
+        let fixture = try await fixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        // На месте словаря — папка: записать его не выйдет.
+        let glossaryURL = await fixture.service.store.glossaryURL
+        try FileManager.default.createDirectory(at: glossaryURL, withIntermediateDirectories: true)
+
+        let response = await fixture.service.applyEdits(
+            projectID: fixture.project.id,
+            operations: [fix(fixture, words: AgentWordRange(from: 3, to: 4), text: "вайбкодинг", remember: true)])
+
+        #expect(response.ok, "исправление сохранено — команда не провалена: \(String(describing: response.error))")
+        guard case .array(let warnings)? = response.data?["warnings"] else {
+            Issue.record("нет предупреждений: \(String(describing: response.data))")
+            return
+        }
+        #expect(warnings.contains { if case .string(let text) = $0 { text.contains("словар") } else { false } })
+        #expect(TranscriptCorrections.load(from: await fixesURL(fixture))[2] == "вайбкодинг")
+    }
+
+    @Test("fixWords waits for the shared lock on the fixes file instead of writing over another writer")
+    func fixesWaitForTheSharedLock() async throws {
+        let fixture = try await fixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let fixes = await fixesURL(fixture)
+        var held: FileLock? = try FileLock(guarding: fixes)
+        let operation = fix(fixture, words: AgentWordRange(from: 1, to: 1), text: "Вот", remember: false)
+        let service = fixture.service
+        let projectID = fixture.project.id
+
+        let pending = Task { await service.applyEdits(projectID: projectID, operations: [operation]) }
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(!FileManager.default.fileExists(atPath: fixes.path), "пока другой пишет, fixWords ждёт")
+        // Другой писатель успел сохранить своё исправление.
+        try TranscriptCorrections.save([1: "мой-мой"], to: fixes)
+        held = nil
+        let response = await pending.value
+
+        #expect(response.ok, "\(String(describing: response.error))")
+        #expect(TranscriptCorrections.load(from: fixes) == [0: "Вот", 1: "мой-мой"], "обе правки на месте")
+        withExtendedLifetime(held) {}
+    }
+}
