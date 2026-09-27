@@ -210,8 +210,11 @@ struct ShortsSubtitleAppearance: Codable, Equatable, Sendable {
         ShortsSubtitlePreset.allCases.first { $0.appearance == self }
     }
 
+    /// В горизонтальном кадре тот же кегль от короткой стороны вышел бы
+    /// крупнее, чем нужно для длинной строки обычного ролика.
     func baseFontSize(canvasSize: CGSize) -> CGFloat {
-        max(14, min(canvasSize.width, canvasSize.height) * size.scale)
+        let orientationScale: CGFloat = canvasSize.width > canvasSize.height ? 0.8 : 1
+        return max(14, min(canvasSize.width, canvasSize.height) * size.scale * orientationScale)
     }
 }
 
@@ -345,14 +348,29 @@ enum ShortsSubtitleOverlayBuilder {
     }
 }
 
+/// Как речь режется на фразы субтитров. У шортса фразы в 2–4 слова и быстрый
+/// темп; у обычного горизонтального ролика — до двух строк, по предложениям.
+struct SubtitleCueRules: Sendable, Equatable {
+    var maxWords: Int
+    var maxCharacters: Int
+    var maxDuration: Double
+    var maxGap: Double
+    /// Конец предложения завершает фразу; запятая — только в уже длинной фразе.
+    var breakAfterSentence: Bool
+    /// Короткая фраза держится на экране хотя бы столько, но не заходит на следующую.
+    var minDuration: Double
+
+    static let shorts = SubtitleCueRules(
+        maxWords: 4, maxCharacters: 30, maxDuration: 1.85, maxGap: 0.5,
+        breakAfterSentence: false, minDuration: 0)
+    static let horizontal = SubtitleCueRules(
+        maxWords: 16, maxCharacters: 84, maxDuration: 6.0, maxGap: 0.8,
+        breakAfterSentence: true, minDuration: 1.0)
+}
+
 /// Делит слова локальной расшифровки на короткие читаемые фразы.
 /// Это отдельная чистая логика: её можно проверять без запуска AVFoundation.
 enum ShortsSubtitleCueBuilder {
-    private static let maxWords = 4
-    private static let maxCharacters = 30
-    private static let maxDuration = 1.85
-    private static let maxGap = 0.50
-
     /// Слова приводятся к шкале готового ролика через карту времени: то, что
     /// попало в вырезанную паузу, исчезает вместе с ней.
     static func make(words: [TranscriptWord], timeMap: ShortsTimeMap) -> [ShortsSubtitleCue] {
@@ -388,13 +406,22 @@ enum ShortsSubtitleCueBuilder {
                     segment: segment)
             }
 
-        return group(placed.map { ($0.word, $0.segment) })
+        return group(placed.map { ($0.word, $0.segment) }, rules: .shorts)
     }
 
-    /// Фразы для черновика шортса: слова уже разложены по ленте. Граница
-    /// клипа завершает фразу, поэтому порядок клипов после перестановки не важен.
-    /// `notBefore` — субтитры не показываются, пока на экране хук.
+    /// Фразы для черновика шортса.
     static func make(mapped words: [MappedTranscriptWord], notBefore: Double) -> [ShortsSubtitleCue] {
+        make(mapped: words, notBefore: notBefore, rules: .shorts)
+    }
+
+    /// Фразы по словам, уже разложенным по ленте. Граница клипа завершает
+    /// фразу, поэтому порядок клипов после перестановки не важен.
+    /// `notBefore` — субтитры не показываются, пока на экране хук.
+    static func make(
+        mapped words: [MappedTranscriptWord],
+        notBefore: Double = 0,
+        rules: SubtitleCueRules
+    ) -> [ShortsSubtitleCue] {
         let placed =
             words
             .filter { $0.timelineStart >= notBefore && $0.timelineEnd > $0.timelineStart }
@@ -404,12 +431,15 @@ enum ShortsSubtitleCueBuilder {
                 guard !text.isEmpty else { return nil }
                 return (ShortsSubtitleWord(text: text, start: word.timelineStart, end: word.timelineEnd), word.clipID)
             }
-        return group(placed)
+        return group(placed, rules: rules)
     }
 
     /// Собирает слова в короткие фразы. `segment` — кусок ролика: фраза
     /// никогда не переходит через склейку.
-    private static func group(_ placed: [(word: ShortsSubtitleWord, segment: AnyHashable)]) -> [ShortsSubtitleCue] {
+    private static func group(
+        _ placed: [(word: ShortsSubtitleWord, segment: AnyHashable)],
+        rules: SubtitleCueRules
+    ) -> [ShortsSubtitleCue] {
         guard !placed.isEmpty else { return [] }
 
         var cues: [ShortsSubtitleCue] = []
@@ -433,23 +463,50 @@ enum ShortsSubtitleCueBuilder {
                 continue
             }
 
-            let proposedText = (current.map(\.text) + [item.word.text]).joined(separator: " ")
+            let currentText = current.map(\.text).joined(separator: " ")
+            let proposedText = currentText + " " + item.word.text
             // Склейка посреди строки субтитров выглядит сломанной: граница
             // куска всегда завершает фразу.
             let crossesCut = item.segment != currentSegment
-            let hasLargeGap = item.word.start - last.end > maxGap
-            let tooManyWords = current.count >= maxWords
-            let tooManyCharacters = proposedText.count > maxCharacters
-            let tooLong = item.word.end - first.start > maxDuration
+            let hasLargeGap = item.word.start - last.end > rules.maxGap
+            let tooManyWords = current.count >= rules.maxWords
+            let tooManyCharacters = proposedText.count > rules.maxCharacters
+            let tooLong = item.word.end - first.start > rules.maxDuration
+            let thoughtEnded =
+                rules.breakAfterSentence
+                && endsThought(currentText, lastWord: last.text, maxCharacters: rules.maxCharacters)
 
-            if crossesCut || hasLargeGap || tooManyWords || tooManyCharacters || tooLong {
+            if crossesCut || hasLargeGap || tooManyWords || tooManyCharacters || tooLong || thoughtEnded {
                 flush()
             }
             current.append(item.word)
             currentSegment = item.segment
         }
         flush()
-        return cues
+        return rules.minDuration > 0 ? extended(cues, toAtLeast: rules.minDuration) : cues
+    }
+
+    /// Конец предложения всегда завершает фразу. Запятая — только когда фраза
+    /// заняла больше 60% длины: иначе строка рвалась бы на каждом обороте.
+    /// Закрывающие кавычки и скобки после знака не мешают: «так.» — тоже конец.
+    private static func endsThought(_ text: String, lastWord: String, maxCharacters: Int) -> Bool {
+        var word = Substring(lastWord)
+        while let character = word.last, "»\"”’)".contains(character) { word = word.dropLast() }
+        guard let mark = word.last else { return false }
+        if ".!?…".contains(mark) { return true }
+        return mark == "," && Double(text.count) > Double(maxCharacters) * 0.6
+    }
+
+    /// Короткая фраза дотягивается до `minDuration`, но не дальше начала
+    /// следующей: две фразы на экране одновременно не читаются. Слова внутри
+    /// не трогаются — подсветка идёт по их настоящему времени.
+    private static func extended(_ cues: [ShortsSubtitleCue], toAtLeast minDuration: Double) -> [ShortsSubtitleCue] {
+        cues.indices.map { index in
+            let cue = cues[index]
+            var end = cue.start + minDuration
+            if index + 1 < cues.count { end = min(end, cues[index + 1].start) }
+            return ShortsSubtitleCue(words: cue.words, start: cue.start, end: max(cue.end, end))
+        }
     }
 }
 
@@ -457,8 +514,11 @@ enum ShortsSubtitleCueBuilder {
 /// иначе превью расходится с готовым файлом.
 enum ShortsSubtitleLayout {
     /// Безопасная зона: текст занимает не всю ширину кадра, поля остаются
-    /// пустыми — так подпись не липнет к краям ни в каком формате.
-    static let widthRatio: CGFloat = 0.86
+    /// пустыми — так подпись не липнет к краям ни в каком формате. В
+    /// горизонтальном кадре строка на всю ширину читалась бы слишком длинной.
+    static func widthRatio(for canvas: CGSize) -> CGFloat {
+        canvas.width > canvas.height ? 0.72 : 0.86
+    }
     static let horizontalPaddingScale: CGFloat = 0.45
     static let verticalPaddingScale: CGFloat = 0.20
     static let lineHeightScale: CGFloat = 1.14
@@ -513,7 +573,7 @@ enum ShortsSubtitleLayout {
     /// Ширина, доступная самому тексту: безопасная зона минус боковые отступы
     /// подложки.
     static func textWidth(fontSize: CGFloat, canvasSize: CGSize) -> CGFloat {
-        max(1, canvasSize.width * widthRatio - fontSize * horizontalPaddingScale * 2)
+        max(1, canvasSize.width * widthRatio(for: canvasSize) - fontSize * horizontalPaddingScale * 2)
     }
 }
 
@@ -599,7 +659,7 @@ enum ShortsSubtitleRenderer {
         let height =
             ShortsSubtitleLayout.lineHeight(for: font) * CGFloat(textLayout.lineCount)
             + verticalPadding * 2
-        let width = renderSize.width * ShortsSubtitleLayout.widthRatio
+        let width = renderSize.width * ShortsSubtitleLayout.widthRatio(for: renderSize)
         let frame = CGRect(
             x: (renderSize.width - width) / 2,
             y: renderSize.height * (1 - hookTopRatio) - height,
@@ -673,7 +733,7 @@ enum ShortsSubtitleRenderer {
             text: cue.text, appearance: appearance, canvasSize: renderSize)
         let fontSize = font.pointSize
         let verticalPadding = fontSize * ShortsSubtitleLayout.verticalPaddingScale
-        let width = renderSize.width * ShortsSubtitleLayout.widthRatio
+        let width = renderSize.width * ShortsSubtitleLayout.widthRatio(for: renderSize)
         let maxTextWidth = ShortsSubtitleLayout.textWidth(
             fontSize: fontSize, canvasSize: renderSize)
         let textLayout = ShortsSubtitleTextWrapper.wrap(
