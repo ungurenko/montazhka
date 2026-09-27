@@ -37,6 +37,11 @@ extension EditorController {
         let burned = exported.export.burnSubtitles ? ProjectSubtitleLayer.saved(cues: speech.horizontalCues) : nil
         let result = await compositionForExport(
             exported, speechRanges: speech.speechRanges, subtitleLayer: burned)
+        // Речь распознана сейчас (или расшифровка сменилась) — предпросмотр собирается
+        // заново: в нём появляются субтитры и музыка стихает под голосом.
+        if exported.clips == project.clips, (speech.horizontalCues ?? []) != previewSubtitleCues {
+            rebuildAndSeek(to: currentTime)
+        }
         return PreparedExport(
             composition: result.composition, audioMix: result.audioMix, warning: result.audioWarning,
             videoComposition: result.videoComposition,

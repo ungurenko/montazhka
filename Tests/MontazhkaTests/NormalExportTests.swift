@@ -27,19 +27,24 @@ struct NormalExportTests {
         let track = try #require(MusicLibrary.tracks.first)
         project.music = MusicSettings(enabled: true, trackID: track.id, volume: 30, eqEnabled: false, ducking: true)
         try await store.save(project)
-        if transcript {
-            let words = [
-                TranscriptWord(sourceID: media.id, text: "Привет", start: 5.0, end: 5.4, confidence: 1),
-                TranscriptWord(sourceID: media.id, text: "это", start: 5.6, end: 6.2, confidence: 1),
-                TranscriptWord(sourceID: media.id, text: "проверка", start: 6.5, end: 7.8, confidence: 1),
-            ]
-            let cacheURL = await TranscriptStore(cacheDir: store.transcriptsDir, modelsDir: store.modelsDir)
-                .cacheURL(for: media)
-            try FileManager.default.createDirectory(
-                at: cacheURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try JSONEncoder().encode(TranscriptDocument(words: words)).write(to: cacheURL)
-        }
-        return Fixture(root: root, store: store, project: project)
+        let fixture = Fixture(root: root, store: store, project: project)
+        if transcript { try await writeTranscript(fixture) }
+        return fixture
+    }
+
+    /// Расшифровка в кэше — как после распознавания речи.
+    private func writeTranscript(_ fixture: Fixture) async throws {
+        let media = fixture.project.clips[0].source
+        let words = [
+            TranscriptWord(sourceID: media.id, text: "Привет", start: 5.0, end: 5.4, confidence: 1),
+            TranscriptWord(sourceID: media.id, text: "это", start: 5.6, end: 6.2, confidence: 1),
+            TranscriptWord(sourceID: media.id, text: "проверка", start: 6.5, end: 7.8, confidence: 1),
+        ]
+        let cacheURL = await TranscriptStore(cacheDir: fixture.store.transcriptsDir, modelsDir: fixture.store.modelsDir)
+            .cacheURL(for: media)
+        try FileManager.default.createDirectory(
+            at: cacheURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try JSONEncoder().encode(TranscriptDocument(words: words)).write(to: cacheURL)
     }
 
     /// Громкость музыки (последний вход микса) в момент ленты.
@@ -100,6 +105,26 @@ struct NormalExportTests {
         try await waitForPreview(controller)
         #expect(controller.previewSubtitleCues.isEmpty)
         #expect(controller.renderWarnings == [.musicNotDucked])
+        await controller.shutdown()
+    }
+
+    @MainActor
+    @Test("speech found by the export itself shows up in the preview: subtitles and ducking")
+    func exportRecognitionRefreshesPreview() async throws {
+        let fixture = try await fixture(transcript: false)
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let controller = EditorController(
+            project: fixture.project, store: fixture.store, openRouterKeyStore: EmptyOpenRouterKeyStore())
+        try await waitForPreview(controller)
+        #expect(controller.previewSubtitleCues.isEmpty)
+        // Расшифровка появилась после сборки предпросмотра — как при распознавании во время экспорта.
+        try await writeTranscript(fixture)
+
+        _ = try await controller.prepareExport(step: { _ in })
+
+        try await waitForPreview(controller)
+        #expect(controller.previewSubtitleCues.map(\.text) == ["Привет это проверка"])
+        #expect(controller.renderWarnings.isEmpty, "музыка в предпросмотре тоже стихает под голосом")
         await controller.shutdown()
     }
 

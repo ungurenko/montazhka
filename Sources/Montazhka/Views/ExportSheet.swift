@@ -104,24 +104,17 @@ struct ExportSheet: View {
                     title: "Вшить субтитры в видео",
                     hints: subtitleHints,
                     isOn: preference(\.burnSubtitles),
-                    isEnabled: canBurnSubtitles,
                     accessibilityIdentifier: "export.burnSubtitles")
             }
         }
         .cardStyle()
     }
 
-    private var hasSubtitleCues: Bool { !controller.previewSubtitleCues.isEmpty }
-
-    /// Без расшифровки включить нельзя, а выключить можно всегда: галочку мог
-    /// поставить агент, пока расшифровка ещё была.
-    private var canBurnSubtitles: Bool {
-        hasSubtitleCues || controller.project.export.burnSubtitles
-    }
-
+    /// Галочка доступна всегда: без готовой расшифровки речь распознаётся при сохранении.
     private var subtitleHints: [String] {
         let file = "Файл субтитров для YouTube сохранится рядом с видео"
-        return hasSubtitleCues ? [file] : ["Сначала нужна расшифровка речи", file]
+        let recognized = !controller.previewSubtitleCues.isEmpty
+        return recognized ? [file] : ["Речь распознается при экспорте, если модель скачана", file]
     }
 
     /// Галочка пишет в проект через контроллер — так её можно отменить ⌘Z.
@@ -278,7 +271,6 @@ private struct ExportOptionRow: View {
     let title: String
     let hints: [String]
     @Binding var isOn: Bool
-    var isEnabled = true
     let accessibilityIdentifier: String
 
     var body: some View {
@@ -286,7 +278,7 @@ private struct ExportOptionRow: View {
             VStack(alignment: .leading, spacing: Theme.Spacing.hairline) {
                 Text(title)
                     .typeStyle(.bodyEmphasis)
-                    .foregroundStyle(isEnabled ? Theme.textPrimary : Theme.textSecondary)
+                    .foregroundStyle(Theme.textPrimary)
                 ForEach(hints, id: \.self) { hint in
                     Text(hint)
                         .typeStyle(.helper)
@@ -299,7 +291,6 @@ private struct ExportOptionRow: View {
                 .toggleStyle(.switch)
                 .labelsHidden()
                 .tint(Theme.accent)
-                .disabled(!isEnabled)
                 .accessibilityHint(hints.joined(separator: ". "))
                 .accessibilityIdentifier(accessibilityIdentifier)
         }
