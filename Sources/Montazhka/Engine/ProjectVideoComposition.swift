@@ -57,28 +57,39 @@ enum ProjectVideoComposition {
     /// Отступ анимации в углу — доля ширины и высоты кадра.
     static let cornerMargin: CGFloat = 0.04
 
-    /// nil, когда нет ни анимаций, ни вшитых субтитров: экспорт и предпросмотр — как раньше.
+    /// nil, когда нет ни анимаций, ни вшитых субтитров, ни кусков разной геометрии:
+    /// экспорт и предпросмотр — как раньше.
     /// Одна инструкция на всю длину: анимации сверху вниз от последней к первой, база под ними.
     /// Непрозрачность анимации 0 до окна и после него: иначе после конца своего куска
     /// дорожка держит последний кадр до конца ролика.
+    /// `segments` — куски основы с геометрией их исходников, когда она разная: кадр ролика —
+    /// как у первого куска, остальные вписываются в него целиком по центру, поля чёрные.
     static func make(
         composition: AVComposition, baseTrackID: CMPersistentTrackID, overlays: [OverlayTrack],
-        subtitles: ProjectSubtitleLayer?
+        subtitles: ProjectSubtitleLayer?, segments: [VideoSegmentGeometry] = []
     ) async throws -> ProjectVideoPlan? {
-        guard !overlays.isEmpty || subtitles != nil else { return nil }
+        guard !overlays.isEmpty || subtitles != nil || !segments.isEmpty else { return nil }
         guard let base = try await composition.loadTrack(withTrackID: baseTrackID) else { throw BuildError.noBaseVideo }
-        let (natural, preferred, frameRate) = try await base.load(.naturalSize, .preferredTransform, .nominalFrameRate)
+        let (trackNatural, trackPreferred, frameRate) = try await base.load(
+            .naturalSize, .preferredTransform, .nominalFrameRate)
+        let natural = segments.first?.naturalSize ?? trackNatural
+        let preferred = segments.first?.preferredTransform ?? trackPreferred
         let length = try await composition.load(.duration)
         let oriented = CGRect(origin: .zero, size: natural).applying(preferred)
         let renderSize = CGSize(width: abs(oriented.width), height: abs(oriented.height))
         guard renderSize.width > 0, renderSize.height > 0, length > .zero else { throw BuildError.noBaseVideo }
 
         let baseLayer = AVMutableVideoCompositionLayerInstruction(assetTrack: base)
-        baseLayer.setTransform(
-            preferred.concatenating(CGAffineTransform(translationX: -oriented.minX, y: -oriented.minY)), at: .zero)
         // Обрезка по всему кадру ничего не отрезает, но заставляет честно смешивать каждый
         // кадр: кадр с одной основой как есть AVFoundation может пропустить мимо смешивания.
-        baseLayer.setCropRectangle(CGRect(origin: .zero, size: natural), at: .zero)
+        let whole = VideoSegmentGeometry(
+            timeRange: CMTimeRange(start: .zero, duration: length), naturalSize: natural, preferredTransform: preferred)
+        for piece in segments.isEmpty ? [whole] : segments {
+            let fitted = fittedTransform(
+                naturalSize: piece.naturalSize, preferredTransform: piece.preferredTransform, renderSize: renderSize)
+            baseLayer.setTransform(fitted, at: piece.timeRange.start)
+            baseLayer.setCropRectangle(CGRect(origin: .zero, size: piece.naturalSize), at: piece.timeRange.start)
+        }
         var layers: [AVVideoCompositionLayerInstruction] = [baseLayer]
         for overlay in overlays {
             guard let track = try await composition.loadTrack(withTrackID: overlay.trackID) else {
@@ -136,6 +147,15 @@ enum ProjectVideoComposition {
             baseOnly.removeTrack(track)
         }
         return try await AVMutableVideoComposition.videoComposition(withPropertiesOf: baseOnly)
+    }
+
+    /// Кусок исходника с его поворотом, вписанный в кадр ролика целиком и по центру.
+    static func fittedTransform(
+        naturalSize: CGSize, preferredTransform: CGAffineTransform, renderSize: CGSize
+    ) -> CGAffineTransform {
+        overlayTransform(
+            naturalSize: naturalSize, preferredTransform: preferredTransform, position: .full, scale: 1,
+            renderSize: renderSize)
     }
 
     /// Где анимация в кадре. `.full` — вписана целиком по центру; `.center` — вписана и

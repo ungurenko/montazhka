@@ -88,12 +88,15 @@ actor MediaPipeline {
         warnings.append(contentsOf: built.warnings)
         CacheFileLease.attach(leases, to: built.composition)
         let subtitles = isNormal ? request.subtitleLayer : nil
+        // Разные повороты и размеры исходников собираются по кускам (кроме черновика шортса:
+        // его вертикальный кадр строит ShortsRenderer).
+        let segments = isNormal && built.hasMixedGeometry ? built.baseSegments : []
         var videoPlan: ProjectVideoPlan?
-        if !built.overlayTracks.isEmpty || subtitles != nil {
+        if !built.overlayTracks.isEmpty || subtitles != nil || !segments.isEmpty {
             do {
                 videoPlan = try await ProjectVideoComposition.make(
                     composition: built.composition, baseTrackID: built.baseVideoTrackID,
-                    overlays: built.overlayTracks, subtitles: subtitles)
+                    overlays: built.overlayTracks, subtitles: subtitles, segments: segments)
             } catch {
                 Logger.export.error("Картинка проекта не собралась: \(String(reflecting: error), privacy: .public)")
                 warnings.append(.pictureFailed)

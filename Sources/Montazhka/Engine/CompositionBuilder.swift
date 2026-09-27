@@ -39,6 +39,13 @@ enum CompositionWarning: Equatable {
     }
 }
 
+/// Кусок основной видеодорожки и геометрия его исходника.
+struct VideoSegmentGeometry: Equatable, Sendable {
+    let timeRange: CMTimeRange
+    let naturalSize: CGSize
+    let preferredTransform: CGAffineTransform
+}
+
 /// @unchecked Sendable: готовая композиция после сборки не мутируется —
 /// вызывающий код только читает её и передаёт дальше.
 struct CompositionBuildResult: @unchecked Sendable {
@@ -49,6 +56,17 @@ struct CompositionBuildResult: @unchecked Sendable {
     var baseVideoTrackID = kCMPersistentTrackID_Invalid
     /// Дорожки анимаций поверх основной, по порядку `overlays`.
     var overlayTracks: [OverlayTrack] = []
+    /// Куски основной дорожки по порядку ленты.
+    var baseSegments: [VideoSegmentGeometry] = []
+
+    /// У исходников ленты разные поворот или размер: одного поворота дорожки на всё
+    /// не хватает, кадр собирается по кускам.
+    var hasMixedGeometry: Bool {
+        guard let first = baseSegments.first else { return false }
+        return baseSegments.contains {
+            $0.naturalSize != first.naturalSize || $0.preferredTransform != first.preferredTransform
+        }
+    }
 }
 
 /// План открытия медиа: каждый исходник и его обработанный звук загружаются один раз.
@@ -163,6 +181,7 @@ enum CompositionBuilder {
         // Фаза 2 — вставка по порядку. Мутируем общие треки, поэтому строго последовательно.
         var cursor = CMTime.zero
         var transformSet = false
+        var segments: [VideoSegmentGeometry] = []
         var warnings: [CompositionWarning] = []
         var voiceJoints: [(time: CMTime, leftDuration: CMTime, rightDuration: CMTime)] = []
         var previousAudioInserted = false
@@ -180,6 +199,11 @@ enum CompositionBuilder {
                 do {
                     try videoTrack.insertTimeRange(range, of: video, at: cursor)
                     for copy in extraVideoTracks { try copy.insertTimeRange(range, of: video, at: cursor) }
+                    segments.append(
+                        VideoSegmentGeometry(
+                            timeRange: CMTimeRange(start: cursor, duration: range.duration),
+                            naturalSize: source.naturalSize ?? .zero,
+                            preferredTransform: source.transform ?? .identity))
                     if !transformSet, let transform = source.transform {
                         videoTrack.preferredTransform = transform
                         for copy in extraVideoTracks { copy.preferredTransform = transform }
@@ -241,7 +265,7 @@ enum CompositionBuilder {
             }()
         return CompositionBuildResult(
             composition: composition, audioMix: audioMix, warnings: warnings,
-            baseVideoTrackID: videoTrack.trackID, overlayTracks: overlayTracks)
+            baseVideoTrackID: videoTrack.trackID, overlayTracks: overlayTracks, baseSegments: segments)
     }
 
     /// Каждая видимая анимация — своя дорожка: кусок файла с `mediaStart` длиной в окно
@@ -326,6 +350,7 @@ enum CompositionBuilder {
         let name: String
         let video: AVAssetTrack?
         let transform: CGAffineTransform?
+        let naturalSize: CGSize?
         let enhancedAudio: (track: AVAssetTrack, range: CMTimeRange)?
         let originalAudio: AVAssetTrack?
         let sourceAsset: AVURLAsset
@@ -338,10 +363,10 @@ enum CompositionBuilder {
         async let originalAudio = firstAudioTrack(of: asset)
         async let enhanced = loadEnhancedAudio(url: source.enhancedURL)
 
-        let (video, transform) = await videoLoad
+        let (video, transform, naturalSize) = await videoLoad
         let enhancedResult = await enhanced
         return LoadedSource(
-            name: source.displayName, video: video, transform: transform,
+            name: source.displayName, video: video, transform: transform, naturalSize: naturalSize,
             enhancedAudio: enhancedResult.map { ($0.track, $0.range) },
             originalAudio: await originalAudio,
             sourceAsset: asset,
@@ -349,9 +374,9 @@ enum CompositionBuilder {
         )
     }
 
-    private static func loadVideo(from asset: AVURLAsset) async -> (AVAssetTrack?, CGAffineTransform?) {
-        guard let video = try? await asset.loadTracks(withMediaType: .video).first else { return (nil, nil) }
-        return (video, try? await video.load(.preferredTransform))
+    private static func loadVideo(from asset: AVURLAsset) async -> (AVAssetTrack?, CGAffineTransform?, CGSize?) {
+        guard let video = try? await asset.loadTracks(withMediaType: .video).first else { return (nil, nil, nil) }
+        return (video, try? await video.load(.preferredTransform), try? await video.load(.naturalSize))
     }
 
     private static func firstAudioTrack(of asset: AVURLAsset) async -> AVAssetTrack? {
