@@ -145,7 +145,8 @@ enum FinalExport {
             let overhang = CMTimeRange(start: length, end: composition.duration)
             for track in composition.tracks(withMediaType: .audio) { track.removeTimeRange(overhang) }
         }
-        return ExportInput(composition: composition, audioMix: nil, videoComposition: input.videoComposition)
+        return ExportInput(
+            composition: composition, audioMix: nil, videoComposition: input.videoComposition, overlay: input.overlay)
     }
 
     private static func meetsTarget(_ loudness: LoudnessMeasurement) -> Bool {
@@ -174,7 +175,7 @@ enum FinalExport {
         let quality: ExportQuality
         switch job.sizing {
         case .settings(let settings):
-            try await Transcoder.exportWithOfflineComposition(
+            try await Transcoder.export(
                 input: input, settings: settings, to: url, metadata: metadata, progress: progress)
             return
         case .composition where input.videoComposition != nil:
@@ -190,13 +191,7 @@ enum FinalExport {
         // Размер считается по кадру самой склейки, без своей видеокомпозиции.
         let base = ExportInput(composition: input.composition, audioMix: input.audioMix)
         let settings = try await Transcoder.settings(for: quality, input: base)
-        if input.videoComposition == nil {
-            try await Transcoder.export(
-                input: input, settings: settings, to: url, metadata: metadata, progress: progress)
-        } else {
-            try await Transcoder.exportWithOfflineComposition(
-                input: input, settings: settings, to: url, metadata: metadata, progress: progress)
-        }
+        try await Transcoder.export(input: input, settings: settings, to: url, metadata: metadata, progress: progress)
     }
 }
 

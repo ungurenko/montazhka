@@ -25,11 +25,9 @@ struct ProjectSubtitleLayer: Sendable {
 /// Картинка обычного проекта с анимациями и субтитрами.
 /// @unchecked Sendable: композиции после сборки не меняются, их только читают.
 struct ProjectVideoPlan: @unchecked Sendable {
-    /// Основа и анимации: предпросмотр и кадры агента.
+    /// Основа и анимации: предпросмотр, кадры агента и MP4.
     let frameComposition: AVMutableVideoComposition
-    /// То же и субтитры слоем Core Animation поверх всего — для MP4.
-    let exportComposition: AVMutableVideoComposition
-    /// Субтитры картинкой для кадров агента.
+    /// Вшитые субтитры картинкой поверх кадра — для кадров агента и MP4 одним рисовальщиком.
     let overlayImageAt: (@Sendable (Double) -> CGImage?)?
 }
 
@@ -65,7 +63,7 @@ enum ProjectVideoComposition {
     /// дорожка держит последний кадр до конца ролика.
     static func make(
         composition: AVComposition, baseTrackID: CMPersistentTrackID, overlays: [OverlayTrack],
-        subtitles: ProjectSubtitleLayer?, duration: Double
+        subtitles: ProjectSubtitleLayer?
     ) async throws -> ProjectVideoPlan? {
         guard !overlays.isEmpty || subtitles != nil else { return nil }
         guard let base = try await composition.loadTrack(withTrackID: baseTrackID) else { throw BuildError.noBaseVideo }
@@ -79,8 +77,7 @@ enum ProjectVideoComposition {
         baseLayer.setTransform(
             preferred.concatenating(CGAffineTransform(translationX: -oriented.minX, y: -oriented.minY)), at: .zero)
         // Обрезка по всему кадру ничего не отрезает, но заставляет честно смешивать каждый
-        // кадр. Иначе кадр с одной основой как есть сессия экспорта пропускает мимо
-        // смешивания, и под слоем субтитров (Core Animation) он выходит белым.
+        // кадр: кадр с одной основой как есть AVFoundation может пропустить мимо смешивания.
         baseLayer.setCropRectangle(CGRect(origin: .zero, size: natural), at: .zero)
         var layers: [AVVideoCompositionLayerInstruction] = [baseLayer]
         for overlay in overlays {
@@ -114,20 +111,11 @@ enum ProjectVideoComposition {
         frame.colorTransferFunction = plain.colorTransferFunction
         frame.colorYCbCrMatrix = plain.colorYCbCrMatrix
 
-        guard let export = frame.mutableCopy() as? AVMutableVideoComposition else { throw BuildError.noBaseVideo }
-        guard let subtitles else {
-            return ProjectVideoPlan(frameComposition: frame, exportComposition: export, overlayImageAt: nil)
+        let overlay = subtitles.flatMap {
+            OverlayFrameRenderer(
+                renderSize: renderSize, cues: $0.cues, appearance: $0.appearance, highlight: $0.highlight, hook: nil)
         }
-        return ProjectVideoPlan(
-            frameComposition: frame,
-            exportComposition: ShortsSubtitleRenderer.applying(
-                export, cues: subtitles.cues, appearance: subtitles.appearance, highlight: subtitles.highlight,
-                duration: duration),
-            overlayImageAt: { time in
-                ShortsOverlaySnapshot.image(
-                    at: time, renderSize: renderSize, cues: subtitles.cues, appearance: subtitles.appearance,
-                    highlight: subtitles.highlight, hook: nil)
-            })
+        return ProjectVideoPlan(frameComposition: frame, overlayImageAt: overlay.map { renderer in renderer.image })
     }
 
     /// Шаг кадров ровно как у обычного экспорта (`videoComposition(withPropertiesOf:)`):

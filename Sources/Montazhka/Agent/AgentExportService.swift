@@ -117,7 +117,7 @@ extension AgentService {
         let job = FinalExportJob(
             input: ExportInput(
                 composition: rendered.composition, audioMix: rendered.audioMix,
-                videoComposition: rendered.videoPlan?.exportComposition),
+                videoComposition: rendered.videoPlan?.frameComposition, overlay: rendered.videoPlan?.overlayImageAt),
             quality: quality, sizing: .quality(quality), subtitleCues: speech.horizontalCues,
             subtitlesSkippedReason: speech.skippedReason, normalizeLoudness: normalize,
             projectFingerprint: fingerprint, protectedInputs: project.exportInputFiles)

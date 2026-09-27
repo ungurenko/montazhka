@@ -6,6 +6,8 @@ import Foundation
 struct ShortsVideoCompositionPlan {
     let videoComposition: AVMutableVideoComposition?
     let outputRenderSize: CGSize?
+    /// Субтитры поверх кадра для записи MP4; nil — без них.
+    var overlay: OverlayFrameRenderer? = nil
 }
 
 enum ShortsVideoCompositionError: LocalizedError {
@@ -16,9 +18,9 @@ enum ShortsVideoCompositionError: LocalizedError {
     }
 }
 
-/// Единая точка сборки crop-композиции и offline-слоя субтитров.
+/// Единая точка сборки crop-композиции и субтитров для записи.
 /// Preview использует этот builder для кропа, а текст рисует SwiftUI-слоем;
-/// export добавляет сюда Core Animation для запекания в MP4.
+/// export получает субтитры картинкой, которую запись кладёт на каждый кадр.
 enum ShortsVideoCompositionBuilder {
     static func make(
         asset: AVAsset,
@@ -64,23 +66,17 @@ enum ShortsVideoCompositionBuilder {
             return ShortsVideoCompositionPlan(videoComposition: nil, outputRenderSize: nil)
         }
 
-        let videoComposition: AVMutableVideoComposition
-        switch subtitleMode {
-        case .off:
-            videoComposition = base
-        case let .on(words, appearance, highlight):
+        var overlay: OverlayFrameRenderer?
+        if case let .on(words, appearance, highlight) = subtitleMode {
             let cues = ShortsSubtitleCueBuilder.make(words: words, timeMap: subtitleTimeMap)
-            videoComposition = ShortsSubtitleRenderer.applying(
-                base,
-                cues: cues,
-                appearance: appearance,
-                highlight: highlight,
-                duration: subtitleTimeMap.outputDuration)
+            overlay = OverlayFrameRenderer(
+                renderSize: base.renderSize, cues: cues, appearance: appearance, highlight: highlight, hook: nil)
         }
 
         return ShortsVideoCompositionPlan(
-            videoComposition: videoComposition,
-            outputRenderSize: frameComposition?.renderSize)
+            videoComposition: base,
+            outputRenderSize: frameComposition?.renderSize,
+            overlay: overlay)
     }
 
     /// Видеокомпозиция с вырезом 9:16 по центру кадра. Возвращает nil,

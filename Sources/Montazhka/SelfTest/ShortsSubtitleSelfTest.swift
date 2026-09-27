@@ -120,7 +120,7 @@ enum ShortsSubtitleSelfTest {
                         subtitleTimeMap: .single(start: 1, end: 3))
                     everyVariantHasLayer =
                         everyVariantHasLayer
-                        && variant.videoComposition?.animationTool != nil
+                        && variant.overlay?.image(at: 1.5) != nil
                 }
             }
             check(everyVariantHasLayer, "все образы и размеры создают слой субтитров")
@@ -214,7 +214,7 @@ enum ShortsSubtitleSelfTest {
             at: 5, renderSize: canvas, cues: [], appearance: appearance, highlight: false, hook: hook)
         check(
             hookStill.map { hasInk($0, rows: 0...0.3) } == true
-                && afterHook.map { hasInk($0, rows: 0...0.3) } == false,
+                && afterHook.map { hasInk($0, rows: 0...0.3) } != true,
             "хук виден сверху первые секунды и потом исчезает")
         // Текст рисуется целиком для каждого образа: подпись без подложки видна,
         // у хука из трёх строк есть третья строка.

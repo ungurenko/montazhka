@@ -36,15 +36,21 @@ enum TranscodeError: LocalizedError {
 /// композиция нигде больше не мутируется — контейнер осознанно помечен unchecked.
 /// `videoComposition` — необязательная замена автоматической (например, кроп 9:16
 /// при нарезке на shorts); nil — стандартная сборка из свойств композиции.
+/// `overlay` — надписи поверх кадра в момент ленты (вшитые субтитры, хук); nil — без них.
 struct ExportInput: @unchecked Sendable {
     let composition: AVAsset
     let audioMix: AVAudioMix?
     var videoComposition: AVVideoComposition?
+    var overlay: (@Sendable (Double) -> CGImage?)?
 
-    init(composition: AVAsset, audioMix: AVAudioMix?, videoComposition: AVVideoComposition? = nil) {
+    init(
+        composition: AVAsset, audioMix: AVAudioMix?, videoComposition: AVVideoComposition? = nil,
+        overlay: (@Sendable (Double) -> CGImage?)? = nil
+    ) {
         self.composition = composition
         self.audioMix = audioMix
         self.videoComposition = videoComposition
+        self.overlay = overlay
     }
 }
 
@@ -58,14 +64,6 @@ private struct VideoPumpIO: @unchecked Sendable {
 private struct AudioPumpIO: @unchecked Sendable {
     let audioOutput: AVAssetReaderAudioMixOutput?
     let audioInput: AVAssetWriterInput?
-}
-
-private final class ExportSessionBox: @unchecked Sendable {
-    let session: AVAssetExportSession
-
-    init(_ session: AVAssetExportSession) {
-        self.session = session
-    }
 }
 
 /// Перекодирование склейки в MP4 (H.264 + AAC) с заданным битрейтом.
@@ -224,10 +222,20 @@ enum Transcoder {
         nonisolated(unsafe) let cancelReader = reader
         let videoIO = VideoPumpIO(videoOutput: videoOutput, videoInput: videoInput)
         let audioIO = AudioPumpIO(audioOutput: audioOutput, audioInput: audioInput)
+        // Надписи кладутся на кадры здесь же, одним проходом: сессия экспорта с Core Animation
+        // на macOS 26 сдвигала цвет всего кадра (серый 128 → 145).
+        var burnOverlay: (@Sendable (CMSampleBuffer) -> CMSampleBuffer)?
+        if let overlay = input.overlay {
+            let burner = FrameOverlayBurner(overlay: overlay)
+            burnOverlay = { sample in burner.burn(sample) }
+        }
+        let transform = burnOverlay
         await withTaskCancellationHandler {
             await withTaskGroup(of: Void.self) { group in
                 group.addTask {
-                    await pump(from: videoIO.videoOutput, to: videoIO.videoInput, label: "video") { time in
+                    await pump(
+                        from: videoIO.videoOutput, to: videoIO.videoInput, label: "video", transform: transform
+                    ) { time in
                         guard duration > 0 else { return }
                         progress(min(0.999, time.seconds / duration))
                     }
@@ -260,106 +268,6 @@ enum Transcoder {
         progress(1)
     }
 
-    /// Core Animation tool поддерживается AVFoundation в offline-экспорте через
-    /// AVAssetExportSession. После запекания субтитров вторым проходом возвращаем
-    /// привычные битрейт и размеры, которыми пользуется основной Transcoder.
-    /// `metadata` получает готовый файл второго прохода.
-    static func exportWithOfflineComposition(
-        input: ExportInput,
-        settings: Settings,
-        to url: URL,
-        metadata: [AVMetadataItem] = [],
-        progress: @escaping @Sendable (Double) -> Void
-    ) async throws {
-        guard input.videoComposition?.animationTool != nil else {
-            try await export(input: input, settings: settings, to: url, metadata: metadata, progress: progress)
-            return
-        }
-
-        let intermediate = FileManager.default.temporaryDirectory
-            .appendingPathComponent("montazhka-subtitles-\(UUID().uuidString).mp4")
-        defer { try? FileManager.default.removeItem(at: intermediate) }
-
-        try await exportWithSession(
-            input: input,
-            to: intermediate,
-            progress: { progress($0 * 0.5) })
-
-        try await export(
-            input: ExportInput(composition: AVURLAsset(url: intermediate), audioMix: nil),
-            settings: settings,
-            to: url,
-            metadata: metadata,
-            progress: { progress(0.5 + $0 * 0.5) })
-    }
-
-    /// Сессия экспорта помечает промежуточный файл как BT.709 всегда — и у SD без пометок,
-    /// и у композиции в BT.601 (замерено), — а пиксели считает в цвете видеокомпозиции.
-    /// Поэтому цвет композиции для неё закрепляется тем же BT.709: иначе пометки и пиксели
-    /// расходятся (macOS 26: серый 128 выходит 145, красный — с зелёным 34). Это настоящее
-    /// преобразование: кадры исходников сводятся в BT.709, HLG — в обычный SDR.
-    static func sessionComposition(_ videoComposition: AVVideoComposition) -> AVVideoComposition {
-        guard let fixed = videoComposition.mutableCopy() as? AVMutableVideoComposition else { return videoComposition }
-        fixed.colorPrimaries = AVVideoColorPrimaries_ITU_R_709_2
-        fixed.colorTransferFunction = AVVideoTransferFunction_ITU_R_709_2
-        fixed.colorYCbCrMatrix = AVVideoYCbCrMatrix_ITU_R_709_2
-        return fixed
-    }
-
-    private static func exportWithSession(
-        input: ExportInput,
-        to url: URL,
-        progress: @escaping @Sendable (Double) -> Void
-    ) async throws {
-        guard let videoComposition = input.videoComposition,
-            let session = AVAssetExportSession(
-                asset: input.composition,
-                presetName: AVAssetExportPresetHighestQuality)
-        else {
-            throw TranscodeError.writerFailed(nil)
-        }
-
-        let box = ExportSessionBox(session)
-        session.videoComposition = sessionComposition(videoComposition)
-        session.audioMix = input.audioMix
-        session.outputURL = url
-        session.outputFileType = .mp4
-        session.shouldOptimizeForNetworkUse = true
-        try? FileManager.default.removeItem(at: url)
-
-        try await withTaskCancellationHandler {
-            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-                let monitor = Task.detached { [box] in
-                    while !Task.isCancelled {
-                        progress(Double(box.session.progress))
-                        switch box.session.status {
-                        case .completed, .failed, .cancelled:
-                            return
-                        default:
-                            try? await Task.sleep(nanoseconds: 200_000_000)
-                        }
-                    }
-                }
-
-                box.session.exportAsynchronously {
-                    monitor.cancel()
-                    progress(1)
-                    switch box.session.status {
-                    case .completed:
-                        continuation.resume()
-                    case .cancelled:
-                        continuation.resume(throwing: CancellationError())
-                    default:
-                        continuation.resume(
-                            throwing: TranscodeError.writerFailed(box.session.error))
-                    }
-                }
-            }
-        } onCancel: {
-            box.session.cancelExport()
-        }
-    }
-
     /// Потоки ридер → писатель. Колбэк requestMediaDataWhenReady зовётся строго
     /// последовательно на своей очереди — бокс хранит его рабочее состояние.
     private final class PumpState: @unchecked Sendable {
@@ -370,10 +278,12 @@ enum Transcoder {
     /// Перекачка одного потока ридер → писатель.
     /// ВАЖНО: только requestMediaDataWhenReady — ручной опрос isReadyForMoreMediaData
     /// виснет без живого RunLoop (--selftest). Прогресс — не чаще раза на 0.25 сек видео.
+    /// `transform` меняет кадр перед записью (надписи); nil — кадр идёт как есть.
     private static func pump(
         from outputParam: AVAssetReaderOutput,
         to inputParam: AVAssetWriterInput,
         label: String,
+        transform: (@Sendable (CMSampleBuffer) -> CMSampleBuffer)? = nil,
         onSample: (@Sendable (CMTime) -> Void)?
     ) async {
         // Колбэк живёт на своей последовательной очереди — гонок нет, помечаем осознанно
@@ -398,7 +308,7 @@ enum Transcoder {
                             onSample(time)
                         }
                     }
-                    if !input.append(sample) {
+                    if !input.append(transform?(sample) ?? sample) {
                         state.finished = true
                         input.markAsFinished()
                         continuation.resume()
@@ -419,7 +329,7 @@ extension Transcoder {
         progress: @escaping @Sendable (Double) -> Void
     ) async throws {
         let dimensions = input.videoComposition?.renderSize ?? .zero
-        try await exportWithOfflineComposition(
+        try await export(
             input: input,
             settings: Settings(
                 dimensions: dimensions, videoBitrate: quality.videoBitrate(forDimensions: dimensions),

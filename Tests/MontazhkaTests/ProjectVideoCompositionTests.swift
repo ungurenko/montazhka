@@ -270,17 +270,16 @@ struct ProjectVideoCompositionTests {
 
         let reference = try await AVMutableVideoComposition.videoComposition(withPropertiesOf: plain.composition)
         let plan = try #require(animated.videoPlan)
-        for composition in [plan.frameComposition, plan.exportComposition] {
-            #expect(composition.frameDuration == reference.frameDuration, "\(composition.frameDuration)")
-            #expect(composition.colorPrimaries == reference.colorPrimaries)
-            #expect(composition.colorTransferFunction == reference.colorTransferFunction)
-            #expect(composition.colorYCbCrMatrix == reference.colorYCbCrMatrix)
-        }
+        let composition = plan.frameComposition
+        #expect(composition.frameDuration == reference.frameDuration, "\(composition.frameDuration)")
+        #expect(composition.colorPrimaries == reference.colorPrimaries)
+        #expect(composition.colorTransferFunction == reference.colorTransferFunction)
+        #expect(composition.colorYCbCrMatrix == reference.colorYCbCrMatrix)
 
         let plainFile = scene.root.appendingPathComponent("plain.mp4")
         let animatedFile = scene.root.appendingPathComponent("animated.mp4")
         try await export(plain, videoComposition: nil, to: plainFile)
-        try await export(animated, videoComposition: plan.exportComposition, to: animatedFile)
+        try await export(animated, videoComposition: plan.frameComposition, to: animatedFile)
         let plainTimes = try await frameTimes(plainFile)
         let animatedTimes = try await frameTimes(animatedFile)
         #expect(plainTimes.count == 300)
@@ -476,8 +475,6 @@ struct ProjectVideoCompositionTests {
 
         let plan = try #require(result.videoPlan)
         #expect(plan.frameComposition.animationTool == nil)
-        #expect(plan.exportComposition.animationTool != nil)
-        #expect(plan.exportComposition.renderSize == CGSize(width: Scene.width, height: Scene.height))
         let still = try #require(plan.overlayImageAt?(1))
         #expect(still.width == Scene.width && still.height == Scene.height)
         // Сам кадр без субтитров — основа, как на ленте.
@@ -539,13 +536,15 @@ struct ProjectVideoCompositionTests {
         #expect(preview.animationTool == nil)
 
         let burned = try await controller.prepareExport(step: { _ in })
-        #expect(burned.videoComposition?.animationTool != nil)
+        #expect(burned.videoComposition?.animationTool == nil)
+        #expect(burned.overlay?(1) != nil, "субтитры идут картинкой поверх кадра")
         #expect(burned.sizing == .quality)
         #expect(burned.subtitleCues?.map(\.text) == ["Привет это проверка"])
 
         controller.setExportPreferences(ExportPreferences(normalizeLoudness: true, burnSubtitles: false))
         let overlayOnly = try await controller.prepareExport(step: { _ in })
         #expect(overlayOnly.videoComposition != nil)
+        #expect(overlayOnly.overlay == nil)
         #expect(overlayOnly.videoComposition?.animationTool == nil)
 
         controller.removeOverlay(id: try #require(scene.project.overlays.first?.id))

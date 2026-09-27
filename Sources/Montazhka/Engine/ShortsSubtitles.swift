@@ -577,40 +577,8 @@ enum ShortsSubtitleLayout {
     }
 }
 
-/// Накладывает фразы на видеокомпозицию для offline-экспорта.
+/// Слой надписей (хук и фразы) для записи MP4 и снимков — см. `OverlayFrameRenderer`.
 enum ShortsSubtitleRenderer {
-    static func applying(
-        _ composition: AVMutableVideoComposition,
-        cues: [ShortsSubtitleCue],
-        appearance: ShortsSubtitleAppearance,
-        highlight: Bool,
-        duration: Double,
-        hook: ShortsHook? = nil
-    ) -> AVMutableVideoComposition {
-        guard !cues.isEmpty || hook != nil,
-            duration > 0,
-            composition.renderSize.width > 0,
-            composition.renderSize.height > 0
-        else { return composition }
-
-        let renderSize = composition.renderSize
-        let parentLayer = CALayer()
-        parentLayer.frame = CGRect(origin: .zero, size: renderSize)
-
-        let videoLayer = CALayer()
-        videoLayer.frame = parentLayer.bounds
-        parentLayer.addSublayer(videoLayer)
-        parentLayer.addSublayer(
-            overlayLayer(
-                renderSize: renderSize, cues: cues, appearance: appearance,
-                highlight: highlight, duration: duration, hook: hook))
-
-        composition.animationTool = AVVideoCompositionCoreAnimationTool(
-            postProcessingAsVideoLayer: videoLayer,
-            in: parentLayer)
-        return composition
-    }
-
     /// Все надписи ролика одним слоем: хук и фразы с анимацией видимости.
     /// Этот же слой рисует неподвижный снимок для агента.
     static func overlayLayer(
@@ -891,6 +859,8 @@ enum ShortsSubtitleRenderer {
     /// неподвижный снимок решает, что показать, без проигрывания анимации.
     static let visibleFromKey = "montazhkaVisibleFrom"
     static let visibleToKey = "montazhkaVisibleTo"
+    /// Сколько секунд слой затухает к концу окна; нет ключа — гаснет сразу.
+    static let visibleFadeKey = "montazhkaVisibleFade"
 
     private static func addVisibilityAnimation(
         to layer: CALayer,
@@ -901,6 +871,7 @@ enum ShortsSubtitleRenderer {
     ) {
         layer.setValue(visibleFrom, forKey: visibleFromKey)
         layer.setValue(visibleTo, forKey: visibleToKey)
+        if fadeOut > 0 { layer.setValue(fadeOut, forKey: visibleFadeKey) }
         // Жёсткое включение и выключение (или плавное затухание `fadeOut`).
         // Между ключами прозрачность меняется линейно, поэтому у каждого края
         // два ключа почти в одной точке — иначе фраза проступала бы с начала ролика.
@@ -932,6 +903,7 @@ enum ShortsSubtitleRenderer {
 /// AVAssetImageGenerator не умеет Core Animation, поэтому надписи рисуются
 /// отдельно тем же слоем, что и в экспорте, и кладутся поверх кадра.
 enum ShortsOverlaySnapshot {
+    /// Разовый снимок — тем же рисовальщиком, что кладёт надписи в MP4.
     static func image(
         at time: Double,
         renderSize: CGSize,
@@ -940,30 +912,9 @@ enum ShortsOverlaySnapshot {
         highlight: Bool,
         hook: ShortsHook?
     ) -> CGImage? {
-        let duration = max(time + 1, hook?.duration ?? 0, cues.map(\.end).max() ?? 0)
-        let layer = ShortsSubtitleRenderer.overlayLayer(
-            renderSize: renderSize, cues: cues, appearance: appearance,
-            highlight: highlight, duration: duration, hook: hook)
-        freeze(layer, at: time)
-        guard
-            let context = CGContext(
-                data: nil, width: Int(renderSize.width), height: Int(renderSize.height),
-                bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
-                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
-        else { return nil }
-        layer.render(in: context)
-        return context.makeImage()
-    }
-
-    /// Снимает анимации и оставляет видимым только то, что видно в `time`.
-    private static func freeze(_ layer: CALayer, at time: Double) {
-        if let from = layer.value(forKey: ShortsSubtitleRenderer.visibleFromKey) as? Double,
-            let to = layer.value(forKey: ShortsSubtitleRenderer.visibleToKey) as? Double
-        {
-            layer.opacity = time >= from && time < to ? 1 : 0
-        }
-        layer.removeAllAnimations()
-        for sublayer in layer.sublayers ?? [] { freeze(sublayer, at: time) }
+        OverlayFrameRenderer(
+            renderSize: renderSize, cues: cues, appearance: appearance, highlight: highlight, hook: hook)?
+            .image(at: time)
     }
 }
 

@@ -109,8 +109,10 @@ struct PreparedExport {
     let composition: AVComposition
     let audioMix: AVAudioMix?
     let warning: String?
-    /// Своя картинка кадра (черновик шортса: вертикаль, надписи). nil — как есть.
+    /// Своя картинка кадра (черновик шортса: вертикаль). nil — как есть.
     var videoComposition: AVVideoComposition? = nil
+    /// Надписи поверх кадра (вшитые субтитры, хук); nil — без них.
+    var overlay: (@Sendable (Double) -> CGImage?)? = nil
     var subtitleCues: [ShortsSubtitleCue]? = nil
     var subtitlesSkippedReason: String? = nil
     var normalizeLoudness: Bool = true
@@ -183,7 +185,7 @@ struct TranscodingVideoExporter: VideoExporting {
         let job = FinalExportJob(
             input: ExportInput(
                 composition: prepared.composition, audioMix: prepared.audioMix,
-                videoComposition: prepared.videoComposition),
+                videoComposition: prepared.videoComposition, overlay: prepared.overlay),
             quality: quality,
             sizing: prepared.sizing == .composition ? .composition : .quality(quality),
             subtitleCues: prepared.subtitleCues,

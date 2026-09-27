@@ -34,7 +34,7 @@ struct ShortsRendererTests {
         return Fixture(root: root, service: service, project: project)
     }
 
-    @Test("a draft renders on a vertical canvas; only the export has baked text")
+    @Test("a draft renders on a vertical canvas without Core Animation")
     func planHasVerticalCanvas() async throws {
         let fixture = try await fixture()
         defer { try? FileManager.default.removeItem(at: fixture.root) }
@@ -43,7 +43,6 @@ struct ShortsRendererTests {
         let size = plan.frameComposition.renderSize
         #expect(size.height > size.width)
         #expect(abs(size.width / size.height - 9.0 / 16.0) < 0.01)
-        #expect(plan.exportComposition.animationTool != nil)
         #expect(plan.frameComposition.animationTool == nil)
     }
 
@@ -127,7 +126,7 @@ struct ShortsWindowExportTests {
             project: project, words: [], faces: FaceTrackStore(cacheDir: root), quality: .compact)
         let prepared = PreparedExport(
             composition: plan.composition, audioMix: plan.audioMix, warning: nil,
-            videoComposition: plan.exportComposition)
+            videoComposition: plan.frameComposition, overlay: plan.overlayRenderer.map { renderer in renderer.image })
         let output = root.appendingPathComponent("out.mp4")
         _ = try await TranscodingVideoExporter().export(prepared, quality: .compact, to: output, progress: { _ in })
         let track = try #require(try await AVURLAsset(url: output).loadTracks(withMediaType: .video).first)

@@ -10,9 +10,7 @@ enum ShortsRenderer {
     struct Plan: @unchecked Sendable {
         let composition: AVComposition
         let audioMix: AVAudioMix?
-        /// Для MP4: с запечёнными надписями.
-        let exportComposition: AVMutableVideoComposition
-        /// Для кадров и предпросмотра: без Core Animation, надписи — `overlay`.
+        /// Кадр черновика для MP4, кадров агента и предпросмотра; надписи — `overlay`.
         let frameComposition: AVMutableVideoComposition
         let cues: [ShortsSubtitleCue]
         /// Фразы для .srt рядом с MP4: впечатанные, а без них — те же фразы шортса после хука.
@@ -21,12 +19,11 @@ enum ShortsRenderer {
         let appearance: ShortsSubtitleAppearance
         let highlight: Bool
         let warnings: [CompositionWarning]
+        /// Хук и фразы поверх кадра — одним рисовальщиком для MP4 и кадров агента.
+        let overlayRenderer: OverlayFrameRenderer?
 
         func overlay(at time: Double) -> CGImage? {
-            guard hook != nil || !cues.isEmpty else { return nil }
-            return ShortsOverlaySnapshot.image(
-                at: time, renderSize: frameComposition.renderSize, cues: cues,
-                appearance: appearance, highlight: highlight, hook: hook)
+            overlayRenderer?.image(at: time)
         }
 
         /// Запись MP4 черновика: размер кадра задаёт композиция, битрейт — качество.
@@ -36,7 +33,9 @@ enum ShortsRenderer {
             subtitlesSkippedReason: String? = nil
         ) -> FinalExportJob {
             FinalExportJob(
-                input: ExportInput(composition: composition, audioMix: audioMix, videoComposition: exportComposition),
+                input: ExportInput(
+                    composition: composition, audioMix: audioMix, videoComposition: frameComposition,
+                    overlay: overlayRenderer.map { renderer in renderer.image }),
                 quality: quality, sizing: .composition,
                 subtitleCues: subtitlesSkippedReason == nil ? subtitleFileCues : nil,
                 subtitlesSkippedReason: subtitlesSkippedReason,
@@ -93,16 +92,12 @@ enum ShortsRenderer {
         let cues = shorts.subtitles == nil ? [] : spoken
         let appearance = shorts.subtitles?.appearance ?? ShortsSubtitleSettings.saved().appearance
         let highlight = shorts.subtitles?.highlight ?? false
-        guard let exportBase = frame.mutableCopy() as? AVMutableVideoComposition else {
-            throw ShortsVideoCompositionError.invalidVideoTrack
-        }
-        let export = ShortsSubtitleRenderer.applying(
-            exportBase, cues: cues, appearance: appearance,
-            highlight: highlight, duration: project.totalDuration, hook: hook)
         return Plan(
-            composition: rendered.composition, audioMix: rendered.audioMix, exportComposition: export,
+            composition: rendered.composition, audioMix: rendered.audioMix,
             frameComposition: frame, cues: cues, subtitleFileCues: spoken, hook: hook, appearance: appearance,
-            highlight: highlight, warnings: rendered.warnings)
+            highlight: highlight, warnings: rendered.warnings,
+            overlayRenderer: OverlayFrameRenderer(
+                renderSize: frame.renderSize, cues: cues, appearance: appearance, highlight: highlight, hook: hook))
     }
 
     /// Лица по кускам черновика с запасом в секунду: сглаживанию нужен разгон.

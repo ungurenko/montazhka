@@ -49,7 +49,7 @@ struct ShortsDraftCompositionTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let output = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).mp4")
         defer { try? FileManager.default.removeItem(at: output) }
-        try await Transcoder.exportWithOfflineComposition(
+        try await Transcoder.export(
             input: ExportInput(composition: composition, audioMix: nil, videoComposition: video),
             settings: Transcoder.Settings(dimensions: video.renderSize, videoBitrate: 1_000_000, audioBitrate: 64_000),
             to: output, progress: { _ in })

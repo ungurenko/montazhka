@@ -33,19 +33,29 @@ struct ShortsOverlayTests {
         #expect(cues.map(\.text) == ["потом"])
     }
 
-    private func canvasComposition() -> AVMutableVideoComposition {
-        let composition = AVMutableVideoComposition()
-        composition.renderSize = CGSize(width: 360, height: 640)
-        composition.frameDuration = CMTime(value: 1, timescale: 30)
-        return composition
-    }
-
     @Test("a hook alone is enough to draw overlays")
     func hookWithoutSubtitles() {
-        let result = ShortsSubtitleRenderer.applying(
-            canvasComposition(), cues: [], appearance: .default, highlight: false, duration: 10,
+        let renderer = OverlayFrameRenderer(
+            renderSize: CGSize(width: 360, height: 640), cues: [], appearance: .default, highlight: false,
             hook: ShortsHook(text: "Монтаж за минуту"))
-        #expect(result.animationTool != nil)
+        #expect(renderer?.image(at: 1) != nil)
+    }
+
+    @Test("overlays are drawn only while something is visible, and once per visible state")
+    func overlayRendererCachesByVisibleState() throws {
+        let words = [
+            ShortsSubtitleWord(text: "раз", start: 1, end: 1.5), ShortsSubtitleWord(text: "два", start: 1.5, end: 2),
+        ]
+        let cue = ShortsSubtitleCue(words: words, start: 1, end: 2)
+        let renderer = try #require(
+            OverlayFrameRenderer(
+                renderSize: CGSize(width: 360, height: 640), cues: [cue], appearance: .default, highlight: false,
+                hook: nil))
+
+        #expect(renderer.image(at: 0.5) == nil, "до фразы кадр чистый")
+        let first = try #require(renderer.image(at: 1.1))
+        #expect(renderer.image(at: 1.4) === first, "та же фраза — та же картинка, без перерисовки")
+        #expect(renderer.image(at: 2.5) == nil, "после фразы кадр чистый")
     }
 
     // Пиксели текста проверяет самопроверка приложения (ShortsSubtitleSelfTest):

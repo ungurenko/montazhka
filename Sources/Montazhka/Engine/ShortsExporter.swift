@@ -38,7 +38,8 @@ enum ShortsExporter {
             input: ExportInput(
                 composition: built.composition,
                 audioMix: built.audioMix,
-                videoComposition: plan.videoComposition),
+                videoComposition: plan.videoComposition,
+                overlay: plan.overlay.map { renderer in renderer.image }),
             quality: quality,
             sizing: .settings(settings),
             subtitleCues: cues,

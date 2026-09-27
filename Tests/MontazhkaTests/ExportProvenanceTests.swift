@@ -39,26 +39,25 @@ struct ExportProvenanceTests {
         #expect(await ExportProvenance.read(url: output) == "lenta-1")
     }
 
-    @Test("the two-pass export with baked layers carries the fingerprint into the final file")
-    func offlineCompositionKeepsFingerprint() async throws {
+    @Test("an export with burned-in overlays carries the fingerprint into the file")
+    func overlayExportKeepsFingerprint() async throws {
         let source = try await source()
         defer { try? FileManager.default.removeItem(at: source.root) }
         let videoComposition = try await AVMutableVideoComposition.videoComposition(
             withPropertiesOf: source.input.composition)
-        let frame = CGRect(origin: .zero, size: videoComposition.renderSize)
-        let parent = CALayer()
-        let videoLayer = CALayer()
-        parent.frame = frame
-        videoLayer.frame = frame
-        parent.addSublayer(videoLayer)
-        videoComposition.animationTool = AVVideoCompositionCoreAnimationTool(
-            postProcessingAsVideoLayer: videoLayer, in: parent)
+        let size = videoComposition.renderSize
         let output = source.root.appendingPathComponent("baked.mp4")
 
-        try await Transcoder.exportWithOfflineComposition(
+        try await Transcoder.export(
             input: ExportInput(
                 composition: source.input.composition, audioMix: source.input.audioMix,
-                videoComposition: videoComposition),
+                videoComposition: videoComposition,
+                overlay: { _ in
+                    CGContext(
+                        data: nil, width: Int(size.width), height: Int(size.height), bitsPerComponent: 8,
+                        bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
+                        bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)?.makeImage()
+                }),
             settings: source.settings, to: output,
             metadata: ExportProvenance.metadataItems(fingerprint: "lenta-2")
         ) { _ in }

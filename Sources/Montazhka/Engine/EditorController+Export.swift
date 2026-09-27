@@ -7,13 +7,14 @@ extension EditorController {
 
     /// Композиция для экспорта. Если улучшение включено — дожидается обработки всех
     /// исходников; при неудаче отдаёт оригинальный звук и текст предупреждения.
-    /// `videoComposition` — анимации и вшитые субтитры; nil — кадр как есть.
+    /// `videoComposition` — анимации; `overlay` — вшитые субтитры; nil — кадр как есть.
     func compositionForExport(
         _ snapshot: Project, speechRanges: [TimelineRange]?, subtitleLayer: ProjectSubtitleLayer? = nil
     ) async -> (
         composition: AVComposition,
         audioMix: AVAudioMix?,
         videoComposition: AVVideoComposition?,
+        overlay: (@Sendable (Double) -> CGImage?)?,
         audioWarning: String?
     ) {
         let result = await renderComposition(
@@ -22,7 +23,10 @@ extension EditorController {
             result.warnings.isEmpty
             ? nil
             : result.warnings.map(\.message).joined(separator: "\n")
-        return (result.composition, result.audioMix, result.videoPlan?.exportComposition, warning)
+        return (
+            result.composition, result.audioMix, result.videoPlan?.frameComposition, result.videoPlan?.overlayImageAt,
+            warning
+        )
     }
 
     /// Обычный проект: слова ленты дают .srt, вшитые субтитры (если включены)
@@ -46,7 +50,7 @@ extension EditorController {
         }
         return PreparedExport(
             composition: result.composition, audioMix: result.audioMix, warning: result.audioWarning,
-            videoComposition: result.videoComposition,
+            videoComposition: result.videoComposition, overlay: result.overlay,
             subtitleCues: speech.horizontalCues, subtitlesSkippedReason: speech.skippedReason,
             normalizeLoudness: exported.export.normalizeLoudness,
             projectFingerprint: ExportProvenance.fingerprint(for: exported), sizing: .quality,
@@ -75,7 +79,7 @@ extension EditorController {
         return PreparedExport(
             composition: plan.composition, audioMix: plan.audioMix,
             warning: plan.warnings.isEmpty ? nil : plan.warnings.map(\.message).joined(separator: "\n"),
-            videoComposition: plan.exportComposition,
+            videoComposition: plan.frameComposition, overlay: plan.overlayRenderer.map { renderer in renderer.image },
             subtitleCues: words == nil ? nil : plan.subtitleFileCues,
             subtitlesSkippedReason: words == nil ? ExportSpeech.noTranscriptReason : nil,
             normalizeLoudness: exported.export.normalizeLoudness,
