@@ -48,6 +48,49 @@ struct LoudnessNormalizerTests {
         try file.write(from: buffer)
     }
 
+    /// Склейка из одной звуковой дорожки файла.
+    private func audioComposition(of url: URL) async throws -> AVMutableComposition {
+        let asset = AVURLAsset(url: url)
+        guard let sourceTrack = try await asset.loadTracks(withMediaType: .audio).first else {
+            throw TestFailure(reason: "no audio in \(url.lastPathComponent)")
+        }
+        let composition = AVMutableComposition()
+        guard
+            let track = composition.addMutableTrack(
+                withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid)
+        else { throw TestFailure(reason: "audio track") }
+        try track.insertTimeRange(try await sourceTrack.load(.timeRange), of: sourceTrack, at: .zero)
+        return composition
+    }
+
+    /// Речь с высоким пик-фактором (~−30 LUFS, пики около −6 dBFS): гласные — гармоники 140 Гц
+    /// под слоговой огибающей 4 Гц, согласные — шумовые щелчки 0,5 с затуханием 0,5 мс раз в 0,6 с.
+    /// Шум детерминированный (LCG), чтобы результат не плавал между запусками.
+    private func peakySpeech(seconds: Double) -> [Float] {
+        let sampleRate = 48000.0
+        let count = Int(seconds * sampleRate)
+        let vowelLevel = pow(10, -21.0 / 20)
+        var samples = (0..<count).map { index -> Float in
+            let time = Double(index) / sampleRate
+            let syllable = pow(sin(Double.pi * 4 * time), 2)
+            let voice = (1...8).reduce(0.0) { sum, harmonic in
+                sum + sin(2 * Double.pi * 140 * Double(harmonic) * time) / Double(harmonic)
+            }
+            return Float(vowelLevel * syllable * voice / 2)
+        }
+        var seed: UInt64 = 0x9E37_79B9_7F4A_7C15
+        let burstLength = Int(0.02 * sampleRate)
+        for start in stride(from: Int(0.3 * sampleRate), to: count - burstLength, by: Int(0.6 * sampleRate)) {
+            for offset in 0..<burstLength {
+                seed = seed &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407
+                let noise = Double(Int64(bitPattern: seed >> 11) - (1 << 52)) / Double(1 << 52)
+                let decay = exp(-Double(offset) / (0.0005 * sampleRate))
+                samples[start + offset] += Float(0.5 * noise * decay)
+            }
+        }
+        return samples
+    }
+
     /// Прогоняет сигнал через ограничитель; задержка ограничителя уже срезана.
     private func limit(_ channels: [[Float]], ceilingDB: Double, chunk: Int = 1024) -> [[Float]] {
         var limiter = TruePeakLimiter(sampleRate: 48000, channels: channels.count, ceilingDB: ceilingDB)
@@ -75,29 +118,21 @@ struct LoudnessNormalizerTests {
         #expect(LoudnessNormalizer.gainDB(for: measurement(integrated: nil), target: target) == nil)
     }
 
-    @Test("a second pass runs only when the shortfall is neither the limiter nor the gain cap")
+    @Test("a second pass adds the shortfall whenever the first lands more than 0.5 LU short, up to the cap")
     func correctivePass() {
         let target = LoudnessTarget()
-        // Замер разошёлся без вины ограничителя: добираем недостачу.
-        let corrected = LoudnessNormalizer.correctiveGainDB(
-            gainDB: 10, preLimiter: measurement(integrated: -14.8), after: measurement(integrated: -14.9),
-            target: target)
-        #expect(abs((corrected ?? 0) - 10.9) < 1e-9)
-        // Недостачу съел ограничитель: второй проход только сильнее зажмёт пики.
-        #expect(
+        func corrected(gainDB: Double, afterLUFS: Double) -> Double? {
             LoudnessNormalizer.correctiveGainDB(
-                gainDB: 10, preLimiter: measurement(integrated: -14), after: measurement(integrated: -15),
-                target: target) == nil)
-        // Усиление уже упёрлось в потолок +20 дБ.
-        #expect(
-            LoudnessNormalizer.correctiveGainDB(
-                gainDB: 20, preLimiter: measurement(integrated: -18), after: measurement(integrated: -18),
-                target: target) == nil)
-        // Недобор в пределах 0,5 LU — цель достигнута.
-        #expect(
-            LoudnessNormalizer.correctiveGainDB(
-                gainDB: 10, preLimiter: measurement(integrated: -14.3), after: measurement(integrated: -14.4),
-                target: target) == nil)
+                gainDB: gainDB, after: measurement(integrated: afterLUFS), target: target)
+        }
+        // Ограничитель срезал пики и съел громкость: добираем недостачу.
+        #expect(abs((corrected(gainDB: 10, afterLUFS: -15.4) ?? 0) - 11.4) < 1e-9)
+        // Добавка не выходит за потолок +20 дБ; упёршись в него, второй проход не нужен.
+        #expect(corrected(gainDB: 19.5, afterLUFS: -15) == 20)
+        #expect(corrected(gainDB: 20, afterLUFS: -18) == nil)
+        // Недобор в пределах 0,5 LU — цель достигнута; перебор не правим.
+        #expect(corrected(gainDB: 10, afterLUFS: -14.4) == nil)
+        #expect(corrected(gainDB: 10, afterLUFS: -13) == nil)
     }
 
     @Test(
@@ -142,12 +177,7 @@ struct LoudnessNormalizerTests {
         let source = directory.appendingPathComponent("tone.caf")
         try writeStereo(tone, to: source)
 
-        let asset = AVURLAsset(url: source)
-        let sourceTrack = try #require(try await asset.loadTracks(withMediaType: .audio).first)
-        let composition = AVMutableComposition()
-        let track = try #require(
-            composition.addMutableTrack(withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid))
-        try track.insertTimeRange(try await sourceTrack.load(.timeRange), of: sourceTrack, at: .zero)
+        let composition = try await audioComposition(of: source)
 
         let scratch = directory.appendingPathComponent("scratch", isDirectory: true)
         let mastered = try #require(
@@ -167,18 +197,40 @@ struct LoudnessNormalizerTests {
         #expect(abs(Double(file.length) / 48000 - 3) <= 0.001)
     }
 
+    @Test("peaky speech that the limiter pulls short still reaches −14 LUFS after the second pass")
+    func masterPeakySpeech() async throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let source = directory.appendingPathComponent("speech.caf")
+        try writeStereo(peakySpeech(seconds: 8), to: source)
+        let composition = try await audioComposition(of: source)
+
+        let target = LoudnessTarget()
+        let mastered = try #require(
+            try await LoudnessNormalizer.master(
+                asset: composition, audioMix: nil, duration: 8, target: target,
+                scratchDirectory: directory.appendingPathComponent("scratch", isDirectory: true),
+                isCancelled: { false }))
+        let before = try #require(mastered.before.integratedLUFS)
+        #expect(abs(before - -30) < 1)
+        #expect(mastered.before.truePeakDBTP - before > 20)
+        // Итоговое усиление больше первого на недобор первого прохода: он был больше 0,5 LU.
+        #expect(mastered.gainDB - (target.integrated - before) > 0.5)
+        #expect(mastered.limited)
+        #expect(abs(try #require(mastered.after.integratedLUFS) - target.integrated) < 0.5)
+        #expect(mastered.after.truePeakDBTP <= target.limiterCeiling + 0.1)
+        let leftovers = try FileManager.default.contentsOfDirectory(
+            atPath: directory.appendingPathComponent("scratch").path)
+        #expect(leftovers == [mastered.audioURL.lastPathComponent])
+    }
+
     @Test("master returns nil for a composition without audio and for silence")
     func masterSkipsSilence() async throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let silent = directory.appendingPathComponent("silence.caf")
         try writeStereo([Float](repeating: 0, count: 48000 * 2), to: silent)
-        let asset = AVURLAsset(url: silent)
-        let sourceTrack = try #require(try await asset.loadTracks(withMediaType: .audio).first)
-        let composition = AVMutableComposition()
-        let track = try #require(
-            composition.addMutableTrack(withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid))
-        try track.insertTimeRange(try await sourceTrack.load(.timeRange), of: sourceTrack, at: .zero)
+        let composition = try await audioComposition(of: silent)
         let scratch = directory.appendingPathComponent("scratch", isDirectory: true)
 
         let fromSilence = try await LoudnessNormalizer.master(

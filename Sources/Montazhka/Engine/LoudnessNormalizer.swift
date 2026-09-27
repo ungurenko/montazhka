@@ -179,7 +179,7 @@ enum LoudnessNormalizer {
     /// Звук склейки всегда сводится в стерео 48 кГц.
     static let sampleRate = 48000.0
     static let channelCount = 2
-    /// Промах по громкости, который ещё считается попаданием, и «сильная» работа ограничителя, LU.
+    /// Промах по громкости, который ещё считается попаданием, LU.
     private static let toleranceLU = 0.5
     /// Прижатие пика сильнее этого считается срабатыванием ограничителя, дБ.
     private static let limitedThresholdDB = 0.1
@@ -190,16 +190,14 @@ enum LoudnessNormalizer {
         return min(target.maxGainDB, target.integrated - integrated)
     }
 
-    /// Усиление второго (последнего) прохода, если первый недобрал больше 0,5 LU не по вине
-    /// ограничителя. nil — поправка не нужна или не поможет (недостачу съел ограничитель
-    /// или усиление уже упёрлось в потолок).
-    static func correctiveGainDB(
-        gainDB: Double, preLimiter: LoudnessMeasurement, after: LoudnessMeasurement, target: LoudnessTarget
-    ) -> Double? {
-        guard let afterLUFS = after.integratedLUFS, let preLimiterLUFS = preLimiter.integratedLUFS else { return nil }
+    /// Усиление второго (последнего) прохода, если первый недобрал до цели больше 0,5 LU —
+    /// обычно это ограничитель срезал острые пики речи. Добавляем недостачу к усилению
+    /// (не выше `maxGainDB`), ограничитель остаётся на том же потолке. nil — поправка
+    /// не нужна или усиление уже упёрлось в потолок.
+    static func correctiveGainDB(gainDB: Double, after: LoudnessMeasurement, target: LoudnessTarget) -> Double? {
+        guard let afterLUFS = after.integratedLUFS else { return nil }
         let shortfall = target.integrated - afterLUFS
-        let limiterLoss = preLimiterLUFS - afterLUFS
-        guard shortfall > toleranceLU, limiterLoss <= toleranceLU, gainDB < target.maxGainDB else { return nil }
+        guard shortfall > toleranceLU, gainDB < target.maxGainDB else { return nil }
         return min(target.maxGainDB, gainDB + shortfall)
     }
 
@@ -225,9 +223,7 @@ enum LoudnessNormalizer {
 
         try FileManager.default.createDirectory(at: scratchDirectory, withIntermediateDirectories: true)
         var pass = try await render(source, gainDB: gain, target: target, in: scratchDirectory, isCancelled: cancelled)
-        if let corrected = correctiveGainDB(
-            gainDB: gain, preLimiter: pass.preLimiter, after: pass.after, target: target)
-        {
+        if let corrected = correctiveGainDB(gainDB: gain, after: pass.after, target: target) {
             let first = pass.url
             defer { try? FileManager.default.removeItem(at: first) }
             pass = try await render(
@@ -264,7 +260,6 @@ enum LoudnessNormalizer {
     private struct RenderedPass {
         let url: URL
         let gainDB: Double
-        let preLimiter: LoudnessMeasurement
         let after: LoudnessMeasurement
         let limited: Bool
     }
@@ -274,23 +269,22 @@ enum LoudnessNormalizer {
     ) async throws -> RenderedPass {
         let url = directory.appendingPathComponent("mastered-\(UUID().uuidString).caf")
         do {
-            let written = try write(
+            let maxReductionDB = try write(
                 source, gainDB: gainDB, ceilingDB: target.limiterCeiling, to: url, isCancelled: isCancelled)
             let after = try await LoudnessMeter.measure(url: url)
             return RenderedPass(
-                url: url, gainDB: gainDB, preLimiter: written.preLimiter, after: after,
-                limited: written.maxReductionDB > limitedThresholdDB)
+                url: url, gainDB: gainDB, after: after, limited: maxReductionDB > limitedThresholdDB)
         } catch {
             try? FileManager.default.removeItem(at: url)
             throw error
         }
     }
 
-    /// Усиливает, меряет до ограничителя, ограничивает и пишет CAF Int16.
+    /// Усиливает, ограничивает и пишет CAF Int16; возвращает самое сильное прижатие пика, дБ.
     /// Задержка ограничителя срезается, хвост дописывается из `flush`.
     private static func write(
         _ source: MixSource, gainDB: Double, ceilingDB: Double, to url: URL, isCancelled: () -> Bool
-    ) throws -> (preLimiter: LoudnessMeasurement, maxReductionDB: Double) {
+    ) throws -> Double {
         let file = try AVAudioFile(
             forWriting: url,
             settings: [
@@ -302,17 +296,15 @@ enum LoudnessNormalizer {
                 AVLinearPCMIsBigEndianKey: false,
             ], commonFormat: .pcmFormatFloat32, interleaved: false)
         let factor = Float(pow(10, gainDB / 20))
-        var meter = LoudnessMeter(sampleRate: sampleRate, channels: channelCount)
         var limiter = TruePeakLimiter(sampleRate: sampleRate, channels: channelCount, ceilingDB: ceilingDB)
         var latencyLeft = limiter.latencyFrames
         try source.read(isCancelled: isCancelled) { chunk in
             for index in chunk.indices { chunk[index] = vDSP.multiply(factor, chunk[index]) }
-            meter.process(chunk)
             limiter.process(&chunk)
             try append(chunk, skipping: &latencyLeft, to: file)
         }
         try append(limiter.flush(), skipping: &latencyLeft, to: file)
-        return (meter.result(), limiter.maxReductionDB)
+        return limiter.maxReductionDB
     }
 
     /// Дописывает кусок в файл, пропуская первые `latency` кадров (задержку ограничителя).
