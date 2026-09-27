@@ -1,21 +1,33 @@
 import CryptoKit
+import Darwin
 import Foundation
 
 /// Кэш обработанного звука: один CAF на пару «исходник + настройки».
 /// Обработка долгая, поэтому результат живёт на диске (как волны в WaveformStore).
-/// Актор последовательно управляет общими рендерами; готовые файлы появляются
-/// атомарно (рендер в .work + moveItem), диск остаётся источником правды.
+/// Актор последовательно управляет общими рендерами своего экземпляра. Папку делят
+/// окно и агент: у каждой обработки своя рабочая папка, готовый файл появляется
+/// атомарным переименованием, а уборка не трогает файлы, которые держит склейка
+/// (`CacheFileLease`). Диск остаётся источником правды.
 actor VoiceEnhanceStore {
     private struct InFlight {
         let id: UUID
         let task: Task<URL, Error>
     }
 
+    /// Рендер звука исходника в файл: `VoiceEnhancer.render`, в тестах — подмена.
+    typealias Render =
+        @Sendable (
+            _ sourcePath: String, _ settings: VoiceEnhanceSettings, _ to: URL,
+            _ isCancelled: @escaping @Sendable () -> Bool
+        ) async throws -> Void
+
     private let cacheDir: URL
+    private let render: Render
     private var inFlight: [String: InFlight] = [:]
 
-    init(cacheDir: URL) {
+    init(cacheDir: URL, render: @escaping Render = VoiceEnhancer.render) {
         self.cacheDir = cacheDir
+        self.render = render
     }
 
     /// Мгновенно: URL готового файла или nil, если ещё не обработан.
@@ -45,16 +57,21 @@ actor VoiceEnhanceStore {
         if let existing = inFlight[key] { return existing }
         let sourceHash = Self.sourceHash(for: path)
         let dir = cacheDir
+        let render = render
         let task = Task(priority: .userInitiated) {
-            let working = url.deletingPathExtension().appendingPathExtension("work.caf")
-            defer { try? FileManager.default.removeItem(at: working) }
-            try await VoiceEnhancer.render(
-                sourcePath: path, settings: settings,
-                to: working, isCancelled: { Task.isCancelled })
+            // Своя рабочая папка: ни второй экземпляр, ни отменённая, но ещё не убравшая
+            // за собой прошлая обработка не пишут в те же файлы (и во внутренний .tmp рендера).
+            let scratch = dir.appendingPathComponent(".work-\(UUID().uuidString)", isDirectory: true)
+            try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: scratch) }
+            let working = scratch.appendingPathComponent("voice.caf")
+            try await render(path, settings, working, { Task.isCancelled })
             if Task.isCancelled { throw CancellationError() }
-            // Готовый файл появляется атомарно — отменённый рендер не оставит битого кэша.
-            try? FileManager.default.removeItem(at: url)
-            try FileManager.default.moveItem(at: working, to: url)
+            // Готовый файл появляется атомарно и не удаляется заранее: тот же вариант, уже
+            // готовый у соседа, заменяется одним переименованием (читающие его не замечают).
+            guard Darwin.rename(working.path, url.path) == 0 else {
+                throw CocoaError(.fileWriteUnknown, userInfo: [NSFilePathErrorKey: url.path])
+            }
             Self.evictOldVariants(dir: dir, sourceHash: sourceHash, keep: url)
             return url
         }
@@ -64,6 +81,7 @@ actor VoiceEnhanceStore {
     }
 
     /// Отменяет все идущие рендеры (например, пока пользователь крутит ползунки).
+    /// Отменённая обработка доубирает свою рабочую папку сама — новой она не мешает.
     func cancelAll() {
         for operation in inFlight.values { operation.task.cancel() }
         inFlight.removeAll()
@@ -87,17 +105,16 @@ actor VoiceEnhanceStore {
         SHA256.hash(data: Data(key.utf8)).hex
     }
 
-    /// Держим только один вариант настроек на исходник — CAF большие.
+    /// Держим один вариант настроек на исходник — CAF большие. Вариант, который читает
+    /// идущий экспорт или предпросмотр (в этом или другом процессе), остаётся до следующей уборки.
     private static func evictOldVariants(dir: URL, sourceHash: String, keep: URL) {
         let files = (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []
         for file in files
         where file.lastPathComponent.hasPrefix("\(sourceHash)-")
             && file.pathExtension == "caf"
-            && !file.lastPathComponent.contains(".work")
-            && !file.lastPathComponent.contains(".tmp")
             && file.lastPathComponent != keep.lastPathComponent
         {
-            try? FileManager.default.removeItem(at: file)
+            CacheFileLease.removeIfUnused(file)
         }
     }
 }

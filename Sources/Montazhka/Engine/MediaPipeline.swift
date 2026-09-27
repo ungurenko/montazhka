@@ -59,6 +59,13 @@ actor MediaPipeline {
                 }
             }
         }
+        // Готовый голос удерживается, пока жива склейка: уборка кэша (и в другом процессе)
+        // не удалит файл из-под предпросмотра или идущего экспорта. Не удержался — файл
+        // успели убрать: звук берётся из исходника.
+        var leases: [CacheFileLease] = []
+        for (path, url) in enhanced {
+            if let lease = CacheFileLease(url: url) { leases.append(lease) } else { enhanced[path] = nil }
+        }
 
         var music = await resolveMusic(settings: request.project.music, warnings: &warnings)
         if request.project.music.ducking, music != nil {
@@ -79,6 +86,7 @@ actor MediaPipeline {
             overlays: isNormal ? availableOverlays(request.project, warnings: &warnings) : []
         )
         warnings.append(contentsOf: built.warnings)
+        CacheFileLease.attach(leases, to: built.composition)
         let subtitles = isNormal ? request.subtitleLayer : nil
         var videoPlan: ProjectVideoPlan?
         if !built.overlayTracks.isEmpty || subtitles != nil {
