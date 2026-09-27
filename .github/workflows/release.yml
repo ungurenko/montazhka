@@ -22,8 +22,15 @@ jobs:
     env:
       MONTAZHKA_SIGNING_IDENTITY: ${{ secrets.DEVELOPER_ID_APPLICATION }}
       NOTARY_KEYCHAIN_PROFILE: montazhka-ci
+      # Параметры запуска доходят до оболочки только переменными: в тексте команд их нет.
+      RELEASE_VERSION: ${{ inputs.version }}
+      RELEASE_BUILD_NUMBER: ${{ inputs.build_number }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      # До любых секретов: неверные значения не доходят до сертификата и нотаризации.
+      - name: Validate release inputs
+        run: ./scripts/validate-release-inputs.sh
 
       - name: Prepare release environment
         run: echo "NOTARY_KEYCHAIN_PATH=$RUNNER_TEMP/montazhka-release.keychain-db" >> "$GITHUB_ENV"
@@ -44,6 +51,7 @@ jobs:
           KEYCHAIN_PASSWORD: ${{ secrets.RELEASE_KEYCHAIN_PASSWORD }}
         run: |
           certificate_path="$RUNNER_TEMP/developer-id.p12"
+          trap 'rm -f "$certificate_path"' EXIT
           keychain_path="$NOTARY_KEYCHAIN_PATH"
           echo "$CERTIFICATE_BASE64" | base64 --decode > "$certificate_path"
           security create-keychain -p "$KEYCHAIN_PASSWORD" "$keychain_path"
@@ -60,6 +68,7 @@ jobs:
           NOTARY_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
         run: |
           key_path="$RUNNER_TEMP/AuthKey_$NOTARY_KEY_ID.p8"
+          trap 'rm -f "$key_path"' EXIT
           echo "$NOTARY_KEY_BASE64" | base64 --decode > "$key_path"
           xcrun notarytool store-credentials "$NOTARY_KEYCHAIN_PROFILE" \
             --keychain "$NOTARY_KEYCHAIN_PATH" \
@@ -68,15 +77,24 @@ jobs:
             --issuer "$NOTARY_ISSUER_ID"
 
       - name: Build, sign and notarize
-        run: ./scripts/release.sh '${{ inputs.version }}' '${{ inputs.build_number }}'
+        run: ./scripts/release.sh "$RELEASE_VERSION" "$RELEASE_BUILD_NUMBER"
 
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "v${{ inputs.version }}" \
+          gh release create "v$RELEASE_VERSION" \
             build.noindex/release/*.zip \
             build.noindex/release/*.sha256 \
             --target "$GITHUB_SHA" \
-            --title "Монтажка v${{ inputs.version }}" \
+            --title "Монтажка v$RELEASE_VERSION" \
             --generate-notes
+
+      # Ключи и временная связка удаляются при любом исходе.
+      - name: Remove credentials
+        if: always()
+        run: |
+          rm -f "$RUNNER_TEMP/developer-id.p12" "$RUNNER_TEMP"/AuthKey_*.p8
+          if [ -n "${NOTARY_KEYCHAIN_PATH:-}" ] && [ -f "$NOTARY_KEYCHAIN_PATH" ]; then
+            security delete-keychain "$NOTARY_KEYCHAIN_PATH" || true
+          fi

@@ -33,6 +33,9 @@ jobs:
       - name: Lint
         run: ./scripts/lint.sh
 
+      - name: Release input validation
+        run: ./scripts/test-release-inputs.sh
+
       - name: Swift Testing
         # По одному: параллельные тесты с видео на машине CI без аппаратного
         # кодировщика вставали намертво. Потолок — чтобы зависание не жгло часы.
