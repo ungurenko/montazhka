@@ -53,6 +53,39 @@ struct OverlayTimelineTests {
         #expect(result.window.from == result.window.to)
     }
 
+    @Test("a cut that starts exactly at the anchor word (touching words) hides the overlay")
+    func cutStartingAtAnchorWord() {
+        let clips = TimelineOps.removingSourceRanges(
+            clips: [Clip(source: source, start: 0, end: 20)], sourcePath: "/tmp/a.mov", ranges: [(10, 10.5)])
+        let result = resolved(overlay(at: 10), clips)
+        #expect(result.status == .anchorCut)
+        #expect(result.anchorTimeline == nil)
+        #expect(result.occurrences == 0)
+    }
+
+    @Test("split at the anchor with a clip inserted between the halves: the overlay stays on its word")
+    func splitAtAnchorThenInsert() {
+        let clips = [
+            Clip(source: source, start: 0, end: 5),
+            Clip(source: other, start: 0, end: 3),
+            Clip(source: source, start: 5, end: 10),
+        ]
+        let result = resolved(overlay(at: 5), clips)
+        #expect(result.status == .visible)
+        #expect(result.occurrences == 1)
+        #expect(isClose(result.anchorTimeline, 8))
+        #expect(isClose(result.window.from, 8) && isClose(result.window.to, 10))
+    }
+
+    @Test("a word starting a hair before its clip anchors at the clip start, never earlier")
+    func anchorClampedToClipStart() {
+        let result = resolved(overlay(at: 1.997), [Clip(source: source, start: 2, end: 6)])
+        #expect(result.status == .visible)
+        #expect(result.anchorTimeline == 0)
+        #expect(result.mediaStart == 0)
+        #expect(result.window.from == 0 && isClose(result.window.to, 2))
+    }
+
     @Test("moving the clip with the anchor carries the overlay along")
     func movedClipCarriesOverlay() {
         let intro = Clip(source: source, start: 0, end: 5)

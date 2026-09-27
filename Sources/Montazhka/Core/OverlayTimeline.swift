@@ -21,27 +21,25 @@ struct ResolvedOverlay: Equatable, Sendable {
 enum OverlayTimeline {
     /// Окно короче этого не показываем: анимацию не успеть увидеть.
     static let minimumWindow = 0.1
-    /// Слово может начинаться чуть раньше клипа (так его показывает расшифровка).
-    private static let startTolerance = 0.005
+    /// Слово может начинаться чуть раньше клипа (так его показывает расшифровка);
+    /// у конца клипа тот же запас в другую сторону.
+    private static let edgeTolerance = 0.005
 
     static func resolve(_ overlays: [ProjectOverlay], clips: [Clip]) -> [ResolvedOverlay] {
         let total = clips.reduce(0) { $0 + $1.duration }
         return overlays.map { resolve($0, clips: clips, totalDuration: total) }
     }
 
-    /// Все места ленты, где виден момент якоря, по порядку. Одно место на
-    /// стыке двух клипов (клип разрезан ровно на якоре) считается один раз.
+    /// Все места ленты, где виден момент якоря, по порядку. Конец клипа в него
+    /// не входит: кадр на границе уже играет следующий клип, поэтому слово,
+    /// вырезанное ровно от своего начала, считается вырезанным.
     static func timelineTimes(of anchor: OverlayAnchor, clips: [Clip]) -> [Double] {
-        var times: [Double] = []
-        for (clip, clipStart) in zip(clips, TimelineEditOps.starts(of: clips)) {
+        zip(clips, TimelineEditOps.starts(of: clips)).compactMap { clip, clipStart in
             guard clip.source.id == anchor.sourceID,
-                clip.start - startTolerance <= anchor.sourceTime, anchor.sourceTime <= clip.end
-            else { continue }
-            let time = clipStart + (anchor.sourceTime - clip.start)
-            if let last = times.last, abs(time - last) <= startTolerance { continue }
-            times.append(time)
+                clip.start - edgeTolerance <= anchor.sourceTime, anchor.sourceTime < clip.end - edgeTolerance
+            else { return nil }
+            return clipStart + max(0, anchor.sourceTime - clip.start)
         }
-        return times
     }
 
     /// Якорь для момента ленты: момент исходника под ним. Со словами якорь
