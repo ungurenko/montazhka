@@ -105,9 +105,14 @@ enum ProjectVideoComposition {
 
         let frame = AVMutableVideoComposition()
         frame.renderSize = renderSize
-        let fps = frameRate.isFinite && frameRate > 0 ? Int32(frameRate.rounded()) : 30
-        frame.frameDuration = CMTime(value: 1, timescale: max(1, fps))
+        frame.frameDuration = frameDuration(nominalFrameRate: frameRate)
         frame.instructions = [instruction]
+        // Цвет — как у обычного экспорта той же ленты без анимаций. nil у AVFoundation
+        // значит «цвет исходника»: так выходит и для SDR, и для HLG.
+        let plain = try await plainComposition(of: composition, baseTrackID: baseTrackID)
+        frame.colorPrimaries = plain.colorPrimaries
+        frame.colorTransferFunction = plain.colorTransferFunction
+        frame.colorYCbCrMatrix = plain.colorYCbCrMatrix
 
         guard let export = frame.mutableCopy() as? AVMutableVideoComposition else { throw BuildError.noBaseVideo }
         guard let subtitles else {
@@ -123,6 +128,26 @@ enum ProjectVideoComposition {
                     at: time, renderSize: renderSize, cues: subtitles.cues, appearance: subtitles.appearance,
                     highlight: subtitles.highlight, hook: nil)
             })
+    }
+
+    /// Шаг кадров ровно как у обычного экспорта (`videoComposition(withPropertiesOf:)`):
+    /// 1/nominalFrameRate на шкале 90000, без округления частоты — 29,97 к/с не становятся 30.
+    /// Самый короткий кадр не годится: у съёмки iPhone с плавающей частотой он 9/600 с (66,7 к/с).
+    static func frameDuration(nominalFrameRate rate: Float) -> CMTime {
+        guard rate.isFinite, rate > 0 else { return CMTime(value: 1, timescale: 30) }
+        return CMTime(value: CMTimeValue((90_000 / Double(rate)).rounded()), timescale: 90_000)
+    }
+
+    /// Что собрал бы обычный экспорт по одной основе. Дорожки анимаций убираются из копии:
+    /// с ними AVFoundation берёт шаг и цвет с учётом анимаций (30 к/с ProRes поверх 29,97).
+    private static func plainComposition(
+        of composition: AVComposition, baseTrackID: CMPersistentTrackID
+    ) async throws -> AVMutableVideoComposition {
+        guard let baseOnly = composition.mutableCopy() as? AVMutableComposition else { throw BuildError.noBaseVideo }
+        for track in try await baseOnly.loadTracks(withMediaType: .video) where track.trackID != baseTrackID {
+            baseOnly.removeTrack(track)
+        }
+        return try await AVMutableVideoComposition.videoComposition(withPropertiesOf: baseOnly)
     }
 
     /// Где анимация в кадре. `.full` — вписана целиком по центру; `.center` — вписана и

@@ -204,6 +204,96 @@ struct ProjectVideoCompositionTests {
         #expect(pixel(inside, points.corner).isClose(to: .gray, within: 8))
     }
 
+    /// Время показа каждого кадра файла, без декодирования.
+    private func frameTimes(_ url: URL) async throws -> [Double] {
+        let asset = AVURLAsset(url: url)
+        let reader = try AVAssetReader(asset: asset)
+        let output = AVAssetReaderTrackOutput(
+            track: try #require(try await asset.loadTracks(withMediaType: .video).first), outputSettings: nil)
+        reader.add(output)
+        guard reader.startReading() else { throw reader.error ?? ReadFailure(reason: "frame times") }
+        var times: [Double] = []
+        while let sample = output.copyNextSampleBuffer() {
+            guard CMSampleBufferGetNumSamples(sample) > 0 else { continue }
+            times.append(CMSampleBufferGetPresentationTimeStamp(sample).seconds)
+        }
+        return times.sorted()
+    }
+
+    /// Ролик 29,97 к/с (шаг 1001/30000), 10 с, серый, с пометками цвета BT.709, без звука.
+    private func writeNTSCBase(to url: URL) async throws {
+        let frame = try TestOverlayFactory.pixelBuffer(width: 320, height: 180, format: kCVPixelFormatType_32BGRA)
+        CVPixelBufferLockBaseAddress(frame, [])
+        if let base = CVPixelBufferGetBaseAddress(frame) {
+            memset(base, 128, CVPixelBufferGetDataSize(frame))
+        }
+        CVPixelBufferUnlockBaseAddress(frame, [])
+        try await TestOverlayFactory.writeStill(
+            frame,
+            settings: [
+                AVVideoCodecKey: AVVideoCodecType.h264, AVVideoWidthKey: 320, AVVideoHeightKey: 180,
+                AVVideoColorPropertiesKey: [
+                    AVVideoColorPrimariesKey: AVVideoColorPrimaries_ITU_R_709_2,
+                    AVVideoTransferFunctionKey: AVVideoTransferFunction_ITU_R_709_2,
+                    AVVideoYCbCrMatrixKey: AVVideoYCbCrMatrix_ITU_R_709_2,
+                ],
+            ],
+            fileType: .mov, frameCount: 300, frameDuration: CMTime(value: 1001, timescale: 30000), to: url)
+    }
+
+    private func export(
+        _ rendered: MediaRenderResult, videoComposition: AVVideoComposition?, to url: URL
+    ) async throws {
+        let job = FinalExportJob(
+            input: ExportInput(
+                composition: rendered.composition, audioMix: rendered.audioMix, videoComposition: videoComposition),
+            quality: .compact, sizing: .quality(.compact), subtitleCues: nil, subtitlesSkippedReason: nil,
+            normalizeLoudness: false, timelineFingerprint: nil)
+        _ = try await FinalExport.run(job, to: url, progress: { _ in })
+    }
+
+    /// Анимация не меняет ни шаг кадров ролика, ни его цвет: 29,97 к/с не пересчитываются
+    /// в 30 (иначе раз в ~33 с кадр повторяется), цвет — как у обычного экспорта.
+    @Test("an animation keeps the plain export's frame cadence and colour handling")
+    func cadenceAndColourMatchPlainExport() async throws {
+        let scene = try await Scene.make()
+        defer { scene.remove() }
+        let base = scene.root.appendingPathComponent("ntsc.mov")
+        try await writeNTSCBase(to: base)
+        let media = MediaReference(url: base)
+        var project = Project(name: "29,97", clips: [Clip(source: media, start: 0, end: 10)])
+        let plain = await scene.pipeline.render(
+            MediaRenderRequest(project: project, mode: .export, readyEnhancedAudio: [:]))
+        project.overlays = [Scene.overlay(url: scene.overlayURL, anchor: media.id, at: 1)]
+        let animated = await scene.pipeline.render(
+            MediaRenderRequest(project: project, mode: .export, readyEnhancedAudio: [:]))
+
+        let reference = try await AVMutableVideoComposition.videoComposition(withPropertiesOf: plain.composition)
+        let plan = try #require(animated.videoPlan)
+        for composition in [plan.frameComposition, plan.exportComposition] {
+            #expect(composition.frameDuration == reference.frameDuration, "\(composition.frameDuration)")
+            #expect(composition.colorPrimaries == reference.colorPrimaries)
+            #expect(composition.colorTransferFunction == reference.colorTransferFunction)
+            #expect(composition.colorYCbCrMatrix == reference.colorYCbCrMatrix)
+        }
+
+        let plainFile = scene.root.appendingPathComponent("plain.mp4")
+        let animatedFile = scene.root.appendingPathComponent("animated.mp4")
+        try await export(plain, videoComposition: nil, to: plainFile)
+        try await export(animated, videoComposition: plan.exportComposition, to: animatedFile)
+        let plainTimes = try await frameTimes(plainFile)
+        let animatedTimes = try await frameTimes(animatedFile)
+        #expect(plainTimes.count == 300)
+        #expect(animatedTimes.count == plainTimes.count, "\(animatedTimes.count) frames vs \(plainTimes.count)")
+        // MP4 хранит время кадров с шагом 1/600 с: кадр ровно на половине шага два пути могут
+        // округлить в соседние стороны. Пересчёт в 30 к/с расходится на 10+ мс к концу.
+        let drift = zip(plainTimes, animatedTimes).map { abs($0 - $1) }.max() ?? .infinity
+        #expect(drift <= 1.0 / 600 + 0.0001, "largest frame time difference \(drift) s")
+        let plainLength = try await AVURLAsset(url: plainFile).load(.duration).seconds
+        let animatedLength = try await AVURLAsset(url: animatedFile).load(.duration).seconds
+        #expect(abs(plainLength - animatedLength) < 0.001, "\(animatedLength) s vs \(plainLength) s")
+    }
+
     /// Вертикальный ролик: кадр лежит на боку, поворот — в дорожке, и без сдвига (так пишут
     /// не все камеры, но бывает). Метка в левом верхнем углу лежащего кадра после поворота
     /// стоит справа сверху, а кадр целиком внутри холста.
@@ -258,7 +348,8 @@ struct ProjectVideoCompositionTests {
         CVPixelBufferUnlockBaseAddress(frame, [])
         try await TestOverlayFactory.writeStill(
             frame, settings: [AVVideoCodecKey: AVVideoCodecType.h264, AVVideoWidthKey: 320, AVVideoHeightKey: 180],
-            fileType: .mov, frameCount: 30, fps: 10, transform: transform, to: url)
+            fileType: .mov, frameCount: 30, frameDuration: CMTime(value: 1, timescale: 10), transform: transform,
+            to: url)
     }
 
     struct Placement: Sendable, CustomTestStringConvertible {

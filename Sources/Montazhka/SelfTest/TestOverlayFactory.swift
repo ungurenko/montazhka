@@ -30,14 +30,17 @@ enum TestOverlayFactory {
                     AVVideoYCbCrMatrixKey: AVVideoYCbCrMatrix_ITU_R_709_2,
                 ],
             ],
-            fileType: .mov, frameCount: Int((duration * Double(fps)).rounded()), fps: fps, to: url)
+            fileType: .mov, frameCount: Int((duration * Double(fps)).rounded()),
+            frameDuration: CMTime(value: 1, timescale: fps), to: url)
     }
 
     /// Пишет видео из одного и того же кадра через `requestMediaDataWhenReady`: ручной
-    /// опрос `isReadyForMoreMediaData` может повиснуть. `transform` — поворот дорожки,
-    /// как у вертикального ролика с iPhone.
+    /// опрос `isReadyForMoreMediaData` может повиснуть. `frameDuration` — шаг кадров
+    /// (например, 1001/30000 для 29,97 к/с). `transform` — поворот дорожки, как у
+    /// вертикального ролика с iPhone.
     static func writeStill(
-        _ frame: CVPixelBuffer, settings: [String: Any], fileType: AVFileType, frameCount: Int, fps: Int32,
+        _ frame: CVPixelBuffer, settings: [String: Any], fileType: AVFileType, frameCount: Int,
+        frameDuration: CMTime,
         transform: CGAffineTransform = .identity, to url: URL
     ) async throws {
         try? FileManager.default.removeItem(at: url)
@@ -67,7 +70,7 @@ enum TestOverlayFactory {
                         continuation.resume(returning: true)
                         return
                     }
-                    let time = CMTime(value: CMTimeValue(state.index), timescale: fps)
+                    let time = CMTimeMultiply(frameDuration, multiplier: Int32(state.index))
                     guard feed.adaptor.append(feed.frame, withPresentationTime: time) else {
                         state.done = true
                         continuation.resume(returning: false)
@@ -81,7 +84,7 @@ enum TestOverlayFactory {
             writer.cancelWriting()
             throw Failure(reason: "Запись тестового видео зависла: \(url.lastPathComponent)")
         }
-        writer.endSession(atSourceTime: CMTime(value: CMTimeValue(frameCount), timescale: fps))
+        writer.endSession(atSourceTime: CMTimeMultiply(frameDuration, multiplier: Int32(frameCount)))
         await writer.finishWriting()
         guard writer.status == .completed else { throw writer.error ?? Failure(reason: "Запись не завершилась") }
     }
