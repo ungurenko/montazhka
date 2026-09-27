@@ -74,9 +74,9 @@ extension AgentService {
     /// Пропавшее у склейки слово — дефект, только если в файле это место тише, чем в проекте,
     /// хотя бы на столько: иначе слово звучит, а распознавание его просто не расслышало.
     static let checkWordLostDB = 6.0
-    /// Файл без отпечатка ленты считается этим проектом, если длительности сходятся.
+    /// Файл без отпечатка проекта считается этим проектом, если длительности сходятся.
     static let checkDurationTolerance = 0.25
-    static let fileMismatchMessage = "Файл собран из старой ленты — экспортируйте заново"
+    static let fileMismatchMessage = "Файл собран из другой версии проекта — экспортируйте заново"
 
     func check(_ request: AgentCheckRequest) async -> AgentResponse {
         do {
@@ -146,11 +146,11 @@ extension AgentService {
         } catch { return failure("check", error) }
     }
 
-    /// "confirmed" — в файле отпечаток этой ленты; "unconfirmed" — отпечатка нет, но длительность
-    /// сходится; nil — файл собран из другой ленты.
+    /// "confirmed" — в файле отпечаток этой версии проекта; "unconfirmed" — отпечатка нет, но длительность
+    /// сходится; nil — файл собран из другой версии (лента, анимации, музыка, субтитры…).
     private static func fileMatch(_ media: CheckMedia, project: Project) async -> String? {
         if let stamp = await ExportProvenance.read(url: media.url) {
-            return stamp == AgentWordCuts.fingerprint(project.clips) ? "confirmed" : nil
+            return stamp == ExportProvenance.fingerprint(for: project) ? "confirmed" : nil
         }
         return abs(media.seconds - project.totalDuration) <= checkDurationTolerance ? "unconfirmed" : nil
     }

@@ -52,7 +52,7 @@ struct FinalExportTests {
     ) -> FinalExportJob {
         FinalExportJob(
             input: input, quality: .compact, sizing: .quality(.compact), subtitleCues: cues,
-            subtitlesSkippedReason: reason, normalizeLoudness: normalize, timelineFingerprint: "lenta-final")
+            subtitlesSkippedReason: reason, normalizeLoudness: normalize, projectFingerprint: "lenta-final")
     }
 
     @Test("a quiet video comes out at −14 LUFS with an .srt beside it and the timeline fingerprint")

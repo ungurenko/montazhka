@@ -256,7 +256,57 @@ struct AgentCheckTests {
         let response = await fixture.service.check(request(fixture, file: path))
 
         #expect(response.error?.code == "FILE_PROJECT_MISMATCH")
-        #expect(response.error?.message == "Файл собран из старой ленты — экспортируйте заново")
+        #expect(response.error?.message == "Файл собран из другой версии проекта — экспортируйте заново")
+    }
+
+    /// Что меняет готовый файл, кроме ленты.
+    enum Reshape: String, CaseIterable {
+        case music, overlay, burnSubtitles
+    }
+
+    @Test(
+        "music, an animation or burned subtitles changed after export make the file stale", arguments: Reshape.allCases)
+    func reshapedProjectRefusesFile(_ change: Reshape) async throws {
+        let fixture = try await fixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let path = try await export(fixture)
+        switch change {
+        case .music:
+            var project = try await fixture.service.store.load(id: fixture.project.id)
+            project.music = MusicSettings(enabled: true, trackID: try #require(MusicLibrary.tracks.first).id)
+            try await fixture.service.store.save(project)
+        case .overlay:
+            var project = try await fixture.service.store.load(id: fixture.project.id)
+            project.overlays.append(
+                ProjectOverlay(
+                    id: UUID(), media: MediaReference(path: fixture.root.appendingPathComponent("a.mov").path),
+                    anchor: OverlayAnchor(sourceID: fixture.source.id, sourceTime: 0.5, wordText: nil), align: .start,
+                    payoffAt: 0, duration: 1, position: .full, scale: 1))
+            try await fixture.service.store.save(project)
+        case .burnSubtitles:
+            var burn = AgentEditOperation(op: "setSubtitles")
+            burn.on = true
+            #expect(await fixture.service.applyEdits(projectID: fixture.project.id, operations: [burn]).ok)
+        }
+
+        let response = await fixture.service.check(request(fixture, file: path))
+
+        #expect(response.error?.code == "FILE_PROJECT_MISMATCH")
+    }
+
+    @Test("one-off export options of the agent keep the file confirmed: it is still this project version")
+    func oneOffExportOptionsStayConfirmed() async throws {
+        let fixture = try await fixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let output = fixture.root.appendingPathComponent("out.mp4")
+        let exported = await fixture.service.export(
+            projectID: fixture.project.id, outputPath: output.path, quality: "compact", final: false,
+            confirmFinal: false, overwrite: false, normalizeLoudness: false, burnSubtitles: true)
+        #expect(exported.ok, "\(String(describing: exported.error))")
+
+        let response = await fixture.service.check(request(fixture, file: output.path))
+
+        #expect(response.data?["match"] == .string("confirmed"), "\(String(describing: response.error))")
     }
 
     @Test("a hole at the cut is a dropout; a word the recognizer missed while it still sounds is not cutWord")

@@ -258,7 +258,7 @@ enum ShortsSubtitleSelfTest {
             quality: .compact)
         let draftJob = plan.exportJob(
             quality: .compact, normalizeLoudness: draft.export.normalizeLoudness,
-            timelineFingerprint: AgentWordCuts.fingerprint(draft.clips))
+            projectFingerprint: ExportProvenance.fingerprint(for: draft))
         _ = try await FinalExport.run(draftJob, to: draftOutput) { _ in }
         let draftAsset = AVURLAsset(url: draftOutput)
         let draftTrack = try await draftAsset.loadTracks(withMediaType: .video).first
@@ -285,7 +285,7 @@ enum ShortsSubtitleSelfTest {
             faces: FaceTrackStore(cacheDir: FileManager.default.temporaryDirectory), quality: .compact)
         let timedJob = timedPlan.exportJob(
             quality: .compact, normalizeLoudness: timed.export.normalizeLoudness,
-            timelineFingerprint: AgentWordCuts.fingerprint(timed.clips))
+            projectFingerprint: ExportProvenance.fingerprint(for: timed))
         let timedReport = try await FinalExport.run(timedJob, to: timedOutput) { _ in }
         let timedPeak = timedReport.loudness?.truePeakDBTP ?? 0
         check(

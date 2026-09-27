@@ -42,7 +42,7 @@ extension EditorController {
             videoComposition: result.videoComposition,
             subtitleCues: speech.horizontalCues, subtitlesSkippedReason: speech.skippedReason,
             normalizeLoudness: exported.export.normalizeLoudness,
-            timelineFingerprint: AgentWordCuts.fingerprint(exported.clips), sizing: .quality)
+            projectFingerprint: ExportProvenance.fingerprint(for: exported), sizing: .quality)
     }
 
     /// Слова ленты только из готовой расшифровки — без распознавания.
@@ -71,6 +71,6 @@ extension EditorController {
             subtitleCues: words == nil ? nil : plan.subtitleFileCues,
             subtitlesSkippedReason: words == nil ? ExportSpeech.noTranscriptReason : nil,
             normalizeLoudness: exported.export.normalizeLoudness,
-            timelineFingerprint: AgentWordCuts.fingerprint(exported.clips))
+            projectFingerprint: ExportProvenance.fingerprint(for: exported))
     }
 }

@@ -44,7 +44,7 @@ enum ShortsExporter {
             subtitleCues: cues,
             subtitlesSkippedReason: cues == nil ? "Субтитры выключены — файл субтитров не создан" : nil,
             normalizeLoudness: true,
-            timelineFingerprint: nil)
+            projectFingerprint: nil)
         _ = try await FinalExport.run(job, to: url, progress: progress)
     }
 

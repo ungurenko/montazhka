@@ -143,6 +143,6 @@ struct NormalExportTests {
                     "montazhka_check projectId filePath — проверьте склейки готового файла",
                     "Критик: прочитайте ресурс montazhka://critic и запустите проверку отдельным субагентом",
                 ]))
-        #expect(await ExportProvenance.read(url: video) == AgentWordCuts.fingerprint(fixture.project.clips))
+        #expect(await ExportProvenance.read(url: video) == ExportProvenance.fingerprint(for: fixture.project))
     }
 }

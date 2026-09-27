@@ -32,7 +32,7 @@ enum ShortsRenderer {
         /// Запись MP4 черновика: размер кадра задаёт композиция, битрейт — качество.
         /// `subtitlesSkippedReason` — расшифровки не было, .srt не пишется.
         func exportJob(
-            quality: ExportQuality, normalizeLoudness: Bool, timelineFingerprint: String?,
+            quality: ExportQuality, normalizeLoudness: Bool, projectFingerprint: String?,
             subtitlesSkippedReason: String? = nil
         ) -> FinalExportJob {
             FinalExportJob(
@@ -40,7 +40,7 @@ enum ShortsRenderer {
                 quality: quality, sizing: .composition,
                 subtitleCues: subtitlesSkippedReason == nil ? subtitleFileCues : nil,
                 subtitlesSkippedReason: subtitlesSkippedReason,
-                normalizeLoudness: normalizeLoudness, timelineFingerprint: timelineFingerprint)
+                normalizeLoudness: normalizeLoudness, projectFingerprint: projectFingerprint)
         }
     }
 

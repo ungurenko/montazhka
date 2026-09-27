@@ -248,7 +248,7 @@ struct ProjectVideoCompositionTests {
             input: ExportInput(
                 composition: rendered.composition, audioMix: rendered.audioMix, videoComposition: videoComposition),
             quality: .compact, sizing: .quality(.compact), subtitleCues: nil, subtitlesSkippedReason: nil,
-            normalizeLoudness: false, timelineFingerprint: nil)
+            normalizeLoudness: false, projectFingerprint: nil)
         _ = try await FinalExport.run(job, to: url, progress: { _ in })
     }
 

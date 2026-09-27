@@ -256,7 +256,7 @@ enum SelfTest {
             let job = FinalExportJob(
                 input: ExportInput(composition: built.composition, audioMix: built.audioMix), quality: .compact,
                 sizing: .quality(.compact), subtitleCues: nil, subtitlesSkippedReason: nil,
-                normalizeLoudness: true, timelineFingerprint: nil)
+                normalizeLoudness: true, projectFingerprint: nil)
             let report = try await FinalExport.run(job, to: root.appendingPathComponent("out.mp4")) { _ in }
             let integrated = report.loudness?.integratedLUFS ?? -99
             let peak = report.loudness?.truePeakDBTP ?? 0

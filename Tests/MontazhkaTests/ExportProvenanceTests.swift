@@ -5,7 +5,7 @@ import Testing
 
 @testable import MontazhkaKit
 
-/// Готовый MP4 помнит, из какой ленты он собран: проверка файла потом сверяет отпечаток.
+/// Готовый MP4 помнит, из какой версии проекта он собран: проверка файла потом сверяет отпечаток.
 @Suite("Export provenance")
 struct ExportProvenanceTests {
     private struct Source {
@@ -76,5 +76,48 @@ struct ExportProvenanceTests {
 
         #expect(await ExportProvenance.read(url: output) == nil)
         #expect(await ExportProvenance.read(url: source.root.appendingPathComponent("missing.mp4")) == nil)
+    }
+
+    @Test("the project fingerprint follows everything that shapes the file and nothing else")
+    func fingerprintCoversWhatShapesTheFile() {
+        let source = MediaReference(path: "/tmp/talk.mov")
+        var base = Project(name: "Ролик", clips: [Clip(source: source, start: 0, end: 4)])
+        base.shorts = ShortsPresentation(
+            title: "Шортс", reason: "", layout: .fit, resolvedLayout: .fit, hook: nil, subtitles: nil, zooms: [],
+            exportPath: "/tmp/a.mp4")
+        let print = ExportProvenance.fingerprint(for: base)
+
+        var unrelated = base
+        unrelated.name = "Другое имя"
+        unrelated.updatedAt = Date(timeIntervalSince1970: 0)
+        unrelated.detection.thresholdDB = -30
+        unrelated.shorts?.exportPath = "/tmp/b.mp4"
+        #expect(ExportProvenance.fingerprint(for: unrelated) == print, "имя, даты, поиск пауз и путь MP4 не в счёт")
+
+        let changes: [(String, (inout Project) -> Void)] = [
+            ("лента", { $0.clips[0].end = 3 }),
+            (
+                "анимация",
+                {
+                    $0.overlays = [
+                        ProjectOverlay(
+                            id: UUID(), media: MediaReference(path: "/tmp/a.mov"),
+                            anchor: OverlayAnchor(sourceID: source.id, sourceTime: 1, wordText: nil), align: .start,
+                            payoffAt: 0, duration: 1, position: .full, scale: 1)
+                    ]
+                }
+            ),
+            ("вшитые субтитры", { $0.export.burnSubtitles = true }),
+            ("громкость", { $0.export.normalizeLoudness = false }),
+            ("музыка", { $0.music.enabled = true }),
+            ("приглушение музыки", { $0.music.ducking = true }),
+            ("улучшение голоса", { $0.voiceEnhance.enabled = true }),
+            ("хук шортса", { $0.shorts?.hook = ShortsHook(text: "Хук") }),
+        ]
+        for (name, change) in changes {
+            var changed = base
+            change(&changed)
+            #expect(ExportProvenance.fingerprint(for: changed) != print, "\(name) меняет файл")
+        }
     }
 }

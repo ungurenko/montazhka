@@ -67,7 +67,7 @@ extension AgentService {
                 let output = URL(fileURLWithPath: draft.shorts?.exportPath ?? "")
                 let job = plan.exportJob(
                     quality: quality, normalizeLoudness: draft.export.normalizeLoudness,
-                    timelineFingerprint: AgentWordCuts.fingerprint(draft.clips),
+                    projectFingerprint: ExportProvenance.fingerprint(for: draft),
                     subtitlesSkippedReason: cached == nil ? ExportSpeech.noTranscriptReason : nil)
                 let report = try await FinalExport.run(job, to: output) { _ in }
                 var warnings = Self.draftWarnings(draft, plan: plan) + report.warnings

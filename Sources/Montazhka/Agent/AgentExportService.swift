@@ -94,12 +94,13 @@ extension AgentService {
     private func exportJob(
         _ project: Project, quality: ExportQuality, normalize: Bool, burnSubtitles: Bool, runID: UUID
     ) async throws -> (FinalExportJob, [String]) {
-        let fingerprint = AgentWordCuts.fingerprint(project.clips)
+        // Отпечаток сохранённой версии: разовые normalize/burnSubtitles его не меняют.
+        let fingerprint = ExportProvenance.fingerprint(for: project)
         if project.shorts != nil {
             let words = (try? await cachedTranscriptWords(for: project)) ?? nil
             let plan = try await shortsPlan(project, words: words, quality: quality)
             let job = plan.exportJob(
-                quality: quality, normalizeLoudness: normalize, timelineFingerprint: fingerprint,
+                quality: quality, normalizeLoudness: normalize, projectFingerprint: fingerprint,
                 subtitlesSkippedReason: words == nil ? ExportSpeech.noTranscriptReason : nil)
             return (job, plan.warnings.map(\.message))
         }
@@ -121,7 +122,7 @@ extension AgentService {
                 videoComposition: rendered.videoPlan?.exportComposition),
             quality: quality, sizing: .quality(quality), subtitleCues: speech.horizontalCues,
             subtitlesSkippedReason: speech.skippedReason, normalizeLoudness: normalize,
-            timelineFingerprint: fingerprint)
+            projectFingerprint: fingerprint)
         return (job, rendered.warnings.map(\.message))
     }
 

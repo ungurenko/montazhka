@@ -114,7 +114,8 @@ struct PreparedExport {
     var subtitleCues: [ShortsSubtitleCue]? = nil
     var subtitlesSkippedReason: String? = nil
     var normalizeLoudness: Bool = true
-    var timelineFingerprint: String? = nil
+    /// `ExportProvenance.fingerprint(for:)` — для проверки готового файла.
+    var projectFingerprint: String? = nil
     /// Черновик шортса — размер задаёт композиция; обычный проект — качество.
     var sizing: PreparedSizing = .composition
 }
@@ -184,7 +185,7 @@ struct TranscodingVideoExporter: VideoExporting {
             subtitleCues: prepared.subtitleCues,
             subtitlesSkippedReason: prepared.subtitlesSkippedReason,
             normalizeLoudness: prepared.normalizeLoudness,
-            timelineFingerprint: prepared.timelineFingerprint)
+            projectFingerprint: prepared.projectFingerprint)
         return try await FinalExport.run(job, to: url, progress: progress, stage: stage)
     }
 }

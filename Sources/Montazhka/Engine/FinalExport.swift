@@ -23,8 +23,8 @@ struct FinalExportJob: @unchecked Sendable {
     /// Почему реплик нет: нет расшифровки, нет модели, нет речи.
     var subtitlesSkippedReason: String?
     var normalizeLoudness: Bool
-    /// Из какой ленты собран файл: `AgentWordCuts.fingerprint(project.clips)`.
-    var timelineFingerprint: String?
+    /// Из какой версии проекта собран файл: `ExportProvenance.fingerprint(for:)`.
+    var projectFingerprint: String?
 }
 
 /// Что стало со звуком и субтитрами готового файла.
@@ -54,7 +54,7 @@ enum FinalExportStage: Sendable, Equatable {
 
 /// Единый завершающий шаг всех входов экспорта: окно, `montazhka_export`,
 /// `make_shorts` и старое окно шортсов. Звук выравнивается до −14 LUFS,
-/// рядом с видео ложится .srt, в MP4 записывается отпечаток ленты,
+/// рядом с видео ложится .srt, в MP4 записывается отпечаток проекта,
 /// а громкость готового файла меряется заново.
 enum FinalExport {
     static let noSpeechReason = "В ролике нет речи — субтитры не созданы"
@@ -159,7 +159,7 @@ enum FinalExport {
     private static func writeVideo(
         _ job: FinalExportJob, input: ExportInput, to url: URL, progress: @escaping @Sendable (Double) -> Void
     ) async throws {
-        let metadata = job.timelineFingerprint.map(ExportProvenance.metadataItems(fingerprint:)) ?? []
+        let metadata = job.projectFingerprint.map(ExportProvenance.metadataItems(fingerprint:)) ?? []
         let quality: ExportQuality
         switch job.sizing {
         case .settings(let settings):
