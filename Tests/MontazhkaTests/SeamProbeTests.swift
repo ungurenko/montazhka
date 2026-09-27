@@ -69,11 +69,41 @@ struct SeamProbeTests {
         #expect(abs(SeamProbe.audio(samples: offGrid, sampleRate: rate, cutOffset: cut).dropoutMS - 40) <= 5)
     }
 
-    @Test("a long pause around the cut (quiet beyond ±250 ms) is not a dropout")
+    @Test("a long pause around the cut (quiet beyond ±150 ms) is not a dropout")
     func pauseIsNotDropout() {
         var samples = sine(2 * cut)
         samples.replaceSubrange(index(cut - 0.3)..<index(cut + 0.3), with: repeatElement(0, count: index(0.6)))
         #expect(SeamProbe.audio(samples: samples, sampleRate: rate, cutOffset: cut).dropoutMS == 0)
+    }
+
+    /// «Речь» около −20 dBFS (шум ровной громкости — худший случай для краёв), пауза `pause`
+    /// с центром на склейке, слова затухают и нарастают линейно за `fade`, в паузе — фон −70 dBFS.
+    private func speechWithPause(_ pause: Double, fade: Double) -> [Float] {
+        let voice = noise(index(2 * cut), seed: 7)
+        let room = noise(index(2 * cut), seed: 11)
+        let (pauseStart, pauseEnd) = (cut - pause / 2, cut + pause / 2)
+        return voice.indices.map { offset in
+            let time = Double(offset) / rate
+            let envelope: Double =
+                time < pauseStart - fade
+                ? 1
+                : time < pauseStart
+                    ? (pauseStart - time) / fade
+                    : time < pauseEnd
+                        ? 0
+                        : time < pauseEnd + fade
+                            ? (time - pauseEnd) / fade
+                            : 1
+            return voice[offset] * Float(0.35 * envelope) + room[offset] * 0.011
+        }
+    }
+
+    @Test(
+        "a natural pause between words centred on the cut is not a dropout",
+        arguments: [0.1, 0.2, 0.3], [0.02, 0.04])
+    func naturalPauseIsNotDropout(pause: Double, fade: Double) {
+        let finding = SeamProbe.audio(samples: speechWithPause(pause, fade: fade), sampleRate: rate, cutOffset: cut)
+        #expect(finding.dropoutMS == 0)
     }
 
     @Test("music-like continuous noise across the cut is neither a dropout nor a click")

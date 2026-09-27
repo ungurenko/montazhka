@@ -67,8 +67,11 @@ enum SeamProbe {
     /// …не короче 20 мс и тише −45 dBFS…
     static let dropoutMinLength = 0.020
     static let dropoutQuietDB = -45.0
-    /// …когда 100 мс по обе стороны этой зоны (±150…250 мс) громче −30 dBFS.
-    static let dropoutSide = 0.100
+    /// …с резкими краями: 5 мс прямо перед ним и 5 мс прямо после громче −30 dBFS.
+    /// Дыра в сплошном звуке обрывает его за доли миллисекунды, а обычная пауза между
+    /// словами (в ней стоит почти каждая склейка) начинается с затухания и кончается
+    /// нарастанием — такие края тише порога, и пауза провалом не считается.
+    static let dropoutEdge = 0.005
     static let dropoutLoudDB = -30.0
 
     /// Скачок громкости: RMS 300 мс до склейки минус 300 мс после.
@@ -121,26 +124,34 @@ enum SeamProbe {
         let frame = max(1, Int((dropoutFrame * sampleRate).rounded()))
         let hop = max(1, Int((dropoutHop * sampleRate).rounded()))
         let zone = Int((dropoutZone * sampleRate).rounded())
-        let side = Int((dropoutSide * sampleRate).rounded())
+        let edge = max(1, Int((dropoutEdge * sampleRate).rounded()))
         let zoneStart = max(0, cut - zone)
         let zoneEnd = min(samples.count, cut + zone)
-        guard zoneEnd - zoneStart >= frame,
-            rmsDB(samples, max(0, cut - zone - side)..<zoneStart) > dropoutLoudDB,
-            rmsDB(samples, zoneEnd..<min(samples.count, cut + zone + side)) > dropoutLoudDB
-        else { return 0 }
+        guard zoneEnd - zoneStart >= frame else { return 0 }
 
+        // Тихий участок [start, end) в зоне засчитывается, только если звук громкий
+        // вплотную к обоим его краям. Край за пределами окна подтвердить нечем — не провал.
+        func abrupt(_ start: Int, _ end: Int) -> Bool {
+            start - edge >= 0 && end + edge <= samples.count
+                && rmsDB(samples, (start - edge)..<start) > dropoutLoudDB
+                && rmsDB(samples, end..<(end + edge)) > dropoutLoudDB
+        }
         var longest = 0
-        var runStart: Int?
-        var lastQuiet = 0
+        var run: (start: Int, end: Int)?
+        func close() {
+            if let quiet = run, quiet.end - quiet.start > longest, abrupt(quiet.start, quiet.end) {
+                longest = quiet.end - quiet.start
+            }
+            run = nil
+        }
         for start in stride(from: zoneStart, through: zoneEnd - frame, by: hop) {
             if rmsDB(samples, start..<(start + frame)) < dropoutQuietDB {
-                if runStart == nil { runStart = start }
-                lastQuiet = start
-                longest = max(longest, lastQuiet + frame - (runStart ?? start))
+                run = (run?.start ?? start, start + frame)
             } else {
-                runStart = nil
+                close()
             }
         }
+        close()
         let length = Double(longest) / sampleRate
         return length >= dropoutMinLength - 1e-9 ? (length * 1000).rounded() : 0
     }

@@ -121,4 +121,26 @@ struct AgentNotesStoreTests {
             #expect(notes.components(separatedBy: "## 2026-09-27 16:00").count == 21)
         }
     }
+
+    @Test("two stores on one folder (as two processes would) appending at once keep every note")
+    func twoStoresAppendAtOnce() async throws {
+        try await withStore { first, directory in
+            let second = AgentNotesStore(baseDirectory: directory)
+            let id = UUID()
+            let when = try date(27, 17, 0)
+            try await withThrowingTaskGroup(of: Void.self) { group in
+                for index in 0..<50 {
+                    group.addTask { try await first.append(id, text: "первый \(index)", at: when) }
+                    group.addTask { try await second.append(id, text: "второй \(index)", at: when) }
+                }
+                try await group.waitForAll()
+            }
+            let notes = try #require(await first.read(id))
+            #expect(notes.components(separatedBy: "## 2026-09-27 17:00").count == 101)
+            for index in 0..<50 {
+                #expect(notes.contains("первый \(index)\n") || notes.hasSuffix("первый \(index)"))
+                #expect(notes.contains("второй \(index)\n") || notes.hasSuffix("второй \(index)"))
+            }
+        }
+    }
 }

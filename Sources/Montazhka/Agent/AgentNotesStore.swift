@@ -1,8 +1,13 @@
+import Darwin
 import Foundation
 
 /// Заметки агента о проекте: бриф, стратегия, решения, просьбы, что осталось.
 /// Пользователь их не видит. Файл `<base>/<projectId>.md` (UTF-8) лежит вне проекта,
 /// поэтому окно Монтажки и `undo` его не трогают.
+///
+/// Актор упорядочивает вызовы только внутри процесса, а заметки одного проекта могут
+/// одновременно писать `mcp` и разовые `agent`-процессы. Поэтому каждое
+/// «прочитать → изменить → записать» идёт под межпроцессной блокировкой `<projectId>.md.lock`.
 actor AgentNotesStore {
     /// Длиннее агенту неудобно читать за раз — пусть сожмёт заметки через `setNotes`.
     static let maxCharacters = 20_000
@@ -19,17 +24,21 @@ actor AgentNotesStore {
 
     /// Дописывает заметку под заголовком с датой: "\n## yyyy-MM-dd HH:mm\n" + текст.
     func append(_ projectID: UUID, text: String, at date: Date) throws {
-        try write(projectID, (existing(projectID) ?? "") + "\n## \(Self.stamp(date))\n" + text)
+        try locked(projectID) {
+            try write(projectID, (existing(projectID) ?? "") + "\n## \(Self.stamp(date))\n" + text)
+        }
     }
 
     /// Переписывает заметки целиком. Пустой текст (или одни пробелы) удаляет файл.
     func replace(_ projectID: UUID, text: String) throws {
-        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            let url = fileURL(projectID)
-            if FileManager.default.fileExists(atPath: url.path) { try FileManager.default.removeItem(at: url) }
-            return
+        try locked(projectID) {
+            guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                let url = fileURL(projectID)
+                if FileManager.default.fileExists(atPath: url.path) { try FileManager.default.removeItem(at: url) }
+                return
+            }
+            try write(projectID, text)
         }
-        try write(projectID, text)
     }
 
     /// Заметки для копии проекта: строка `header`, под ней заметки источника. Если у получателя
@@ -39,7 +48,24 @@ actor AgentNotesStore {
     func copy(from source: UUID, to destination: UUID, header: String) throws {
         guard let notes = try existing(source) else { return }
         let block = header + "\n" + notes
-        try save(destination, try existing(destination).map { $0 + "\n" + block } ?? block)
+        try locked(destination) {
+            try save(destination, try existing(destination).map { $0 + "\n" + block } ?? block)
+        }
+    }
+
+    /// Держит блокировку `<projectId>.md.lock` (flock, с ожиданием) на время `body`.
+    /// `body` синхронный, поэтому блокировка никогда не переживает `await`. Файл блокировки
+    /// не удаляется: иначе другой процесс мог бы заблокировать новый файл с тем же именем.
+    private func locked<T>(_ projectID: UUID, _ body: () throws -> T) throws -> T {
+        try FileManager.default.createDirectory(at: baseDirectory, withIntermediateDirectories: true)
+        let descriptor = Darwin.open(fileURL(projectID).path + ".lock", O_CREAT | O_RDWR, S_IRUSR | S_IWUSR)
+        guard descriptor >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+        defer { Darwin.close(descriptor) }
+        while flock(descriptor, LOCK_EX) != 0 {
+            guard errno == EINTR else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+        }
+        defer { flock(descriptor, LOCK_UN) }
+        return try body()
     }
 
     /// Текст заметок; nil — файла нет. Нечитаемый файл — ошибка, а не пустые заметки,
