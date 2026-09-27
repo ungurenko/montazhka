@@ -39,22 +39,47 @@ enum ExportProvenance {
         return String(SHA256.hash(data: data).hex.prefix(16))
     }
 
-    static func metadataItems(fingerprint: String) -> [AVMetadataItem] {
+    /// Отпечаток .srt, записанного рядом, — после отпечатка проекта.
+    private static let subtitlesMarker = " srt:"
+
+    /// `subtitles` — `subtitlesDigest(_:)` того .srt, что ляжет рядом с файлом.
+    static func metadataItems(fingerprint: String?, subtitles: String? = nil) -> [AVMetadataItem] {
+        guard fingerprint != nil || subtitles != nil else { return [] }
         let item = AVMutableMetadataItem()
         item.identifier = .commonIdentifierDescription
-        item.value = "\(prefix)\(fingerprint)" as NSString
+        item.value = "\(prefix)\(fingerprint ?? "")\(subtitles.map { subtitlesMarker + $0 } ?? "")" as NSString
         item.extendedLanguageTag = "und"
         return [item]
     }
 
-    /// nil — отпечатка нет или файл не читается.
+    /// Отпечаток проекта; nil — отпечатка нет или файл не читается.
     static func read(url: URL) async -> String? {
+        await stamp(url: url)?.project
+    }
+
+    /// Что записано в файл при экспорте; nil — файл не от Монтажки или не читается.
+    static func stamp(url: URL) async -> ExportStamp? {
         let asset = AVURLAsset(url: url)
         guard let items = try? await asset.load(.metadata) else { return nil }
         for item in items {
             guard let value = try? await item.load(.stringValue), value.hasPrefix(prefix) else { continue }
-            return String(value.dropFirst(prefix.count))
+            let parts = value.dropFirst(prefix.count).components(separatedBy: subtitlesMarker)
+            let project = parts[0].isEmpty ? nil : parts[0]
+            return ExportStamp(project: project, subtitles: parts.count > 1 ? parts[1] : nil)
         }
         return nil
     }
+
+    /// Отпечаток содержимого .srt: по нему видно, что файл наш и его не правили.
+    static func subtitlesDigest(_ data: Data) -> String {
+        String(SHA256.hash(data: data).hex.prefix(16))
+    }
+}
+
+/// Отметка готового MP4.
+struct ExportStamp: Equatable, Sendable {
+    /// `ExportProvenance.fingerprint(for:)`.
+    var project: String?
+    /// Отпечаток .srt, который экспорт положил рядом; nil — субтитров не было.
+    var subtitles: String?
 }

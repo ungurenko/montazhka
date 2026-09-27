@@ -91,14 +91,15 @@ struct FinalExportTests {
         #expect(names == ["tone.mov", "ролик.mp4", "ролик.srt"], "временные файлы убраны")
     }
 
-    @Test("re-exporting the same path without speech removes the old .srt; no mastering leaves the level alone")
+    @Test("re-exporting the same path without speech removes our old .srt; no mastering leaves the level alone")
     func reexportWithoutSpeech() async throws {
         let fixture = try await fixture()
         defer { try? FileManager.default.removeItem(at: fixture.root) }
         let output = fixture.root.appendingPathComponent("ролик.mp4")
         let subtitles = SubRipWriter.url(forVideo: output)
-        try Data("прошлый экспорт".utf8).write(to: output)
-        try Data("1\n00:00:00,000 --> 00:00:01,000\nСтарое\n".utf8).write(to: subtitles)
+        _ = try await FinalExport.run(
+            job(fixture.input, cues: [cue("Старое", 0, 1)], normalize: false), to: output, progress: { _ in })
+        #expect(FileManager.default.fileExists(atPath: subtitles.path))
 
         let report = try await FinalExport.run(
             job(fixture.input, cues: [], normalize: false), to: output, progress: { _ in })
@@ -185,14 +186,14 @@ extension FinalExportTests {
         #expect(names == ["tone.mov", "ролик.mp4", "ролик.srt"], "временные файлы убраны")
     }
 
-    @Test("re-exporting over our own MP4 replaces its .srt with the new phrases")
+    @Test("re-exporting over our own MP4 replaces its untouched .srt with the new phrases")
     func reexportReplacesOwnSubtitles() async throws {
         let fixture = try await fixture()
         defer { try? FileManager.default.removeItem(at: fixture.root) }
         let output = fixture.root.appendingPathComponent("ролик.mp4")
         let subtitles = SubRipWriter.url(forVideo: output)
-        try Data("прошлый экспорт".utf8).write(to: output)
-        try Data(Self.userSubtitles.utf8).write(to: subtitles)
+        _ = try await FinalExport.run(
+            job(fixture.input, cues: [cue("Старое", 0, 1)], normalize: false), to: output, progress: { _ in })
 
         let report = try await FinalExport.run(
             job(fixture.input, cues: [cue("Первая", 0.5, 2)], normalize: false), to: output, progress: { _ in })
@@ -207,8 +208,9 @@ extension FinalExportTests {
         defer { try? FileManager.default.removeItem(at: fixture.root) }
         let output = fixture.root.appendingPathComponent("ролик.mp4")
         let subtitles = SubRipWriter.url(forVideo: output)
-        try Data("прошлый экспорт".utf8).write(to: output)
-        try Data(Self.userSubtitles.utf8).write(to: subtitles)
+        _ = try await FinalExport.run(
+            job(fixture.input, cues: [cue("Старое", 0, 1)], normalize: false), to: output, progress: { _ in })
+        let previous = try String(contentsOf: subtitles, encoding: .utf8)
         let root = fixture.root
 
         // Пока пишется видео, временный .srt пропадает — записать субтитры не выйдет.
@@ -224,7 +226,50 @@ extension FinalExportTests {
 
         #expect(report.subtitlesURL == nil)
         #expect(report.subtitlesSkippedReason?.hasPrefix("Субтитры не сохранились: ") == true)
+        #expect(try String(contentsOf: subtitles, encoding: .utf8) == previous)
+    }
+
+    @Test("someone else's MP4 with its .srt: the .srt stays when the video is replaced", arguments: [true, false])
+    func foreignPairKeepsSubtitles(withSpeech: Bool) async throws {
+        let fixture = try await fixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let output = fixture.root.appendingPathComponent("ролик.mp4")
+        let subtitles = SubRipWriter.url(forVideo: output)
+        try Data("чужое видео".utf8).write(to: output)
+        try Data(Self.userSubtitles.utf8).write(to: subtitles)
+
+        let report = try await FinalExport.run(
+            job(fixture.input, cues: withSpeech ? [cue("Первая", 0.5, 2)] : [], normalize: false), to: output,
+            progress: { _ in })
+
         #expect(try String(contentsOf: subtitles, encoding: .utf8) == Self.userSubtitles)
+        #expect(report.subtitlesURL == nil)
+        #expect(
+            report.subtitlesSkippedReason?.contains("ролик.srt") == true
+                || report.warnings.contains { $0.contains("ролик.srt") },
+            "человек узнаёт, что рядом остались прежние субтитры")
+    }
+
+    @Test("our own .srt edited by hand after the export is neither replaced nor deleted", arguments: [true, false])
+    func editedOwnSubtitlesStay(withSpeech: Bool) async throws {
+        let fixture = try await fixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let output = fixture.root.appendingPathComponent("ролик.mp4")
+        let subtitles = SubRipWriter.url(forVideo: output)
+        _ = try await FinalExport.run(
+            job(fixture.input, cues: [cue("Старое", 0, 1)], normalize: false), to: output, progress: { _ in })
+        let edited = "1\n00:00:00,000 --> 00:00:01,000\nПоправил руками\n"
+        try Data(edited.utf8).write(to: subtitles)
+
+        let report = try await FinalExport.run(
+            job(fixture.input, cues: withSpeech ? [cue("Первая", 0.5, 2)] : [], normalize: false), to: output,
+            progress: { _ in })
+
+        #expect(try String(contentsOf: subtitles, encoding: .utf8) == edited)
+        #expect(report.subtitlesURL == nil)
+        #expect(
+            report.subtitlesSkippedReason?.contains("ролик.srt") == true
+                || report.warnings.contains { $0.contains("ролик.srt") })
     }
 
     @Test("cancel during the final loudness check leaves the previous MP4 and .srt in place")

@@ -79,8 +79,9 @@ enum FinalExport {
             .appendingPathComponent("montazhka-master-\(UUID().uuidString)", isDirectory: true)
         // Выровненный звук (CAF) живёт только до конца записи — и при ошибке, и при отмене.
         defer { try? FileManager.default.removeItem(at: scratch) }
-        // MP4 уже на месте — значит, перезаписывается прошлый экспорт, и его .srt тоже наш.
-        let replacesVideo = FileManager.default.fileExists(atPath: url.path)
+        // Прежний .srt заменяется или убирается, только если его положил прошлый экспорт этого MP4
+        // и после никто не правил: отпечаток его содержимого записан в сам MP4.
+        let ownedSubtitles = await SubtitleSidecar.ownedDigest(video: url)
         let length = try await job.input.composition.load(.duration)
         let duration = length.seconds
 
@@ -91,12 +92,14 @@ enum FinalExport {
             if let mastered { input = try await replacingAudio(of: input, with: mastered.audioURL, length: length) }
         }
 
-        var subtitles = SubtitleSidecar(job: job, duration: duration, video: url, replacesVideo: replacesVideo)
+        var subtitles = SubtitleSidecar(job: job, duration: duration, video: url, ownedDigest: ownedSubtitles)
         defer { subtitles.discard() }
         var video = AtomicMediaOutput(destinationURL: url)
         defer { video.discard() }
         tracker.begin(.writing)
-        try await writeVideo(job, input: input, to: video.temporaryURL, progress: { tracker.update($0) })
+        try await writeVideo(
+            job, input: input, subtitlesDigest: subtitles.pendingDigest, to: video.temporaryURL,
+            progress: { tracker.update($0) })
 
         tracker.begin(.verifying)
         let loudness = try? await LoudnessMeter.measure(url: video.temporaryURL, progress: { tracker.update($0) })
@@ -164,9 +167,10 @@ enum FinalExport {
     }
 
     private static func writeVideo(
-        _ job: FinalExportJob, input: ExportInput, to url: URL, progress: @escaping @Sendable (Double) -> Void
+        _ job: FinalExportJob, input: ExportInput, subtitlesDigest: String?, to url: URL,
+        progress: @escaping @Sendable (Double) -> Void
     ) async throws {
-        let metadata = job.projectFingerprint.map(ExportProvenance.metadataItems(fingerprint:)) ?? []
+        let metadata = ExportProvenance.metadataItems(fingerprint: job.projectFingerprint, subtitles: subtitlesDigest)
         let quality: ExportQuality
         switch job.sizing {
         case .settings(let settings):
@@ -199,41 +203,64 @@ enum FinalExport {
 /// .srt рядом с видео. Временная копия пишется в папку назначения до видео,
 /// на место встаёт только после готового MP4: при ошибке записи прежняя пара
 /// «видео + субтитры» остаётся нетронутой. Сбой с субтитрами экспорт не валит.
-/// Чужой .srt (рядом ещё не было MP4) не заменяется и не удаляется никогда.
+/// Заменяется и убирается только свой нетронутый .srt — тот, чей отпечаток записан
+/// в заменяемый MP4. Чужой или поправленный вручную остаётся как есть.
 private struct SubtitleSidecar {
     let destination: URL
+    /// Отпечаток прежнего .srt, если он наш и нетронутый; nil — прежнего нет или он чужой.
+    private let ownedDigest: String?
     private var output: AtomicMediaOutput?
-    /// Прежний .srt от прошлого экспорта этого MP4 уходит, если новых фраз нет.
+    /// Отпечаток нового .srt — записывается в MP4.
+    private(set) var pendingDigest: String?
+    /// Прежний свой .srt уходит, если новых фраз нет.
     private var removesStale = false
+    private var notes: [String] = []
     private(set) var committedURL: URL?
     private(set) var skippedReason: String?
 
-    /// `replacesVideo` — MP4 по этому пути уже был: перезаписывается прошлый экспорт.
-    init(job: FinalExportJob, duration: Double, video: URL, replacesVideo: Bool) {
+    /// Отпечаток .srt рядом с `video`, если его положил прошлый экспорт этого MP4 и его не правили.
+    static func ownedDigest(video: URL) async -> String? {
+        guard let data = FileManager.default.contents(atPath: SubRipWriter.url(forVideo: video).path),
+            let recorded = await ExportProvenance.stamp(url: video)?.subtitles
+        else { return nil }
+        let digest = ExportProvenance.subtitlesDigest(data)
+        return digest == recorded ? digest : nil
+    }
+
+    init(job: FinalExportJob, duration: Double, video: URL, ownedDigest: String?) {
         destination = SubRipWriter.url(forVideo: video)
-        guard let cues = job.subtitleCues else {
-            skippedReason = job.subtitlesSkippedReason
-            removesStale = replacesVideo
-            return
-        }
-        let fitted = Self.fitted(cues, to: duration)
+        self.ownedDigest = ownedDigest
+        let foreign = ownedDigest == nil && FileManager.default.fileExists(atPath: destination.path)
+        let fitted = job.subtitleCues.map { Self.fitted($0, to: duration) } ?? []
         guard !fitted.isEmpty else {
-            skippedReason = FinalExport.noSpeechReason
-            removesStale = replacesVideo
+            skippedReason = job.subtitleCues == nil ? job.subtitlesSkippedReason : FinalExport.noSpeechReason
+            removesStale = ownedDigest != nil
+            if foreign { notes.append(keptNote) }
             return
         }
-        if !replacesVideo, FileManager.default.fileExists(atPath: destination.path) {
-            skippedReason = "Рядом уже есть файл субтитров \(destination.lastPathComponent) — не стал его заменять"
+        if foreign {
+            skippedReason = keptReason
             return
         }
         let pending = AtomicMediaOutput(destinationURL: destination)
         do {
-            try Data(SubRipWriter.text(cues: fitted).utf8).write(to: pending.temporaryURL)
+            let data = Data(SubRipWriter.text(cues: fitted).utf8)
+            try data.write(to: pending.temporaryURL)
             output = pending
+            pendingDigest = ExportProvenance.subtitlesDigest(data)
         } catch {
             pending.discard()
             skippedReason = Self.failure(error)
         }
+    }
+
+    private var keptReason: String {
+        "Рядом уже есть файл субтитров \(destination.lastPathComponent) — не стал его заменять"
+    }
+
+    private var keptNote: String {
+        "Рядом с видео остались прежние субтитры \(destination.lastPathComponent): их создавала не Монтажка "
+            + "или их правили вручную — могут не совпадать с новым роликом"
     }
 
     /// Фраза не выходит за конец ролика; фразы после конца выбрасываются.
@@ -244,11 +271,19 @@ private struct SubtitleSidecar {
         }
     }
 
-    /// Видео уже на месте: новый .srt встаёт рядом, а без новых фраз уходит старый —
-    /// он от прежнего экспорта этого файла. Не удалось поставить новый — прежний
-    /// остаётся. Возвращает предупреждения.
+    /// Видео уже на месте: новый .srt встаёт рядом, а без новых фраз уходит свой старый.
+    /// Прежний файл, который за время экспорта появился или изменился, уже не наш — он
+    /// остаётся. Не удалось поставить новый — прежний тоже остаётся. Возвращает предупреждения.
     mutating func commit() -> [String] {
+        let current = FileManager.default.contents(atPath: destination.path).map(ExportProvenance.subtitlesDigest)
+        let untouched = current == nil || current == ownedDigest
         if var pending = output {
+            guard untouched else {
+                pending.discard()
+                output = nil
+                skippedReason = keptReason
+                return notes
+            }
             do {
                 try pending.commit()
                 output = pending
@@ -258,15 +293,16 @@ private struct SubtitleSidecar {
                 output = nil
                 skippedReason = Self.failure(error)
             }
-            return []
+            return notes
         }
-        guard removesStale, FileManager.default.fileExists(atPath: destination.path) else { return [] }
+        guard removesStale, current != nil else { return notes }
+        guard untouched else { return notes + [keptNote] }
         do {
             try FileManager.default.removeItem(at: destination)
-            return []
+            return notes
         } catch {
             Logger.export.error("Старые субтитры не удалились: \(String(reflecting: error), privacy: .public)")
-            return ["Рядом с видео остались субтитры прошлого экспорта: \(destination.lastPathComponent)"]
+            return notes + ["Рядом с видео остались субтитры прошлого экспорта: \(destination.lastPathComponent)"]
         }
     }
 
