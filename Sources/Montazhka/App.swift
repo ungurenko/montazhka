@@ -90,7 +90,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.appearance = NSAppearance(named: .aqua)
         // Запуск из терминала (swift run) не выводит окно вперёд — активируем сами.
         NSApp.activate(ignoringOtherApps: true)
-        if !UITestMode.isActive { AgentIntegrationInstaller.refreshSkillsIfInstalled() }
+        if !UITestMode.isActive {
+            AgentIntegrationInstaller.refreshSkillsIfInstalled()
+            // Задачи агента, чей фоновый процесс умер (в том числе при перезагрузке), получают конечный статус.
+            Task.detached(priority: .utility) {
+                await AgentRunStore(baseDirectory: AgentBackgroundJob.runsDirectory).reconcileAll()
+            }
+        }
     }
 
     /// Пользователь вернулся в окно — значок о готовой работе он уже увидел.

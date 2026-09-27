@@ -12,10 +12,14 @@ enum AgentWorkerRequest: Codable, Sendable {
 }
 
 enum AgentBackgroundJob {
-    static func submit(_ request: AgentWorkerRequest) async throws -> AgentResponse {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+    /// Папка фоновых задач агента.
+    static var runsDirectory: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Montazhka/AgentRuns", isDirectory: true)
-        let store = AgentRunStore(baseDirectory: base)
+    }
+
+    static func submit(_ request: AgentWorkerRequest) async throws -> AgentResponse {
+        let store = AgentRunStore(baseDirectory: runsDirectory)
         let kind: AgentRunKind
         let sources: [String]
         switch request {
@@ -59,9 +63,7 @@ enum AgentBackgroundJob {
     }
 
     static func work(jobID: UUID, requestURL: URL) async -> AgentResponse {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("Montazhka/AgentRuns", isDirectory: true)
-        let store = AgentRunStore(baseDirectory: base)
+        let store = AgentRunStore(baseDirectory: runsDirectory)
         do {
             let request = try JSONDecoder().decode(AgentWorkerRequest.self, from: Data(contentsOf: requestURL))
             let service = AgentService()

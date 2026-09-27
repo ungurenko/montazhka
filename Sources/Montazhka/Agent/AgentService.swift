@@ -228,12 +228,12 @@ actor AgentService {
     /// вызов вместо серии опросов.
     func job(id: UUID, waitSeconds: Double = 0) async -> AgentResponse {
         do {
-            var run = try await runs.load(id: id)
+            var run = try await runs.reconcile(id: id)
             let deadline = Date().addingTimeInterval(min(Self.maxJobWaitSeconds, max(0, waitSeconds)))
             let started = (status: run.status, stage: run.stage)
             while run.status == .pending || run.status == .running, Date() < deadline {
                 try await Task.sleep(for: .milliseconds(500))
-                run = try await runs.load(id: id)
+                run = try await runs.reconcile(id: id)
                 if run.status != started.status || run.stage != started.stage { break }
             }
             let artifacts = Dictionary(
@@ -361,6 +361,8 @@ actor AgentService {
             $0.projectID = projectID
             $0.error = nil
         }
+        // Этот процесс выполняет задачу: пока он жив, задача не считается прерванной.
+        try await runs.claim(id: run.id)
         return try await runs.load(id: run.id)
     }
 
