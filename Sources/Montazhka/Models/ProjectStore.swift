@@ -159,13 +159,8 @@ final class ProjectStore: ProjectRepository, Sendable {
     private func saveOnQueue(_ project: Project, expected: ProjectRevision??) throws -> ProjectRevision {
         try prepareDirectories()
         var p = project
-        p.schemaVersion = Project.currentSchemaVersion
         p.updatedAt = Date()
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        encoder.dateEncodingStrategy = .iso8601
-        let data: Data
-        do { data = try encoder.encode(p) } catch { throw ProjectStoreError.encode(String(reflecting: error)) }
+        let data = try Self.encoded(p)
         return try withSaveLock(for: p.id) {
             if let expected, try diskRevision(of: p.id) != expected { throw ProjectStoreError.conflict }
             do { try data.write(to: fileURL(for: p.id), options: .atomic) } catch {
@@ -174,6 +169,16 @@ final class ProjectStore: ProjectRepository, Sendable {
             writeSidecarMeta(for: p)
             return ProjectRevision(data: data)
         }
+    }
+
+    /// Файл проекта в формате хранилища — и для своей записи, и для копии в выбранный файл.
+    static func encoded(_ project: Project) throws -> Data {
+        var p = project
+        p.schemaVersion = Project.currentSchemaVersion
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        do { return try encoder.encode(p) } catch { throw ProjectStoreError.encode(String(reflecting: error)) }
     }
 
     /// Инвариант «meta на диске = соответствует текущему проекту»:

@@ -50,6 +50,70 @@ struct AppModelPersistenceTests {
     }
 
     @MainActor
+    @Test("a failed final save keeps the project open with its edits; retry then closes it")
+    func failedSaveKeepsProjectOpen() async throws {
+        let repository = ControlledProjectRepository()
+        let app = AppModel(store: repository)
+        let controller = EditorController(
+            project: Project(name: "Черновик"), store: repository, openRouterKeyStore: EmptyOpenRouterKeyStore())
+        app.editor = controller
+        controller.renameProject("Правка в памяти")
+        repository.saveError = CocoaError(.fileWriteOutOfSpace)
+
+        app.closeProject()
+        try await waitUntil { app.closeFailure != nil }
+
+        #expect(app.editor === controller, "редактор остался открытым")
+        #expect(controller.project.name == "Правка в памяти", "правка в памяти")
+        #expect(app.closeFailure?.what == "На диске не хватает места.")
+        #expect(!app.isProjectOperationInProgress)
+
+        repository.saveError = nil
+        app.closeProject()
+        try await waitUntil { app.editor == nil }
+        #expect(app.closeFailure == nil)
+        #expect(repository.savedNames.last == "Правка в памяти")
+    }
+
+    @MainActor
+    @Test("closing without saving is an explicit choice and writes nothing")
+    func closeWithoutSaving() async throws {
+        let repository = ControlledProjectRepository()
+        let app = AppModel(store: repository)
+        let controller = EditorController(
+            project: Project(name: "Черновик"), store: repository, openRouterKeyStore: EmptyOpenRouterKeyStore())
+        app.editor = controller
+        repository.saveError = CocoaError(.fileWriteOutOfSpace)
+        app.closeProject()
+        try await waitUntil { app.closeFailure != nil }
+        let writes = repository.savedNames.count
+
+        await app.closeWithoutSaving()
+
+        #expect(app.editor == nil)
+        #expect(app.closeFailure == nil)
+        #expect(repository.savedNames.count == writes)
+    }
+
+    @MainActor
+    @Test("quitting waits for the final save and is refused when it fails")
+    func quitWaitsForSave() async throws {
+        let repository = ControlledProjectRepository()
+        let app = AppModel(store: repository)
+        app.editor = EditorController(
+            project: Project(name: "Выход"), store: repository, openRouterKeyStore: EmptyOpenRouterKeyStore())
+        repository.saveError = CocoaError(.fileWriteNoPermission)
+
+        #expect(await app.closeForTermination() == false)
+        #expect(app.editor != nil)
+        #expect(app.closeFailure != nil)
+
+        repository.saveError = nil
+        #expect(await app.closeForTermination() == true)
+        #expect(app.editor == nil)
+    }
+
+    @MainActor
     private func waitUntil(
         timeoutIterations: Int = 100,
         _ condition: @escaping () -> Bool
@@ -73,6 +137,8 @@ private final class ControlledProjectRepository: ProjectRepository, @unchecked S
     private var loadWaiters: [LoadWaiter] = []
     private var saveWaiters: [CheckedContinuation<Void, Never>] = []
     private var shouldBlockSaves = false
+    private var failure: Error?
+    private var saved: [String] = []
 
     init() {
         let root = FileManager.default.temporaryDirectory
@@ -100,10 +166,19 @@ private final class ControlledProjectRepository: ProjectRepository, @unchecked S
         set { lock.withLock { shouldBlockSaves = newValue } }
     }
 
+    var saveError: Error? {
+        get { lock.withLock { failure } }
+        set { lock.withLock { failure = newValue } }
+    }
+
+    var savedNames: [String] { lock.withLock { saved } }
+
     var pendingLoadCount: Int { lock.withLock { loadWaiters.count } }
     var pendingSaveCount: Int { lock.withLock { saveWaiters.count } }
 
     func save(_ project: Project) async throws {
+        if let saveError { throw saveError }
+        lock.withLock { saved.append(project.name) }
         guard blocksSaves else { return }
         await withCheckedContinuation { continuation in
             lock.withLock { saveWaiters.append(continuation) }

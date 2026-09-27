@@ -26,33 +26,6 @@ enum ProjectSaveStatus: Equatable {
     case failed(UserFacingError)
 }
 
-/// Почему лента поменялась без действий в окне.
-enum ExternalChangeNotice: Equatable {
-    /// Агент изменил проект, в окне правок не ждало.
-    case agentChanged
-    /// Агент изменил проект, пока правка окна ждала записи. Версия окна легла
-    /// проектом-копией `copyName`; nil — копию сохранить не вышло.
-    case agentChangedDuringEdit(copyName: String?)
-
-    var title: String {
-        switch self {
-        case .agentChanged: "Агент изменил проект — лента обновлена"
-        case .agentChangedDuringEdit: "Агент изменил проект во время вашей правки"
-        }
-    }
-
-    var hint: String {
-        switch self {
-        case .agentChanged:
-            "Вернуть прежнюю версию можно кнопкой «Вернуть как было» или ⌘Z."
-        case .agentChangedDuringEdit(let copyName?):
-            "Ваша версия сохранена копией «\(copyName)» в списке проектов. «Вернуть как было» вернёт её и здесь."
-        case .agentChangedDuringEdit(nil):
-            "Ваша последняя правка не сохранилась. «Вернуть как было» вернёт вашу версию вместе с ней."
-        }
-    }
-}
-
 enum PreviewState: Equatable {
     case empty
     case preparing
@@ -254,7 +227,34 @@ final class EditorController: ExportPreparing {
         }
     }
 
+    /// Закрытие: запись идёт первой, пока всё работает, — при ошибке проект остаётся открытым
+    /// и полностью рабочим, а ошибка выбрасывается. После записи всё останавливается; если
+    /// фоновая работа успела поменять проект между записью и остановкой, он дописывается.
+    func close() async throws -> ProjectSaveCoordinator.FlushOutcome {
+        let flushed = project
+        var outcome = try await saveCoordinator.flush(flushed)
+        await stop()
+        if project != flushed { outcome = try await saveCoordinator.flush(project) }
+        return outcome
+    }
+
+    /// Запись и остановка там, где закрытие не прерывается (тесты, самопроверка):
+    /// ошибка записи остаётся в статусе сохранения.
     func shutdown() async {
+        do {
+            _ = try await close()
+        } catch {
+            await stop()
+        }
+    }
+
+    /// Бросить правку, ждущую записи, — только по явному выбору «Закрыть без сохранения».
+    func discardPendingSave() {
+        saveCoordinator.cancelPending()
+    }
+
+    /// Останавливает плеер, фоновые работы и наблюдателей. Проект не записывает.
+    func stop() async {
         player.pause()
         player.replaceCurrentItem(with: nil)
         isPlaying = false
@@ -276,7 +276,6 @@ final class EditorController: ExportPreparing {
         waveformAnalysis.cancel()
         if let endObserver { NotificationCenter.default.removeObserver(endObserver) }
         if let terminateObserver { NotificationCenter.default.removeObserver(terminateObserver) }
-        await saveCoordinator.saveNow(project)
     }
 
     // MARK: - Наблюдатели

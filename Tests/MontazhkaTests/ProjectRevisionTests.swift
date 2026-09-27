@@ -103,6 +103,34 @@ struct ProjectRevisionTests {
     }
 }
 
+extension ProjectRevisionTests {
+    @MainActor
+    @Test("closing after an agent edit keeps both versions and tells the person about the copy")
+    func closeConflictKeepsBothVersions() async throws {
+        let root = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let project = try await sharedProject(in: root)
+        let store = ProjectStore(baseDirectory: root)
+        let app = AppModel(store: store)
+        let controller = EditorController(project: project, store: store, openRouterKeyStore: EmptyOpenRouterKeyStore())
+        app.editor = controller
+        controller.renameProject("правка окна")
+        var agentVersion = project
+        agentVersion.clips = [Clip(sourcePath: "/tmp/a.mov", start: 0, end: 4)]
+        try await ProjectStore(baseDirectory: root).save(agentVersion)
+
+        app.closeProject()
+        for _ in 0..<100 where app.editor != nil { try await Task.sleep(for: .milliseconds(20)) }
+
+        #expect(app.editor == nil)
+        #expect(app.closeFailure == nil)
+        #expect(try await store.load(id: project.id).clips.map(\.end) == [4])
+        let copies = try await store.listProjects().projects.filter { $0.id != project.id }
+        #expect(copies.map(\.name).contains { $0.hasPrefix("правка окна") })
+        #expect(app.storeErrorMessage?.hint?.contains("правка окна") == true)
+    }
+}
+
 /// Настоящее хранилище, в которое тест вставляет чужую запись в нужный момент:
 /// перед записью окна или сразу после его чтения. Каждый барьер срабатывает один раз.
 private final class BarrierRepository: ProjectRepository, @unchecked Sendable {

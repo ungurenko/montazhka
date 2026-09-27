@@ -5,6 +5,20 @@ import Observation
 @MainActor
 @Observable
 final class ProjectSaveCoordinator {
+    /// Чем кончилась запись перед закрытием.
+    enum FlushOutcome: Equatable, Sendable {
+        case saved
+        /// Файл изменил агент: его версия осталась, версия окна легла проектом-копией.
+        case keptCopy(name: String)
+    }
+
+    private enum WriteResult {
+        case saved
+        case keptCopy(name: String?)
+        case failed(Error)
+        case cancelled
+    }
+
     private(set) var status: ProjectSaveStatus = .idle
 
     /// Своя запись не прошла: файл на диске успел изменить кто-то другой (агент).
@@ -74,6 +88,27 @@ final class ProjectSaveCoordinator {
         await persist(project, generation: current)
     }
 
+    /// Запись перед закрытием: ошибка не прячется в статус, а выбрасывается — закрывать
+    /// проект нельзя. Конфликт с правкой агента — не ошибка: версия окна ложится копией.
+    func flush(_ project: Project) async throws -> FlushOutcome {
+        pendingTask?.cancel()
+        pendingTask = nil
+        let current = generation.advance()
+        status = .saving
+        switch await enqueueWrite(project, generation: current, notifyConflict: false) {
+        case .saved:
+            return .saved
+        case .keptCopy(let name?):
+            return .keptCopy(name: name)
+        case .keptCopy(nil):
+            throw ProjectStoreError.conflict
+        case .failed(let error):
+            throw error
+        case .cancelled:
+            throw CancellationError()
+        }
+    }
+
     func saveBeforeTermination(_ project: Project) {
         pendingTask?.cancel()
         pendingTask = nil
@@ -125,36 +160,42 @@ final class ProjectSaveCoordinator {
 
     private func persist(_ project: Project, generation current: Int) async {
         if generation.isCurrent(current) { pendingTask = nil }
+        _ = await enqueueWrite(project, generation: current, notifyConflict: true)
+    }
+
+    private func enqueueWrite(_ project: Project, generation current: Int, notifyConflict: Bool) async -> WriteResult {
         let previous = lastWrite
-        let write = Task { [weak self] in
+        let write = Task { [weak self] () -> WriteResult in
             await previous?.value
-            await self?.write(project, generation: current)
+            guard let self else { return .cancelled }
+            return await self.write(project, generation: current, notifyConflict: notifyConflict)
         }
-        lastWrite = write
-        await write.value
+        lastWrite = Task { _ = await write.value }
+        return await write.value
     }
 
     /// Сверка версии и запись — одно действие хранилища под общей блокировкой.
-    private func write(_ project: Project, generation current: Int) async {
+    private func write(_ project: Project, generation current: Int, notifyConflict: Bool) async -> WriteResult {
         writesInFlight += 1
         defer { writesInFlight -= 1 }
         do {
             adopt(try await repository.save(project, expected: knownRevision))
-            guard generation.isCurrent(current) else { return }
-            status = .saved
+            if generation.isCurrent(current) { status = .saved }
+            return .saved
         } catch ProjectStoreError.conflict {
-            await keepCopyAfterConflict(project, generation: current)
+            return .keptCopy(name: await keepCopyAfterConflict(project, generation: current, notify: notifyConflict))
         } catch is CancellationError {
-            return
+            return .cancelled
         } catch {
-            guard generation.isCurrent(current) else { return }
             Logger.persistence.error("Не удалось сохранить проект: \(error.localizedDescription)")
-            status = .failed(UserFacingError.make(error, context: .project))
+            if generation.isCurrent(current) { status = .failed(UserFacingError.make(error, context: .project)) }
+            return .failed(error)
         }
     }
 
     /// Чужая правка остаётся на месте, версия окна — копией рядом; окно перечитывает проект.
-    private func keepCopyAfterConflict(_ project: Project, generation current: Int) async {
+    /// Возвращает имя копии; nil — сохранить её не вышло.
+    private func keepCopyAfterConflict(_ project: Project, generation current: Int, notify: Bool) async -> String? {
         let copy = Self.recoveryCopy(of: project)
         var copyName: String?
         do {
@@ -164,6 +205,7 @@ final class ProjectSaveCoordinator {
             Logger.persistence.error("Не удалось сохранить копию версии окна: \(error.localizedDescription)")
         }
         if generation.isCurrent(current) { status = .idle }
-        onExternalChange?(copyName)
+        if notify { onExternalChange?(copyName) }
+        return copyName
     }
 }

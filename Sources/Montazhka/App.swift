@@ -23,6 +23,7 @@ struct MontazhkaApp: App {
         Window("Монтажка", id: "main") {
             RootView()
                 .environment(app)
+                .onAppear { appDelegate.model = app }
                 .environment(ActivityCenter.shared)
                 .frame(minWidth: 1080, minHeight: 660)
                 .preferredColorScheme(.light)
@@ -73,6 +74,17 @@ struct MontazhkaApp: App {
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    weak var model: AppModel?
+
+    /// Выход ждёт записи открытого проекта; не записался — выход отменяется.
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard let model, model.editor != nil else { return .terminateNow }
+        Task { @MainActor in
+            sender.reply(toApplicationShouldTerminate: await model.closeForTermination())
+        }
+        return .terminateLater
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Всегда светлый интерфейс — как просил Александр.
         NSApp.appearance = NSAppearance(named: .aqua)
@@ -98,6 +110,9 @@ final class AppModel {
     var shorts: ShortsController?
     var recents: [ProjectMeta] = []
     var storeErrorMessage: UserFacingError?
+    /// Проект не записался при закрытии и остаётся открытым.
+    var closeFailure: UserFacingError?
+    @ObservationIgnored private var listingIssueMessage: UserFacingError?
     private(set) var isProjectOperationInProgress = false
     @ObservationIgnored private let recentsOperation = LatestOperation()
     private var projectOperationTask: Task<Void, Never>?
@@ -188,13 +203,16 @@ final class AppModel {
                 guard recentsOperation.isCurrent(token) else { return }
                 recents = listing.projects
                 if listing.issues.isEmpty {
-                    storeErrorMessage = nil
+                    // Убирается только прежняя ошибка списка: сообщение о закрытии проекта остаётся.
+                    if storeErrorMessage == listingIssueMessage { storeErrorMessage = nil }
+                    listingIssueMessage = nil
                 } else {
                     let count = listing.issues.count
                     let names = listing.issues.prefix(3).map(\.fileName).joined(separator: ", ")
-                    storeErrorMessage = UserFacingError(
+                    listingIssueMessage = UserFacingError(
                         "Не удалось открыть \(count) \(count == 1 ? "проект" : "проекта"): \(names).",
                         hint: "Остальные проекты доступны — эти файлы, похоже, повреждены.")
+                    storeErrorMessage = listingIssueMessage
                 }
                 if openLatestAfterLoad, editor == nil, let latest = recents.first {
                     openProject(id: latest.id)
@@ -255,17 +273,77 @@ final class AppModel {
         }
     }
 
+    /// Закрывается только записанный проект. Не записался — остаётся открытым с правками,
+    /// а `closeFailure` предлагает повторить, сохранить копию или закрыть без сохранения.
     func closeProject() {
         guard let closingEditor = editor else { return }
+        closeFailure = nil
         let generation = beginProjectOperation()
         projectOperationTask = Task { [weak self] in
             guard let self else { return }
-            await closingEditor.shutdown()
-            guard isCurrentProjectOperation(generation) else { return }
-            editor = nil
-            finishProjectOperation(generation)
-            refreshRecents()
+            do {
+                let outcome = try await closingEditor.close()
+                guard isCurrentProjectOperation(generation) else { return }
+                editor = nil
+                announce(outcome)
+                finishProjectOperation(generation)
+                refreshRecents()
+            } catch {
+                guard isCurrentProjectOperation(generation) else { return }
+                closeFailure = UserFacingError.make(error, context: .project)
+                finishProjectOperation(generation)
+            }
         }
+    }
+
+    /// Выход из приложения ждёт записи открытого проекта. false — записать не вышло:
+    /// выход отменяется, проект остаётся открытым, `closeFailure` объясняет почему.
+    func closeForTermination() async -> Bool {
+        guard let closingEditor = editor else { return true }
+        closeFailure = nil
+        do {
+            _ = try await closingEditor.close()
+            editor = nil
+            return true
+        } catch {
+            closeFailure = UserFacingError.make(error, context: .project)
+            return false
+        }
+    }
+
+    /// Явный выбор после неудачной записи: проект закрывается, несохранённые правки пропадают.
+    func closeWithoutSaving() async {
+        guard let closingEditor = editor else { return }
+        closeFailure = nil
+        closingEditor.discardPendingSave()
+        await closingEditor.stop()
+        editor = nil
+        refreshRecents()
+    }
+
+    /// Папка проектов не записывается — копия проекта ложится в файл, выбранный человеком,
+    /// и проект закрывается. Отказ от выбора файла оставляет проект открытым.
+    func saveCopyAndClose() async {
+        guard let closingEditor = editor else { return }
+        let panel = NSSavePanel()
+        panel.title = "Сохранить копию проекта"
+        panel.nameFieldStringValue = "\(closingEditor.project.id.uuidString).json"
+        panel.allowedContentTypes = [.json]
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            try ProjectStore.encoded(closingEditor.project).write(to: url, options: .atomic)
+            await closeWithoutSaving()
+        } catch {
+            closeFailure = UserFacingError.make(error, context: .project)
+        }
+    }
+
+    /// Версия окна не легла поверх правки агента — о копии надо сказать.
+    private func announce(_ outcome: ProjectSaveCoordinator.FlushOutcome) {
+        guard case .keptCopy(let name) = outcome else { return }
+        storeErrorMessage = UserFacingError(
+            "Пока проект был открыт, его изменил агент.",
+            hint: "Его правка осталась в проекте, а ваша версия сохранена копией «\(name)».")
     }
 
     // MARK: - Нарезка на shorts
@@ -393,6 +471,21 @@ struct RootView: View {
         } message: {
             Text(app.storeErrorMessage?.hint ?? "")
         }
+        .alert("Проект не сохранился", isPresented: closeFailureBinding, presenting: app.closeFailure) { _ in
+            Button("Повторить") { app.closeProject() }
+            Button("Сохранить копию в файл…") { Task { await app.saveCopyAndClose() } }
+            Button("Закрыть без сохранения", role: .destructive) { Task { await app.closeWithoutSaving() } }
+            Button("Не закрывать", role: .cancel) {}
+        } message: { failure in
+            Text("\(failure.message) Правки остались в открытом проекте.")
+        }
+    }
+
+    private var closeFailureBinding: Binding<Bool> {
+        Binding(
+            get: { app.closeFailure != nil },
+            set: { if !$0 { app.closeFailure = nil } }
+        )
     }
 
     private var storeErrorBinding: Binding<Bool> {
