@@ -212,10 +212,10 @@ final class AppModel {
             guard let self else { return }
             var project = Project(name: ProjectStore.defaultProjectName())
             do {
-                try await store.save(project)
+                let revision = try await store.save(project, expected: nil)
                 guard isCurrentProjectOperation(generation) else { return }
                 project.updatedAt = Date()
-                let controller = EditorController(project: project, store: store)
+                let controller = EditorController(project: project, revision: revision, store: store)
                 controller.addClips(urls: urls)
                 editor = controller
                 finishProjectOperation(generation)
@@ -230,9 +230,9 @@ final class AppModel {
         projectOperationTask = Task { [weak self] in
             guard let self else { return }
             do {
-                let project = try await store.load(id: id)
+                let loaded = try await store.loadWithRevision(id: id)
                 guard isCurrentProjectOperation(generation) else { return }
-                editor = EditorController(project: project, store: store)
+                editor = EditorController(project: loaded.project, revision: loaded.revision, store: store)
                 finishProjectOperation(generation)
             } catch {
                 failProjectOperation(generation, error: error, context: "Не удалось открыть проект")

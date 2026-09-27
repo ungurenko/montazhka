@@ -116,9 +116,23 @@ private final class ControlledProjectRepository: ProjectRepository, @unchecked S
         }
     }
 
+    func save(_ project: Project, expected: ProjectRevision?) async throws -> ProjectRevision {
+        try await save(project)
+        return ProjectRevision(digest: UUID().uuidString)
+    }
+
+    func loadWithRevision(id: UUID) async throws -> (project: Project, revision: ProjectRevision) {
+        (try await load(id: id), ProjectRevision(digest: id.uuidString))
+    }
+
     func delete(id: UUID) async throws {}
     func listProjects() async throws -> ProjectListing { ProjectListing(projects: [], issues: []) }
-    func saveBeforeTermination(_ project: Project) throws {}
+
+    func saveBeforeTermination(_ project: Project, expected: ProjectRevision?) throws -> ProjectRevision {
+        ProjectRevision(digest: UUID().uuidString)
+    }
+
+    func revision(of id: UUID) -> ProjectRevision? { nil }
 
     func completeLoad(_ project: Project) {
         let continuation: CheckedContinuation<Project, Error>? = lock.withLock {

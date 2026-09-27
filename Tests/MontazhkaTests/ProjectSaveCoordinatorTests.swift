@@ -157,9 +157,18 @@ private final class RepositoryMock: ProjectRepository, @unchecked Sendable {
         lock.withLock { saved.append(project) }
     }
 
+    func save(_ project: Project, expected: ProjectRevision?) async throws -> ProjectRevision {
+        try await save(project)
+        return ProjectRevision(digest: UUID().uuidString)
+    }
+
     func load(id: UUID) async throws -> Project {
         struct NotFound: Error {}
         throw NotFound()
+    }
+
+    func loadWithRevision(id: UUID) async throws -> (project: Project, revision: ProjectRevision) {
+        (try await load(id: id), ProjectRevision(digest: ""))
     }
 
     func delete(id: UUID) async throws {}
@@ -168,10 +177,13 @@ private final class RepositoryMock: ProjectRepository, @unchecked Sendable {
         ProjectListing(projects: [], issues: [])
     }
 
-    func saveBeforeTermination(_ project: Project) throws {
+    func saveBeforeTermination(_ project: Project, expected: ProjectRevision?) throws -> ProjectRevision {
         if let terminationError { throw terminationError }
         lock.lock()
         saved.append(project)
         lock.unlock()
+        return ProjectRevision(digest: UUID().uuidString)
     }
+
+    func revision(of id: UUID) -> ProjectRevision? { nil }
 }

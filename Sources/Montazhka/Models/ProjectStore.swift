@@ -1,3 +1,5 @@
+import CryptoKit
+import Darwin
 import Foundation
 
 /// Ассоциированное значение — техническая причина для лога.
@@ -10,6 +12,8 @@ enum ProjectStoreError: LocalizedError {
     case read(String)
     case decode(String)
     case delete(String)
+    /// Файл изменился с того чтения, от которого шла правка.
+    case conflict
 
     /// Системная причина живёт в ассоциированном значении и уходит в лог,
     /// а пользователю показывают только понятную половину.
@@ -21,6 +25,8 @@ enum ProjectStoreError: LocalizedError {
         case .read: return "Не получилось прочитать проект."
         case .decode: return "Файл проекта повреждён или создан более новой версией."
         case .delete: return "Не получилось удалить проект."
+        case .conflict:
+            return "Проект изменился, пока шла правка, — запись отменена, чтобы не затереть чужие изменения."
         }
     }
 
@@ -34,6 +40,8 @@ enum ProjectStoreError: LocalizedError {
             return "Попробуй открыть его ещё раз или выбери другой проект."
         case .delete:
             return "Попробуй ещё раз или удали файл проекта вручную."
+        case .conflict:
+            return "Перечитай проект и повтори правку."
         }
     }
 }
@@ -105,6 +113,33 @@ final class ProjectStore: ProjectRepository, Sendable {
     private func metaURL(for id: UUID) -> URL {
         projectsDir.appendingPathComponent("\(id.uuidString).meta.json")
     }
+
+    /// Не путать с `AgentProjectLock`: тот держится всю пачку правок агента,
+    /// этот — только сверку версии и запись файла.
+    private func saveLockURL(for id: UUID) -> URL {
+        projectsDir.appendingPathComponent("\(id.uuidString).save.lock")
+    }
+
+    /// Критическая секция записи файла проекта для всех процессов и экземпляров хранилища.
+    private func withSaveLock<T>(for id: UUID, _ body: () throws -> T) throws -> T {
+        let descriptor = Darwin.open(saveLockURL(for: id).path, O_CREAT | O_RDWR | O_CLOEXEC, S_IRUSR | S_IWUSR)
+        guard descriptor >= 0 else { throw ProjectStoreError.write("save lock: errno \(errno)") }
+        defer { Darwin.close(descriptor) }
+        while flock(descriptor, LOCK_EX) != 0 {
+            guard errno == EINTR else { throw ProjectStoreError.write("save lock: errno \(errno)") }
+        }
+        defer { flock(descriptor, LOCK_UN) }
+        return try body()
+    }
+
+    /// Версия файла на диске сейчас; nil — файла нет.
+    private func diskRevision(of id: UUID) throws -> ProjectRevision? {
+        let url = fileURL(for: id)
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        do { return ProjectRevision(data: try Data(contentsOf: url)) } catch {
+            throw ProjectStoreError.read(String(reflecting: error))
+        }
+    }
     private func prepareDirectories() throws {
         do {
             try FileManager.default.createDirectory(at: projectsDir, withIntermediateDirectories: true)
@@ -120,7 +155,8 @@ final class ProjectStore: ProjectRepository, Sendable {
         }
     }
 
-    private func saveOnQueue(_ project: Project) throws {
+    /// `expected`: nil — без сверки; `.some(nil)` — файла ещё нет; `.some(версия)` — ровно она.
+    private func saveOnQueue(_ project: Project, expected: ProjectRevision??) throws -> ProjectRevision {
         try prepareDirectories()
         var p = project
         p.schemaVersion = Project.currentSchemaVersion
@@ -130,10 +166,14 @@ final class ProjectStore: ProjectRepository, Sendable {
         encoder.dateEncodingStrategy = .iso8601
         let data: Data
         do { data = try encoder.encode(p) } catch { throw ProjectStoreError.encode(String(reflecting: error)) }
-        do { try data.write(to: fileURL(for: p.id), options: .atomic) } catch {
-            throw ProjectStoreError.write(String(reflecting: error))
+        return try withSaveLock(for: p.id) {
+            if let expected, try diskRevision(of: p.id) != expected { throw ProjectStoreError.conflict }
+            do { try data.write(to: fileURL(for: p.id), options: .atomic) } catch {
+                throw ProjectStoreError.write(String(reflecting: error))
+            }
+            writeSidecarMeta(for: p)
+            return ProjectRevision(data: data)
         }
-        writeSidecarMeta(for: p)
     }
 
     /// Инвариант «meta на диске = соответствует текущему проекту»:
@@ -156,33 +196,45 @@ final class ProjectStore: ProjectRepository, Sendable {
         }
     }
 
-    private func loadOnQueue(id: UUID) throws -> Project {
+    /// Файл пишется целиком атомарной заменой, поэтому чтение без блокировки видит
+    /// одну из целых версий — и её же отпечаток.
+    private func loadOnQueue(id: UUID) throws -> (project: Project, revision: ProjectRevision) {
         let data: Data
         do { data = try Data(contentsOf: fileURL(for: id)) } catch {
             throw ProjectStoreError.read(String(reflecting: error))
         }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
-        do { return try decoder.decode(Project.self, from: data) } catch {
+        do { return (try decoder.decode(Project.self, from: data), ProjectRevision(data: data)) } catch {
             throw ProjectStoreError.decode(String(reflecting: error))
         }
     }
 
     private func deleteOnQueue(id: UUID) throws {
-        do { try FileManager.default.trashItem(at: fileURL(for: id), resultingItemURL: nil) } catch {
-            throw ProjectStoreError.delete(String(reflecting: error))
+        try withSaveLock(for: id) {
+            do { try FileManager.default.trashItem(at: fileURL(for: id), resultingItemURL: nil) } catch {
+                throw ProjectStoreError.delete(String(reflecting: error))
+            }
+            // Метаданные карточки — best-effort: при отсутствии файла не мешаем удалению.
+            try? FileManager.default.trashItem(at: metaURL(for: id), resultingItemURL: nil)
         }
-        // Метаданные карточки — best-effort: при отсутствии файла не мешаем удалению.
-        try? FileManager.default.trashItem(at: metaURL(for: id), resultingItemURL: nil)
     }
 
     // MARK: - Последовательный интерфейс
 
     func save(_ project: Project) async throws {
-        try await perform { try self.saveOnQueue(project) }
+        _ = try await perform { try self.saveOnQueue(project, expected: nil) }
+    }
+
+    func save(_ project: Project, expected: ProjectRevision?) async throws -> ProjectRevision {
+        try await perform { try self.saveOnQueue(project, expected: .some(expected)) }
     }
 
     func load(id: UUID) async throws -> Project {
+        try await perform { try self.loadOnQueue(id: id).project }
+    }
+
+    func loadWithRevision(id: UUID) async throws -> (project: Project, revision: ProjectRevision) {
         try await perform { try self.loadOnQueue(id: id) }
     }
 
@@ -195,13 +247,12 @@ final class ProjectStore: ProjectRepository, Sendable {
         return try await perform { try Self.listProjects(in: directory) }
     }
 
-    func saveBeforeTermination(_ project: Project) throws {
-        try ioQueue.sync { try saveOnQueue(project) }
+    func saveBeforeTermination(_ project: Project, expected: ProjectRevision?) throws -> ProjectRevision {
+        try ioQueue.sync { try saveOnQueue(project, expected: .some(expected)) }
     }
 
-    func diskStamp(of id: UUID) -> Date? {
-        let attributes = try? FileManager.default.attributesOfItem(atPath: fileURL(for: id).path)
-        return attributes?[.modificationDate] as? Date
+    func revision(of id: UUID) -> ProjectRevision? {
+        try? diskRevision(of: id)
     }
 
     private func perform<T: Sendable>(_ operation: @escaping @Sendable () throws -> T) async throws -> T {
@@ -277,5 +328,11 @@ final class ProjectStore: ProjectRepository, Sendable {
 
     static func defaultProjectName() -> String {
         "Монтаж \(Date.now.formatted(.dateTime.day().month(.wide).locale(Locale(identifier: "ru_RU"))))"
+    }
+}
+
+extension ProjectRevision {
+    init(data: Data) {
+        digest = SHA256.hash(data: data).hex
     }
 }

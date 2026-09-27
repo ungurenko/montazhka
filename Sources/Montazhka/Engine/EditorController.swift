@@ -30,8 +30,9 @@ enum ProjectSaveStatus: Equatable {
 enum ExternalChangeNotice: Equatable {
     /// Агент изменил проект, в окне правок не ждало.
     case agentChanged
-    /// Агент изменил проект, пока правка окна ждала записи, — она не сохранилась.
-    case agentChangedDuringEdit
+    /// Агент изменил проект, пока правка окна ждала записи. Версия окна легла
+    /// проектом-копией `copyName`; nil — копию сохранить не вышло.
+    case agentChangedDuringEdit(copyName: String?)
 
     var title: String {
         switch self {
@@ -44,7 +45,9 @@ enum ExternalChangeNotice: Equatable {
         switch self {
         case .agentChanged:
             "Вернуть прежнюю версию можно кнопкой «Вернуть как было» или ⌘Z."
-        case .agentChangedDuringEdit:
+        case .agentChangedDuringEdit(let copyName?):
+            "Ваша версия сохранена копией «\(copyName)» в списке проектов. «Вернуть как было» вернёт её и здесь."
+        case .agentChangedDuringEdit(nil):
             "Ваша последняя правка не сохранилась. «Вернуть как было» вернёт вашу версию вместе с ней."
         }
     }
@@ -191,8 +194,11 @@ final class EditorController: ExportPreparing {
         return display
     }
 
+    /// `revision` — версия файла из того же чтения, что и `project`; nil — прочитать
+    /// версию сейчас (проект только что создан тестом или ещё не записан).
     init(
         project: Project,
+        revision: ProjectRevision? = nil,
         store: any ProjectRepository,
         openRouterKeyStore: any OpenRouterKeyStoring = OpenRouterKeyStore(),
         preferences: any PreferenceStoring = UserDefaultsPreferenceStore.standard,
@@ -233,6 +239,7 @@ final class EditorController: ExportPreparing {
 
         checkMissingFiles()
         attachObservers()
+        if let revision { saveCoordinator.adopt(revision) } else { saveCoordinator.adoptDiskRevision(for: project.id) }
         watchDiskChanges()
         rebuildAndSeek(to: 0)
         warmUpWaveforms()
@@ -1108,36 +1115,42 @@ final class EditorController: ExportPreparing {
 
     /// Агент правит проект из другого процесса. Окно раз в секунду сверяет
     /// версию файла и подхватывает чужую правку, а не затирает её своей записью.
+    /// Правка окна, ждущая записи, не выбрасывается: запись со сверкой версии получает
+    /// конфликт, версия окна ложится копией, и только потом проект перечитывается.
     private func watchDiskChanges() {
-        saveCoordinator.adoptDiskStamp(for: project.id)
-        saveCoordinator.onExternalChange = { [weak self] in
-            Task { await self?.reloadChangedProject(lostLocalEdit: true) }
+        saveCoordinator.onExternalChange = { [weak self] copyName in
+            Task { await self?.reloadChangedProject(lostLocalEdit: true, copyName: copyName) }
         }
         diskWatchTask = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(1))
                 guard let self else { return }
                 guard self.saveCoordinator.diskChangedElsewhere(for: self.project.id) else { continue }
-                await self.reloadChangedProject(lostLocalEdit: self.saveCoordinator.hasPendingSave)
+                if self.saveCoordinator.hasPendingSave {
+                    await self.saveCoordinator.saveNow(self.project)
+                } else {
+                    await self.reloadChangedProject(lostLocalEdit: false)
+                }
             }
         }
     }
 
     /// Перечитывает проект с диска. Прежняя версия окна уходит в историю,
-    /// поэтому «Отменить» возвращает её.
-    func reloadChangedProject(lostLocalEdit: Bool) async {
+    /// поэтому «Отменить» возвращает её. Содержимое и версия — из одного чтения.
+    func reloadChangedProject(lostLocalEdit: Bool, copyName: String? = nil) async {
         guard !isReloadingFromDisk else { return }
         isReloadingFromDisk = true
         defer { isReloadingFromDisk = false }
         saveCoordinator.cancelPending()
         let fresh: Project
         do {
-            fresh = try await repository.load(id: project.id)
+            let loaded = try await repository.loadWithRevision(id: project.id)
+            fresh = loaded.project
+            saveCoordinator.adopt(loaded.revision)
         } catch {
             Logger.persistence.error("Не удалось перечитать изменённый проект: \(error.localizedDescription)")
             return
         }
-        saveCoordinator.adoptDiskStamp(for: fresh.id)
         finishCoalescedEdit()
         projectEditor.recordCurrent()
         let edits: [ProjectEdit] = [
@@ -1149,7 +1162,7 @@ final class EditorController: ExportPreparing {
             projectEditor.apply(edit, recordHistory: false)
         }
         showProject(projectEditor.project)
-        externalChangeNotice = lostLocalEdit ? .agentChangedDuringEdit : .agentChanged
+        externalChangeNotice = lostLocalEdit ? .agentChangedDuringEdit(copyName: copyName) : .agentChanged
     }
 
     func dismissExternalChangeNotice() {

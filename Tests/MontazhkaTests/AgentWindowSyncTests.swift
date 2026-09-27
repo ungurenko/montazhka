@@ -23,9 +23,9 @@ struct AgentWindowSyncTests {
         try await windowStore.save(project)
 
         let coordinator = ProjectSaveCoordinator(repository: windowStore)
-        coordinator.adoptDiskStamp(for: project.id)
+        coordinator.adoptDiskRevision(for: project.id)
         var externalChanges = 0
-        coordinator.onExternalChange = { externalChanges += 1 }
+        coordinator.onExternalChange = { _ in externalChanges += 1 }
 
         var agentVersion = project
         agentVersion.clips = [Clip(sourcePath: "/tmp/a.mov", start: 0, end: 4)]
@@ -52,7 +52,7 @@ struct AgentWindowSyncTests {
         var project = Project(name: "своё")
         try await store.save(project)
         let coordinator = ProjectSaveCoordinator(repository: store)
-        coordinator.adoptDiskStamp(for: project.id)
+        coordinator.adoptDiskRevision(for: project.id)
 
         project.name = "своё 2"
         await coordinator.saveNow(project)

@@ -22,25 +22,34 @@ extension ProjectDirectories {
     var overlays: URL { base.appendingPathComponent("Overlays", isDirectory: true) }
 }
 
+/// Версия файла проекта — отпечаток его байтов. Одинакова у записи и у чтения тех же
+/// байтов, поэтому не зависит ни от часов, ни от отдельного `stat` после записи.
+struct ProjectRevision: Hashable, Sendable {
+    let digest: String
+}
+
 /// Единственная точка доступа к проектам. Все операции одного адаптера выполняются
-/// последовательно; чтение видит все ранее запрошенные записи.
+/// последовательно; чтение видит все ранее запрошенные записи. Запись и удаление
+/// файла проекта идут под общей межпроцессной блокировкой: окно, агент и другие
+/// экземпляры хранилища не пишут его одновременно.
 protocol ProjectRepository: Sendable {
     var directories: ProjectDirectories { get }
 
+    /// Безусловная запись: новый проект или копия, у которых чужих версий нет.
     func save(_ project: Project) async throws
+    /// Запись, только если на диске сейчас ровно `expected` (nil — файла ещё нет):
+    /// сверка и запись — одна критическая секция. Иначе `ProjectStoreError.conflict`.
+    /// Возвращает версию записанного файла.
+    func save(_ project: Project, expected: ProjectRevision?) async throws -> ProjectRevision
     func load(id: UUID) async throws -> Project
+    /// Содержимое и версия из одного и того же чтения.
+    func loadWithRevision(id: UUID) async throws -> (project: Project, revision: ProjectRevision)
     func delete(id: UUID) async throws
     func listProjects() async throws -> ProjectListing
 
-    /// Синхронный финальный снимок для системного завершения приложения.
-    func saveBeforeTermination(_ project: Project) throws
+    /// Синхронный финальный снимок для системного завершения приложения — с той же сверкой.
+    func saveBeforeTermination(_ project: Project, expected: ProjectRevision?) throws -> ProjectRevision
 
-    /// Отметка версии файла проекта на диске. Меняется при каждой записи —
-    /// и своей, и чужой (агент правит проект из другого процесса).
-    /// nil — файла ещё нет или хранилище не на диске.
-    func diskStamp(of id: UUID) -> Date?
-}
-
-extension ProjectRepository {
-    func diskStamp(of id: UUID) -> Date? { nil }
+    /// Версия файла проекта на диске сейчас. nil — файла ещё нет или хранилище не на диске.
+    func revision(of id: UUID) -> ProjectRevision?
 }

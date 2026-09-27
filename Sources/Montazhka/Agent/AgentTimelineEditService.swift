@@ -100,7 +100,9 @@ extension AgentService {
             guard !operations.isEmpty else { throw AgentServiceError.invalidInput("Список operations пуст.") }
             let lock = try AgentProjectLock(projectID: projectID, directory: store.projectsDir)
             defer { withExtendedLifetime(lock) {} }
-            var project = try await store.load(id: projectID)
+            // Версия из того же чтения: окно, записавшее проект после него, даст конфликт, а не потерю правки.
+            let loaded = try await store.loadWithRevision(id: projectID)
+            var project = loaded.project
             let original = project
 
             if operations.contains(where: \.isUndo) {
@@ -115,7 +117,7 @@ extension AgentService {
                 project.export = restored.export
                 project.overlays = restored.overlays
                 project.updatedAt = Date()
-                try await store.save(project)
+                _ = try await store.save(project, expected: loaded.revision)
                 await revisions.drop(projectID: projectID, steps: steps)
                 return try await editResponse(project, warnings: [])
             }
@@ -191,7 +193,7 @@ extension AgentService {
             project.clips = clips
             project.updatedAt = Date()
             do {
-                try await store.save(project)
+                _ = try await store.save(project, expected: loaded.revision)
             } catch {
                 await revisions.drop(projectID: projectID, steps: 1)
                 throw error

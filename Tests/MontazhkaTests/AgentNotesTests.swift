@@ -63,7 +63,7 @@ struct AgentNotesTests {
         let store = await fixture.service.store
         let projectFile = store.projectsDir.appendingPathComponent("\(fixture.project.id.uuidString).json")
         let bytesBefore = try Data(contentsOf: projectFile)
-        let stampBefore = store.diskStamp(of: fixture.project.id)
+        let stampBefore = store.revision(of: fixture.project.id)
 
         let response = await fixture.service.applyEdits(
             projectID: fixture.project.id, operations: [note("первая"), note("вторая")])
@@ -73,7 +73,7 @@ struct AgentNotesTests {
         #expect(response.data?["revision"] == .number(0))
         #expect(response.data?["clipCount"] == .number(1))
         #expect(try Data(contentsOf: projectFile) == bytesBefore)
-        #expect(store.diskStamp(of: fixture.project.id) == stampBefore)
+        #expect(store.revision(of: fixture.project.id) == stampBefore)
         #expect(await fixture.service.revisions.revision(of: fixture.project.id) == 0)
         let text = try #require(await notesText(fixture))
         #expect(text.contains("первая") && text.contains("вторая"))
