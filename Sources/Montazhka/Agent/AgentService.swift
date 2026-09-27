@@ -1,4 +1,5 @@
 import Foundation
+import UniformTypeIdentifiers
 
 enum AgentEditProfile: String, Codable, Sendable {
     case cleanSpeech = "clean-speech"
@@ -112,12 +113,65 @@ enum AgentRunMode: Sendable {
     case existing(UUID)
 }
 
+/// Страница текстового ресурса: читается только она — с позиции `offset`, не больше
+/// `limit` байт и нескольких байт на границу буквы UTF-8, сколько бы весил файл.
+/// Страница не начинается и не кончается посреди буквы. `read` — чтение из открытого
+/// файла (в тестах — со счётчиком прочитанного).
+enum AgentResourceReader {
+    typealias Read = (FileHandle, Int) throws -> Data
+
+    /// Самая длинная буква UTF-8 — 4 байта: хвост дочитывается не дальше.
+    private static let letterTail = 3
+
+    static func textPage(
+        at url: URL, offset: Int, limit: Int, read: Read = { try $0.read(upToCount: $1) ?? Data() }
+    ) throws -> (content: String, start: Int, end: Int, total: Int) {
+        let total = try byteCount(of: url)
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+        var start = min(max(0, offset), total)
+        let length = max(1, limit)
+        try handle.seek(toOffset: UInt64(start))
+        var window = try read(handle, min(total - start, length + letterTail))
+        // Начало посреди буквы — страница начинается со следующей.
+        let skipped = window.prefix(letterTail).prefix(while: isContinuation).count
+        start += skipped
+        window = window.dropFirst(skipped)
+        var end = min(total, start + length)
+        while end < min(total, start + window.count), isContinuation(window[window.startIndex + (end - start)]) {
+            end += 1
+        }
+        let bytes = window.prefix(end - start)
+        return (String(decoding: bytes, as: UTF8.self), start, start + bytes.count, total)
+    }
+
+    static func byteCount(of url: URL) throws -> Int {
+        (try FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.intValue ?? 0
+    }
+
+    /// Видео, звук и картинки — не текст: их отдают путём и размером.
+    static func mediaType(of url: URL) -> UTType? {
+        guard let type = UTType(filenameExtension: url.pathExtension),
+            type.conforms(to: .audiovisualContent) || type.conforms(to: .image)
+        else { return nil }
+        return type
+    }
+
+    private static func isContinuation(_ byte: UInt8) -> Bool {
+        byte & 0b1100_0000 == 0b1000_0000
+    }
+}
+
 private struct AgentResourcePage: Encodable {
     let uri: String
+    /// "text" — страница текста в `content`; "media" — файл по `path`, текстом не читается.
+    let kind: String
     let offset: Int
     let totalBytes: Int
-    let content: String
-    let nextUri: String?
+    var content: String?
+    var nextUri: String?
+    var mimeType: String?
+    var path: String?
 }
 
 /// Запуск фоновой задачи отдельным процессом; тесты подменяют его, чтобы не запускать расшифровку.
@@ -327,16 +381,22 @@ actor AgentService {
         let query = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
         let requestedOffset = offset ?? query.firstValue(named: "offset").flatMap(Int.init) ?? 0
         let requestedLimit = limit ?? query.firstValue(named: "limit").flatMap(Int.init) ?? 32_000
-        let data = try Data(contentsOf: URL(fileURLWithPath: path))
-        var start = min(max(0, requestedOffset), data.count)
-        while start < data.count, Self.isUTF8Continuation(data[start]) { start += 1 }
-        var end = min(data.count, start + min(64_000, max(1, requestedLimit)))
-        while end < data.count, Self.isUTF8Continuation(data[end]) { end += 1 }
-        let nextURI =
-            end < data.count ? "montazhka://runs/\(id.uuidString)/\(name)?offset=\(end)&limit=\(requestedLimit)" : nil
-        let page = AgentResourcePage(
-            uri: uri, offset: start, totalBytes: data.count,
-            content: String(decoding: data[start..<end], as: UTF8.self), nextUri: nextURI)
+        let file = URL(fileURLWithPath: path)
+        let page: AgentResourcePage
+        if let media = AgentResourceReader.mediaType(of: file) {
+            page = AgentResourcePage(
+                uri: uri, kind: "media", offset: 0, totalBytes: try AgentResourceReader.byteCount(of: file),
+                mimeType: media.preferredMIMEType, path: path)
+        } else {
+            let text = try AgentResourceReader.textPage(
+                at: file, offset: requestedOffset, limit: min(64_000, max(1, requestedLimit)))
+            let nextURI =
+                text.end < text.total
+                ? "montazhka://runs/\(id.uuidString)/\(name)?offset=\(text.end)&limit=\(requestedLimit)" : nil
+            page = AgentResourcePage(
+                uri: uri, kind: "text", offset: text.start, totalBytes: text.total, content: text.content,
+                nextUri: nextURI)
+        }
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         return String(decoding: try encoder.encode(page), as: UTF8.self)
@@ -397,10 +457,6 @@ actor AgentService {
         #else
             "x86_64"
         #endif
-    }
-
-    private static func isUTF8Continuation(_ byte: UInt8) -> Bool {
-        byte & 0b1100_0000 == 0b1000_0000
     }
 }
 
