@@ -61,6 +61,8 @@ struct TimelineView: View {
 
     private let clipHeight: CGFloat = 92
     private let rulerHeight: CGFloat = 20
+    /// Зазор между линейкой, полосой анимаций и клипами.
+    private let laneSpacing: CGFloat = 4
     private let timelineInset: CGFloat = 12
 
     private var pps: CGFloat { controller.pixelsPerSecond }
@@ -193,8 +195,11 @@ struct TimelineView: View {
 
     private func timelineContent(layout: TimelineLayout) -> some View {
         let width = totalWidth(for: layout.duration)
+        // Без анимаций полосы нет совсем — лента у обычного проекта не сдвигается.
+        let showsOverlayLane = !controller.project.overlays.isEmpty
+        let laneSpace = showsOverlayLane ? TimelineOverlayLane.height + laneSpacing : 0
 
-        return VStack(alignment: .leading, spacing: 4) {
+        return VStack(alignment: .leading, spacing: laneSpacing) {
             RulerView(duration: layout.duration, pps: pps)
                 .frame(width: width, height: rulerHeight)
                 .contentShape(Rectangle())
@@ -212,6 +217,15 @@ struct TimelineView: View {
                         break
                     }
                 }
+
+            if showsOverlayLane {
+                TimelineOverlayLane(
+                    overlays: OverlayTimeline.resolve(controller.project.overlays, clips: controller.project.clips),
+                    pps: pps,
+                    width: width,
+                    onSeek: { controller.seek(to: $0) },
+                    onRemove: { controller.removeOverlay(id: $0) })
+            }
 
             ZStack(alignment: .topLeading) {
                 if layout.items.isEmpty {
@@ -275,7 +289,7 @@ struct TimelineView: View {
             TimelinePlayhead(
                 controller: controller,
                 pps: pps,
-                height: rulerHeight + 4 + clipHeight)
+                height: rulerHeight + laneSpacing + laneSpace + clipHeight)
         }
     }
 

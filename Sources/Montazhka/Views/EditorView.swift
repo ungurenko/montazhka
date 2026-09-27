@@ -266,6 +266,9 @@ struct EditorView: View {
                 .buttonStyle(.plain)
                 .accessibilityLabel(controller.isPlaying ? "Поставить видео на паузу" : "Воспроизвести видео")
                 .accessibilityIdentifier("editor.player")
+                if showsSubtitlePreview {
+                    EditorSubtitlePreview(controller: controller)
+                }
             }
             playerStatusOverlay
         }
@@ -274,6 +277,13 @@ struct EditorView: View {
         .onDrop(of: [.fileURL], isTargeted: nil) { providers in
             handleDrop(providers)
         }
+    }
+
+    /// Субтитры, которые впечатаются в файл, видны уже в просмотре. У черновика
+    /// шортса свои вертикальные субтитры — горизонтальные поверх них не нужны.
+    private var showsSubtitlePreview: Bool {
+        controller.project.shorts == nil && controller.project.export.burnSubtitles
+            && !controller.previewSubtitleCues.isEmpty
     }
 
     @ViewBuilder
@@ -368,6 +378,46 @@ struct EditorView: View {
         return true
     }
 
+}
+
+// MARK: - Субтитры в просмотре
+
+/// Фраза, звучащая сейчас, поверх плеера — так же, как у шортсов. Частые
+/// обновления позиции плеера перерисовывают только этот слой.
+struct EditorSubtitlePreview: View {
+    var controller: EditorController
+    /// То же оформление, с которым субтитры впечатываются в файл.
+    @State private var settings = ShortsSubtitleSettings.saved()
+    @State private var frameSize: CGSize?
+
+    var body: some View {
+        Color.clear
+            .overlay {
+                if let subtitle = Self.overlay(
+                    at: controller.currentTime,
+                    cues: controller.previewSubtitleCues,
+                    appearance: settings.appearance,
+                    highlight: settings.highlightActiveWord)
+                {
+                    ShortsSubtitleOverlayView(subtitle: subtitle, frameSize: frameSize)
+                }
+            }
+            .allowsHitTesting(false)
+            // Кадр просмотра собирается по первому клипу — по нему и раскладка текста.
+            .task(id: controller.project.clips.first?.source.id) {
+                frameSize = await controller.sourceDisplaySize()
+            }
+    }
+
+    /// Фраза под моментом `time`: начало входит, конец — уже нет.
+    nonisolated static func overlay(
+        at time: Double, cues: [ShortsSubtitleCue], appearance: ShortsSubtitleAppearance, highlight: Bool
+    ) -> ShortsSubtitleOverlay? {
+        guard let cue = cues.first(where: { time >= $0.start && time < $0.end }) else { return nil }
+        return ShortsSubtitleOverlay(
+            words: cue.words.map(\.text), appearance: appearance,
+            activeWordIndex: highlight ? cue.activeWordIndex(at: time) : nil)
+    }
 }
 
 // MARK: - Нижняя панель управления

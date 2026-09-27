@@ -69,6 +69,7 @@ struct ExportModelTests {
 
         #expect(model.state == .idle)
         #expect(model.progress == 0)
+        #expect(model.stageCaption == nil)
     }
 
     @Test
@@ -111,6 +112,36 @@ struct ExportModelTests {
             return
         }
         #expect(message.message.contains("Проверочная ошибка"))
+        #expect(model.stageCaption == nil)
+    }
+
+    @Test
+    func stageCaptionFollowsPreparationAndExportPasses() async throws {
+        let preparer = SteppingExportPreparer()
+        let exporter = StagedVideoExporter()
+        let model = ExportModel(videoExporter: exporter)
+        #expect(model.stageCaption == nil)
+
+        #expect(
+            model.start(
+                preparer: preparer,
+                quality: .high,
+                to: URL(fileURLWithPath: "/tmp/montazhka-caption.mp4")
+            ))
+        #expect(model.stageCaption == "Собираю дорожки и обрабатываю звук")
+        try await waitUntil { model.stageCaption == "Распознаю речь" }
+
+        preparer.finish()
+        try await waitUntil { model.stageCaption == "Замеряю громкость" }
+        exporter.announce(.writing)
+        try await waitUntil { model.stageCaption == "Записываю файл" }
+
+        exporter.complete()
+        try await waitUntil {
+            if case .done = model.state { return true }
+            return false
+        }
+        #expect(model.stageCaption == nil)
     }
 
     private func waitUntil(
@@ -162,6 +193,51 @@ private final class ControlledVideoExporter: VideoExporting {
         progress(0.5)
         try await withCheckedThrowingContinuation { continuation = $0 }
         return Self.report
+    }
+
+    func complete() {
+        continuation?.resume()
+        continuation = nil
+    }
+}
+
+/// Сообщает о распознавании речи и ждёт, пока тест его отпустит.
+@MainActor
+private final class SteppingExportPreparer: ExportPreparing {
+    private var continuation: CheckedContinuation<Void, Never>?
+
+    func prepareExport(step: @escaping @Sendable (ExportPreparationStep) -> Void) async throws -> PreparedExport {
+        step(.transcribing(0.4))
+        await withCheckedContinuation { continuation = $0 }
+        return PreparedExport(composition: AVMutableComposition(), audioMix: nil, warning: nil)
+    }
+
+    func finish() {
+        continuation?.resume()
+        continuation = nil
+    }
+}
+
+/// Проходы записи объявляет тест.
+@MainActor
+private final class StagedVideoExporter: VideoExporting {
+    private var continuation: CheckedContinuation<Void, Error>?
+    private var stage: (@Sendable (FinalExportStage) -> Void)?
+
+    func export(
+        _ prepared: PreparedExport,
+        quality: ExportQuality,
+        to url: URL,
+        progress: @escaping @Sendable (Double) -> Void,
+        stage: @escaping @Sendable (FinalExportStage) -> Void
+    ) async throws -> FinalExportReport {
+        self.stage = stage
+        try await withCheckedThrowingContinuation { continuation = $0 }
+        return ControlledVideoExporter.report
+    }
+
+    func announce(_ value: FinalExportStage) {
+        stage?(value)
     }
 
     func complete() {

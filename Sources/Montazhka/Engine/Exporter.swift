@@ -206,6 +206,9 @@ final class ExportModel {
     private(set) var audioWarning: String?
     /// Какой проход записи идёт сейчас.
     private(set) var exportStage: FinalExportStage = .writing
+    /// Что делается прямо сейчас: та же подпись, что в полосе активности и Доке.
+    /// nil — экспорт не идёт.
+    private(set) var stageCaption: String?
 
     @ObservationIgnored private let videoExporter: any VideoExporting
     @ObservationIgnored private let activity: ActivityCenter
@@ -227,22 +230,30 @@ final class ExportModel {
         if let progress { self.progress = progress }
         switch new {
         case .preparing:
-            activity.apply(.export, snapshot: ExportPreparationStep.assembling.activitySnapshot)
+            apply(ExportPreparationStep.assembling.activitySnapshot)
         case .exporting:
             applyExportSnapshot()
         case .done:
+            stageCaption = nil
             activity.finish(.export, outcome: .success("Видео сохранено"))
         case .failed(let message):
+            stageCaption = nil
             activity.finish(.export, outcome: .failure(message))
         case .idle:
+            stageCaption = nil
             activity.finish(.export, outcome: .cancelled)
         }
     }
 
+    /// Подпись окна и центр активности меняются вместе — расходиться им не с чего.
+    private func apply(_ snapshot: ActivitySnapshot) {
+        stageCaption = snapshot.caption
+        activity.apply(.export, snapshot: snapshot)
+    }
+
     private func applyExportSnapshot() {
-        activity.apply(
-            .export,
-            snapshot: ActivitySnapshot(
+        apply(
+            ActivitySnapshot(
                 stageIndex: exportStage.activityStageIndex,
                 caption: exportStage.caption,
                 progress: .fraction(progress)))
@@ -277,7 +288,7 @@ final class ExportModel {
         let onStep: @Sendable (ExportPreparationStep) -> Void = { [weak self] step in
             Task { @MainActor in
                 guard let self, self.operationGeneration.isCurrent(generation), self.state == .preparing else { return }
-                self.activity.apply(.export, snapshot: step.activitySnapshot)
+                self.apply(step.activitySnapshot)
             }
         }
         let onStage: @Sendable (FinalExportStage) -> Void = { [weak self] stage in
