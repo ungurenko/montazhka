@@ -7,6 +7,8 @@ public enum ProjectEdit: Equatable, Sendable {
     case updateVoice(VoiceEnhanceSettings)
     case updateMusic(MusicSettings)
     case updateShorts(ShortsPresentation?)
+    case updateExport(ExportPreferences)
+    case updateOverlays([ProjectOverlay])
     case relink(sourceID: UUID, to: MediaReference)
 
     fileprivate func apply(to project: inout Project) {
@@ -23,6 +25,10 @@ public enum ProjectEdit: Equatable, Sendable {
             project.music = settings
         case .updateShorts(let shorts):
             project.shorts = shorts
+        case .updateExport(let preferences):
+            project.export = preferences
+        case .updateOverlays(let overlays):
+            project.overlays = overlays
         case .relink(let sourceID, let replacement):
             for index in project.clips.indices where project.clips[index].source.id == sourceID {
                 project.clips[index].source = replacement

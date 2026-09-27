@@ -17,7 +17,7 @@ struct ExportSheet: View {
                 preparingView
             case .exporting:
                 progressView
-            case .done(let url):
+            case .done(let url, _):
                 doneView(url)
             case .failed(let message):
                 failedView(message)

@@ -98,6 +98,8 @@ extension AgentService {
                 project.clips = restored.clips
                 project.shorts = restored.shorts
                 project.music = restored.music
+                project.export = restored.export
+                project.overlays = restored.overlays
                 project.updatedAt = Date()
                 try await store.save(project)
                 await revisions.drop(projectID: projectID, steps: steps)

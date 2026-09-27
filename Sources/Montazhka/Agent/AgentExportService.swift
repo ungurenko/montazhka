@@ -2,9 +2,11 @@
 import Foundation
 
 extension AgentService {
+    /// `normalizeLoudness`, `burnSubtitles`: nil — как в `project.export`.
     func export(
         projectID: UUID, outputPath: String?, quality: String,
         final: Bool, confirmFinal: Bool, overwrite: Bool,
+        normalizeLoudness: Bool? = nil, burnSubtitles: Bool? = nil,
         runMode: AgentRunMode = .standalone
     ) async -> AgentResponse {
         var activeRunID: UUID?
@@ -35,18 +37,24 @@ extension AgentService {
             let progress: @Sendable (Double) -> Void = { progress in
                 Task { try? await self.runs.update(id: run.id) { $0.progress = max($0.progress, progress) } }
             }
+            let normalize = normalizeLoudness ?? project.export.normalizeLoudness
+            let fingerprint = AgentWordCuts.fingerprint(project.clips)
+            let job: FinalExportJob
             if project.shorts != nil {
                 let plan = try await shortsPlan(project, quality: exportQuality)
-                try await ShortsRenderer.export(plan, quality: exportQuality, to: destination, progress: progress)
+                job = plan.exportJob(
+                    quality: exportQuality, normalizeLoudness: normalize, timelineFingerprint: fingerprint)
             } else {
                 let voice = VoiceEnhanceStore(cacheDir: store.enhancedAudioDir)
                 let music = MusicEQStore(cacheDir: store.musicEQDir)
                 let rendered = await MediaPipeline(voiceStore: voice, musicEQStore: music).render(
                     MediaRenderRequest(project: project, mode: .export, readyEnhancedAudio: [:]))
-                let input = ExportInput(composition: rendered.composition, audioMix: rendered.audioMix)
-                let settings = try await Transcoder.settings(for: exportQuality, input: input)
-                try await Transcoder.export(input: input, settings: settings, to: destination, progress: progress)
+                job = FinalExportJob(
+                    input: ExportInput(composition: rendered.composition, audioMix: rendered.audioMix),
+                    quality: exportQuality, sizing: .quality(exportQuality), subtitleCues: nil,
+                    subtitlesSkippedReason: nil, normalizeLoudness: normalize, timelineFingerprint: fingerprint)
             }
+            _ = try await FinalExport.run(job, to: destination, progress: progress)
             let actual = try await AVURLAsset(url: destination).load(.duration).seconds
             let matches = abs(actual - project.totalDuration) <= 0.25
             try await runs.update(id: run.id) {

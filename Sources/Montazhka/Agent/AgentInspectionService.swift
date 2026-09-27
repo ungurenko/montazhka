@@ -308,6 +308,13 @@ extension AgentService {
         }
     }
 
+    /// Фоновая часть расшифровки любого файла. Пока не готова.
+    func transcribeFile(path: String, runMode: AgentRunMode) async -> AgentResponse {
+        .failure(
+            command: "transcribe", code: "NOT_IMPLEMENTED",
+            message: "Расшифровка отдельного файла ещё не реализована: \(path)")
+    }
+
     func uniqueSources(_ clips: [Clip]) -> [MediaReference] {
         var seen = Set<UUID>()
         return clips.compactMap { seen.insert($0.source.id).inserted ? $0.source : nil }

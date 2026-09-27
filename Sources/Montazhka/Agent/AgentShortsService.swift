@@ -64,7 +64,10 @@ extension AgentService {
                     request: request, faces: faces)
                 let plan = try await shortsPlan(draft, quality: quality)
                 let output = URL(fileURLWithPath: draft.shorts?.exportPath ?? "")
-                try await ShortsRenderer.export(plan, quality: quality, to: output) { _ in }
+                let job = plan.exportJob(
+                    quality: quality, normalizeLoudness: draft.export.normalizeLoudness,
+                    timelineFingerprint: AgentWordCuts.fingerprint(draft.clips))
+                _ = try await FinalExport.run(job, to: output) { _ in }
                 results.append(
                     .object([
                         "projectId": .string(draft.id.uuidString), "title": .string(spec.title),

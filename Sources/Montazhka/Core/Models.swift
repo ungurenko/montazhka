@@ -217,6 +217,27 @@ public struct MusicSettings: Codable, Equatable, Sendable {
     }
 }
 
+/// Как проект выгружается в MP4.
+public struct ExportPreferences: Codable, Equatable, Sendable {
+    /// Громкость по стандарту площадок.
+    public var normalizeLoudness: Bool = true
+    /// Субтитры впечатаны в кадр.
+    public var burnSubtitles: Bool = false
+
+    public init(normalizeLoudness: Bool = true, burnSubtitles: Bool = false) {
+        self.normalizeLoudness = normalizeLoudness
+        self.burnSubtitles = burnSubtitles
+    }
+
+    private enum CodingKeys: String, CodingKey { case normalizeLoudness, burnSubtitles }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        normalizeLoudness = try c.decodeIfPresent(Bool.self, forKey: .normalizeLoudness) ?? true
+        burnSubtitles = try c.decodeIfPresent(Bool.self, forKey: .burnSubtitles) ?? false
+    }
+}
+
 public struct Project: Identifiable, Codable, Equatable, Sendable {
     public static let currentSchemaVersion = 2
 
@@ -229,6 +250,9 @@ public struct Project: Identifiable, Codable, Equatable, Sendable {
     public var detection: DetectionSettings
     public var voiceEnhance: VoiceEnhanceSettings
     public var music: MusicSettings
+    public var export: ExportPreferences
+    /// Анимации поверх видео.
+    var overlays: [ProjectOverlay]
     /// Оформление черновика шортса; nil — обычный проект.
     var shorts: ShortsPresentation?
     public var totalDuration: Double { clips.reduce(0) { $0 + $1.duration } }
@@ -238,7 +262,9 @@ public struct Project: Identifiable, Codable, Equatable, Sendable {
         name: String, clips: [Clip] = [], createdAt: Date = Date(),
         updatedAt: Date = Date(), detection: DetectionSettings = DetectionSettings(),
         voiceEnhance: VoiceEnhanceSettings = VoiceEnhanceSettings(),
-        music: MusicSettings = MusicSettings()
+        music: MusicSettings = MusicSettings(),
+        export: ExportPreferences = ExportPreferences(),
+        overlays: [ProjectOverlay] = []
     ) {
         self.id = id
         self.schemaVersion = schemaVersion
@@ -249,10 +275,13 @@ public struct Project: Identifiable, Codable, Equatable, Sendable {
         self.detection = detection
         self.voiceEnhance = voiceEnhance
         self.music = music
+        self.export = export
+        self.overlays = overlays
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, schemaVersion, name, clips, createdAt, updatedAt, detection, voiceEnhance, music, shorts
+        case id, schemaVersion, name, clips, createdAt, updatedAt, detection, voiceEnhance, music, export, overlays
+        case shorts
     }
 
     public init(from decoder: Decoder) throws {
@@ -286,6 +315,8 @@ public struct Project: Identifiable, Codable, Equatable, Sendable {
         detection = try c.decodeIfPresent(DetectionSettings.self, forKey: .detection) ?? DetectionSettings()
         voiceEnhance = try c.decodeIfPresent(VoiceEnhanceSettings.self, forKey: .voiceEnhance) ?? VoiceEnhanceSettings()
         music = try c.decodeIfPresent(MusicSettings.self, forKey: .music) ?? MusicSettings()
+        export = try c.decodeIfPresent(ExportPreferences.self, forKey: .export) ?? ExportPreferences()
+        overlays = try c.decodeIfPresent([ProjectOverlay].self, forKey: .overlays) ?? []
         shorts = try c.decodeIfPresent(ShortsPresentation.self, forKey: .shorts)
     }
 }

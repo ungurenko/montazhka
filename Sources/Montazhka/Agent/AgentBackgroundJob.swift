@@ -3,8 +3,12 @@ import Foundation
 enum AgentWorkerRequest: Codable, Sendable {
     case edit(AgentEditRequest)
     case shorts(AgentShortsRequest)
-    case export(projectID: UUID, outputPath: String?, quality: String, final: Bool, confirmFinal: Bool, overwrite: Bool)
+    case export(
+        projectID: UUID, outputPath: String?, quality: String, final: Bool, confirmFinal: Bool, overwrite: Bool,
+        normalizeLoudness: Bool?, burnSubtitles: Bool?)
     case transcribe(projectID: UUID)
+    /// Расшифровка любого файла, не проекта.
+    case transcribeFile(path: String)
 }
 
 enum AgentBackgroundJob {
@@ -21,6 +25,7 @@ enum AgentBackgroundJob {
         case .shorts: kind = .makeShorts; sources = []
         case .export: kind = .export; sources = []
         case .transcribe: kind = .transcribe; sources = []
+        case .transcribeFile(let path): kind = .transcribe; sources = [path]
         }
         let run = try await store.create(kind: kind, sourcePaths: sources)
         let directory = try await store.artifactDirectory(id: run.id)
@@ -65,13 +70,16 @@ enum AgentBackgroundJob {
             case .edit(let edit): result = await service.edit(edit, runMode: .existing(jobID))
             case .shorts(let request):
                 result = await service.makeShorts(request, runMode: .existing(jobID))
-            case .export(let id, let path, let quality, let final, let confirm, let overwrite):
+            case .export(let id, let path, let quality, let final, let confirm, let overwrite, let loudness, let burn):
                 result = await service.export(
                     projectID: id, outputPath: path, quality: quality,
                     final: final, confirmFinal: confirm, overwrite: overwrite,
+                    normalizeLoudness: loudness, burnSubtitles: burn,
                     runMode: .existing(jobID))
             case .transcribe(let id):
                 result = await service.transcribe(projectID: id, runMode: .existing(jobID))
+            case .transcribeFile(let path):
+                result = await service.transcribeFile(path: path, runMode: .existing(jobID))
             }
             let directory = try await store.artifactDirectory(id: jobID)
             let resultURL = directory.appendingPathComponent("result.json")

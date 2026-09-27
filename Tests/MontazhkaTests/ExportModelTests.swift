@@ -50,7 +50,7 @@ struct ExportModelTests {
         #expect(model.audioWarning == "Тестовое предупреждение")
 
         exporter.complete()
-        try await waitUntil { model.state == .done(destination) }
+        try await waitUntil { model.state == .done(destination, ControlledVideoExporter.report) }
         #expect(model.progress == 1)
     }
 
@@ -147,6 +147,9 @@ private struct SlowExportPreparer: ExportPreparing {
 
 @MainActor
 private final class ControlledVideoExporter: VideoExporting {
+    static let report = FinalExportReport(
+        loudness: nil, normalized: false, gainDB: 0, targetMet: nil, subtitlesURL: nil,
+        subtitlesSkippedReason: "нет расшифровки", warnings: [])
     private var continuation: CheckedContinuation<Void, Error>?
 
     func export(
@@ -154,9 +157,10 @@ private final class ControlledVideoExporter: VideoExporting {
         quality: ExportQuality,
         to url: URL,
         progress: @escaping @Sendable (Double) -> Void
-    ) async throws {
+    ) async throws -> FinalExportReport {
         progress(0.5)
         try await withCheckedThrowingContinuation { continuation = $0 }
+        return Self.report
     }
 
     func complete() {
@@ -176,7 +180,7 @@ private struct FailingVideoExporter: VideoExporting {
         quality: ExportQuality,
         to url: URL,
         progress: @escaping @Sendable (Double) -> Void
-    ) async throws {
+    ) async throws -> FinalExportReport {
         throw Failure()
     }
 }

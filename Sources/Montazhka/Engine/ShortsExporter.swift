@@ -29,14 +29,18 @@ enum ShortsExporter {
             dimensions: dimensions,
             videoBitrate: quality.videoBitrate(forDimensions: dimensions),
             audioBitrate: quality.audioBitrate)
-        try await Transcoder.exportWithOfflineComposition(
+        let job = FinalExportJob(
             input: ExportInput(
                 composition: built.composition,
                 audioMix: built.audioMix,
                 videoComposition: plan.videoComposition),
-            settings: settings,
-            to: url,
-            progress: progress)
+            quality: quality,
+            sizing: .settings(settings),
+            subtitleCues: nil,
+            subtitlesSkippedReason: nil,
+            normalizeLoudness: ExportPreferences().normalizeLoudness,
+            timelineFingerprint: nil)
+        _ = try await FinalExport.run(job, to: url, progress: progress)
     }
 
     /// Куски исходника, из которых собирается ролик. Вырезанные паузы просто

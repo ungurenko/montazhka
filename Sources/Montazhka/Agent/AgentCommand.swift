@@ -313,7 +313,8 @@ private struct AgentMCPServer {
                         quality: arguments["quality"]?.stringValue ?? "compact",
                         final: arguments["final"]?.boolValue ?? false,
                         confirmFinal: arguments["confirmFinal"]?.boolValue ?? false,
-                        overwrite: arguments["overwrite"]?.boolValue ?? false))
+                        overwrite: arguments["overwrite"]?.boolValue ?? false,
+                        normalizeLoudness: nil, burnSubtitles: nil))
             } catch {
                 return .failure(command: "export", code: "JOB_START_FAILED", message: error.localizedDescription)
             }

@@ -129,7 +129,7 @@ struct ShortsWindowExportTests {
             composition: plan.composition, audioMix: plan.audioMix, warning: nil,
             videoComposition: plan.exportComposition)
         let output = root.appendingPathComponent("out.mp4")
-        try await TranscodingVideoExporter().export(prepared, quality: .compact, to: output, progress: { _ in })
+        _ = try await TranscodingVideoExporter().export(prepared, quality: .compact, to: output, progress: { _ in })
         let track = try #require(try await AVURLAsset(url: output).loadTracks(withMediaType: .video).first)
         let size = try await track.load(.naturalSize)
         #expect(size.height > size.width)

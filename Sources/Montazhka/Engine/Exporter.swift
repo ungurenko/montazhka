@@ -101,6 +101,9 @@ enum ExportQuality: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
+/// Откуда берётся размер кадра готового файла.
+enum PreparedSizing { case composition, quality }
+
 /// Сохранение готового видео в MP4 с прогрессом.
 struct PreparedExport {
     let composition: AVComposition
@@ -108,6 +111,12 @@ struct PreparedExport {
     let warning: String?
     /// Своя картинка кадра (черновик шортса: вертикаль, надписи). nil — как есть.
     var videoComposition: AVVideoComposition? = nil
+    var subtitleCues: [ShortsSubtitleCue]? = nil
+    var subtitlesSkippedReason: String? = nil
+    var normalizeLoudness: Bool = true
+    var timelineFingerprint: String? = nil
+    /// Черновик шортса — размер задаёт композиция; обычный проект — качество.
+    var sizing: PreparedSizing = .composition
 }
 
 @MainActor
@@ -122,7 +131,7 @@ protocol VideoExporting {
         quality: ExportQuality,
         to url: URL,
         progress: @escaping @Sendable (Double) -> Void
-    ) async throws
+    ) async throws -> FinalExportReport
 }
 
 @MainActor
@@ -132,23 +141,18 @@ struct TranscodingVideoExporter: VideoExporting {
         quality: ExportQuality,
         to url: URL,
         progress: @escaping @Sendable (Double) -> Void
-    ) async throws {
-        if let videoComposition = prepared.videoComposition {
-            try await Transcoder.export(
-                composed: ExportInput(
-                    composition: prepared.composition, audioMix: prepared.audioMix,
-                    videoComposition: videoComposition),
-                quality: quality, to: url, progress: progress)
-            return
-        }
-        let input = ExportInput(composition: prepared.composition, audioMix: prepared.audioMix)
-        let settings = try await Transcoder.settings(for: quality, input: input)
-        try await Transcoder.export(
-            input: input,
-            settings: settings,
-            to: url,
-            progress: progress
-        )
+    ) async throws -> FinalExportReport {
+        let job = FinalExportJob(
+            input: ExportInput(
+                composition: prepared.composition, audioMix: prepared.audioMix,
+                videoComposition: prepared.videoComposition),
+            quality: quality,
+            sizing: prepared.sizing == .composition ? .composition : .quality(quality),
+            subtitleCues: prepared.subtitleCues,
+            subtitlesSkippedReason: prepared.subtitlesSkippedReason,
+            normalizeLoudness: prepared.normalizeLoudness,
+            timelineFingerprint: prepared.timelineFingerprint)
+        return try await FinalExport.run(job, to: url, progress: progress)
     }
 }
 
@@ -159,7 +163,7 @@ final class ExportModel {
         case idle
         case preparing
         case exporting
-        case done(URL)
+        case done(URL, FinalExportReport)
         case failed(UserFacingError)
     }
 
@@ -258,7 +262,7 @@ final class ExportModel {
                 guard self.operationGeneration.isCurrent(generation) else { return }
                 self.audioWarning = prepared.warning
                 self.setState(.exporting)
-                try await self.videoExporter.export(
+                let report = try await self.videoExporter.export(
                     prepared,
                     quality: quality,
                     to: url,
@@ -266,7 +270,7 @@ final class ExportModel {
                 )
                 try Task.checkCancellation()
                 guard self.operationGeneration.isCurrent(generation) else { return }
-                self.setState(.done(url), progress: 1)
+                self.setState(.done(url, report), progress: 1)
             } catch is CancellationError {
                 guard self.operationGeneration.isCurrent(generation) else { return }
                 self.setState(.idle, progress: 0)

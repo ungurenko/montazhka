@@ -348,12 +348,13 @@ final class EditorController: ExportPreparing {
 
     func prepareExport() async throws -> PreparedExport {
         if project.shorts != nil { return try await prepareShortsExport() }
+        // Та версия проекта, из которой соберётся файл, — до ожидания сборки.
+        let exported = project
         let result = await compositionForExport()
         return PreparedExport(
-            composition: result.composition,
-            audioMix: result.audioMix,
-            warning: result.audioWarning
-        )
+            composition: result.composition, audioMix: result.audioMix, warning: result.audioWarning,
+            normalizeLoudness: exported.export.normalizeLoudness,
+            timelineFingerprint: AgentWordCuts.fingerprint(exported.clips), sizing: .quality)
     }
 
     /// Черновик шортса выгружается так же, как у агента: вертикально, с лицом,
@@ -363,14 +364,17 @@ final class EditorController: ExportPreparing {
         let sources = Array(
             Dictionary(project.clips.map { ($0.source.id, $0.source) }, uniquingKeysWith: { a, _ in a }).values)
         let words = try await transcriptStore.correctedCachedWords(for: sources, glossaryURL: directories.glossary)
+        let exported = project
         let plan = try await ShortsRenderer.plan(
-            project: project, words: words ?? [], faces: FaceTrackStore(cacheDir: directories.faceTracks),
+            project: exported, words: words ?? [], faces: FaceTrackStore(cacheDir: directories.faceTracks),
             quality: .high, voiceStore: VoiceEnhanceStore(cacheDir: directories.enhancedAudio),
             musicEQStore: MusicEQStore(cacheDir: directories.musicEQ))
         return PreparedExport(
             composition: plan.composition, audioMix: plan.audioMix,
             warning: plan.warnings.isEmpty ? nil : plan.warnings.map(\.message).joined(separator: "\n"),
-            videoComposition: plan.exportComposition)
+            videoComposition: plan.exportComposition,
+            normalizeLoudness: exported.export.normalizeLoudness,
+            timelineFingerprint: AgentWordCuts.fingerprint(exported.clips))
     }
 
     private func renderComposition(mode: MediaRenderMode) async -> MediaRenderResult {
@@ -781,6 +785,22 @@ final class EditorController: ExportPreparing {
         scheduleSave()
     }
 
+    /// Галочки окна экспорта. Предпросмотр от них не зависит.
+    func setExportPreferences(_ preferences: ExportPreferences) {
+        guard preferences != project.export else { return }
+        beginEdit()
+        applyProjectEdit(.updateExport(preferences))
+        scheduleSave()
+    }
+
+    func removeOverlay(id: UUID) {
+        guard project.overlays.contains(where: { $0.id == id }) else { return }
+        beginEdit()
+        applyProjectEdit(.updateOverlays(project.overlays.filter { $0.id != id }))
+        scheduleSave()
+        rebuildAndSeek(to: currentTime)
+    }
+
     // MARK: - Фоновая музыка
 
     func updateMusicSettings(_ settings: MusicSettings) {
@@ -1149,6 +1169,7 @@ final class EditorController: ExportPreparing {
         let edits: [ProjectEdit] = [
             .replaceClips(fresh.clips), .rename(fresh.name), .updateDetection(fresh.detection),
             .updateVoice(fresh.voiceEnhance), .updateMusic(fresh.music), .updateShorts(fresh.shorts),
+            .updateExport(fresh.export), .updateOverlays(fresh.overlays),
         ]
         for edit in edits {
             projectEditor.apply(edit, recordHistory: false)

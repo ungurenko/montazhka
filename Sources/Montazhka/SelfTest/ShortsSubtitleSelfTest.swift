@@ -257,7 +257,10 @@ enum ShortsSubtitleSelfTest {
         let plan = try await ShortsRenderer.plan(
             project: draft, words: [], faces: FaceTrackStore(cacheDir: FileManager.default.temporaryDirectory),
             quality: .compact)
-        try await ShortsRenderer.export(plan, quality: .compact, to: draftOutput) { _ in }
+        let draftJob = plan.exportJob(
+            quality: .compact, normalizeLoudness: draft.export.normalizeLoudness,
+            timelineFingerprint: AgentWordCuts.fingerprint(draft.clips))
+        _ = try await FinalExport.run(draftJob, to: draftOutput) { _ in }
         let draftAsset = AVURLAsset(url: draftOutput)
         let draftTrack = try await draftAsset.loadTracks(withMediaType: .video).first
         let draftSize = try await draftTrack?.load(.naturalSize) ?? .zero
@@ -281,7 +284,10 @@ enum ShortsSubtitleSelfTest {
         let timedPlan = try await ShortsRenderer.plan(
             project: timed, words: spoken,
             faces: FaceTrackStore(cacheDir: FileManager.default.temporaryDirectory), quality: .compact)
-        try await ShortsRenderer.export(timedPlan, quality: .compact, to: timedOutput) { _ in }
+        let timedJob = timedPlan.exportJob(
+            quality: .compact, normalizeLoudness: timed.export.normalizeLoudness,
+            timelineFingerprint: AgentWordCuts.fingerprint(timed.clips))
+        _ = try await FinalExport.run(timedJob, to: timedOutput) { _ in }
         let timedAsset = AVURLAsset(url: timedOutput)
         let duringPhrase = brightPixels(in: try image(at: 0.8, in: timedAsset), rows: 0.6...1)
         let betweenPhrases = brightPixels(in: try image(at: 2.2, in: timedAsset), rows: 0.6...1)

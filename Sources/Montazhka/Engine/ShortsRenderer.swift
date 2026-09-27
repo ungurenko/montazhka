@@ -26,6 +26,16 @@ enum ShortsRenderer {
                 at: time, renderSize: frameComposition.renderSize, cues: cues,
                 appearance: appearance, highlight: highlight, hook: hook)
         }
+
+        /// Запись MP4 черновика: размер кадра задаёт композиция, битрейт — качество.
+        func exportJob(
+            quality: ExportQuality, normalizeLoudness: Bool, timelineFingerprint: String?
+        ) -> FinalExportJob {
+            FinalExportJob(
+                input: ExportInput(composition: composition, audioMix: audioMix, videoComposition: exportComposition),
+                quality: quality, sizing: .composition, subtitleCues: nil, subtitlesSkippedReason: nil,
+                normalizeLoudness: normalizeLoudness, timelineFingerprint: timelineFingerprint)
+        }
     }
 
     enum RenderError: LocalizedError {
@@ -88,15 +98,6 @@ enum ShortsRenderer {
             composition: rendered.composition, audioMix: rendered.audioMix, exportComposition: export,
             frameComposition: frame, cues: cues, hook: hook, appearance: appearance, highlight: highlight,
             warnings: rendered.warnings)
-    }
-
-    static func export(
-        _ plan: Plan, quality: ExportQuality, to url: URL, progress: @escaping @Sendable (Double) -> Void
-    ) async throws {
-        try await Transcoder.export(
-            composed: ExportInput(
-                composition: plan.composition, audioMix: plan.audioMix, videoComposition: plan.exportComposition),
-            quality: quality, to: url, progress: progress)
     }
 
     /// Лица по кускам черновика с запасом в секунду: сглаживанию нужен разгон.

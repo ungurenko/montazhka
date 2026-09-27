@@ -20,6 +20,8 @@ struct MediaRenderResult: @unchecked Sendable {
     let composition: AVComposition
     let audioMix: AVAudioMix?
     let warnings: [CompositionWarning]
+    /// Своя картинка обычного проекта (анимации, субтитры); nil — как есть.
+    var videoPlan: ProjectVideoPlan? = nil
 }
 
 /// Единая точка сборки предпросмотра и экспорта.
