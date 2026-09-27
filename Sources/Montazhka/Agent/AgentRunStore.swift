@@ -87,11 +87,15 @@ actor AgentRunStore {
         let before = try load(id: id)
         var run = before
         change(&run)
-        // Позднее событие прогресса не возвращает законченную задачу в работу.
-        if before.status.isFinished, !run.status.isFinished {
+        // Итог законченной задачи окончателен: поздние события прогресса и поздняя сверка
+        // (в том числе из другого процесса) не меняют ни статус, ни этап, ни описание.
+        // Дописать можно только итоговые файлы.
+        if before.status.isFinished {
             run.status = before.status
             run.progress = before.progress
             run.stage = before.stage
+            run.summary = before.summary
+            run.error = before.error
         }
         run.updatedAt = Date()
         try save(run)
@@ -121,6 +125,8 @@ actor AgentRunStore {
         }
         guard interrupted else { return run }
         try update(id: id) {
+            // Исполнитель мог успеть закончить между чтением и этой записью.
+            guard $0.status == .running || $0.status == .pending else { return }
             $0.status = .failed
             $0.stage = "Прервано"
             $0.summary =

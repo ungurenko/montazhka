@@ -383,7 +383,9 @@ actor AgentService {
         let requestedLimit = limit ?? query.firstValue(named: "limit").flatMap(Int.init) ?? 32_000
         let file = URL(fileURLWithPath: path)
         let page: AgentResourcePage
-        if let media = AgentResourceReader.mediaType(of: file) {
+        // Готовый ролик — видео, даже если агент сохранил его без расширения.
+        let isVideoArtifact = name == "final" || name == "draft"
+        if let media = AgentResourceReader.mediaType(of: file) ?? (isVideoArtifact ? .mpeg4Movie : nil) {
             page = AgentResourcePage(
                 uri: uri, kind: "media", offset: 0, totalBytes: try AgentResourceReader.byteCount(of: file),
                 mimeType: media.preferredMIMEType, path: path)

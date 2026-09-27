@@ -87,6 +87,20 @@ struct AgentResourceTests {
         #expect(negative.start == 0 && negative.content == "а", "отрицательный сдвиг — с начала, лимит не меньше буквы")
     }
 
+    @Test("a final video saved without an extension is still media")
+    func extensionlessFinalIsMedia() async throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let video = root.appendingPathComponent("ролик")
+        try Data(repeating: 0xFF, count: 100).write(to: video)
+        let (service, id) = try await run(video, name: "final", root: root)
+
+        let object = try page(try await service.resource(uri: "montazhka://runs/\(id.uuidString)/final"))
+
+        #expect(object["kind"] as? String == "media")
+        #expect(object["content"] == nil)
+    }
+
     @Test("a finished MP4 is described by path and size, not decoded as text")
     func videoIsNotText() async throws {
         let root = try temporaryDirectory()

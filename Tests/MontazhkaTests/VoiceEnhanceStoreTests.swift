@@ -109,6 +109,30 @@ extension VoiceEnhanceStoreTests {
 }
 
 extension VoiceEnhanceStoreTests {
+    @Test("a variant already published is not replaced by a second render of the same variant")
+    func publishedVariantIsNotReplaced() async throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let cache = root.appendingPathComponent("cache")
+        try FileManager.default.createDirectory(at: cache, withIntermediateDirectories: true)
+        let path = try source(in: root)
+        let settings = VoiceEnhanceSettings(enabled: true)
+        let slow = RenderGate()
+        let second = VoiceEnhanceStore(cacheDir: cache, render: slow.render)
+        let late = Task { try await second.ensure(source: path, settings: settings) }
+        try await slow.waitForStarted(1)
+        let first = VoiceEnhanceStore(
+            cacheDir: cache, render: { _, _, to, _ in try Data("первый".utf8).write(to: to) })
+        let url = try await first.ensure(source: path, settings: settings)
+        let lease = CacheFileLease(url: url)
+
+        await slow.open()
+        #expect(try await late.value == url)
+
+        #expect(try String(contentsOf: url, encoding: .utf8) == "первый", "готовый вариант не подменён")
+        withExtendedLifetime(lease) {}
+    }
+
     @Test("work folders left by a crashed render are cleaned up after a day; fresh ones stay")
     func staleWorkFoldersAreRemoved() async throws {
         let root = try temporaryDirectory()

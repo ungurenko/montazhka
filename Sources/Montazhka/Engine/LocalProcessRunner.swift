@@ -7,8 +7,8 @@ struct LocalProcessResult: Sendable {
 }
 
 /// Остановка запущенной программы: причина, группа процессов и переход от мягкой
-/// просьбы (SIGTERM) к принудительной (SIGKILL). Сигналы идут только своей группе,
-/// пока она существует; после сбора процесса мягкая просьба уже не шлётся.
+/// просьбы (SIGTERM) к принудительной (SIGKILL). Сигналы идут только своей группе и
+/// только пока запуск не закончен: потом её номер может достаться другим процессам.
 private final class ProcessControl: @unchecked Sendable {
     enum Reason { case timeout, cancelled }
 
@@ -16,60 +16,71 @@ private final class ProcessControl: @unchecked Sendable {
     private let grace: TimeInterval
     private var group: pid_t?
     private var reaped = false
-    private(set) var reason: Reason?
-    private var escalation: DispatchWorkItem?
+    private var stopReason: Reason?
+    private var signalled = false
+    private var finished = false
 
     init(grace: TimeInterval) {
         self.grace = grace
     }
 
+    var reason: Reason? { lock.withLock { stopReason } }
+
     /// Программа запущена своей группой. Остановку, запрошенную раньше запуска, выполняет сразу.
     func install(_ pid: pid_t) {
         let pending = lock.withLock {
             group = pid
-            return reason != nil
+            return stopReason != nil
         }
         if pending { signal() }
     }
 
     func stop(_ why: Reason) {
         let first = lock.withLock {
-            guard reason == nil else { return false }
-            reason = why
+            guard stopReason == nil, !finished else { return false }
+            stopReason = why
             return true
         }
         if first { signal() }
     }
 
-    /// Главный процесс собран: мягкая просьба больше не нужна, принудительная остаётся за таймером.
+    /// Главный процесс собран: мягкая просьба ему больше не нужна.
     func markReaped() {
         lock.withLock { reaped = true }
     }
 
-    /// Ждёт, пока группа опустеет или сработает принудительная остановка: после возврата
-    /// у программы не остаётся живых детей.
-    func waitForGroupToEnd() {
-        guard let group = lock.withLock({ reason == nil ? nil : group }) else { return }
-        let deadline = Date().addingTimeInterval(grace + 0.5)
+    /// После выхода главного процесса в группе не должно остаться никого: брошенные
+    /// дети и не услышавшие остановку получают SIGTERM, а через `grace` — SIGKILL.
+    func endGroup() {
+        guard let group = lock.withLock({ finished ? nil : group }), killpg(group, 0) == 0 else { return }
+        killpg(group, SIGTERM)
+        let deadline = Date().addingTimeInterval(grace)
         while Date() < deadline, killpg(group, 0) == 0 {
             usleep(20_000)
         }
-        let stragglers = killpg(group, 0) == 0
-        if stragglers { killpg(group, SIGKILL) }
-        lock.withLock { escalation?.cancel() }
+        if killpg(group, 0) == 0 { killpg(group, SIGKILL) }
     }
 
-    func cancelTimers() {
-        lock.withLock { escalation?.cancel() }
+    /// Запуск закончен: отложенная принудительная остановка больше никого не тронет.
+    func finish() {
+        lock.withLock { finished = true }
     }
 
+    /// Ровно один раз: SIGTERM группе и отложенный SIGKILL, если запуск к тому времени не закончен.
     private func signal() {
-        let (target, soft) = lock.withLock { (group, !reaped) }
+        let target: (group: pid_t, soft: Bool)? = lock.withLock {
+            guard !signalled, !finished, let group else { return nil }
+            signalled = true
+            return (group, !reaped)
+        }
         guard let target else { return }
-        if soft { killpg(target, SIGTERM) }
-        let kill = DispatchWorkItem { killpg(target, SIGKILL) }
-        lock.withLock { escalation = kill }
-        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + grace, execute: kill)
+        if target.soft { killpg(target.group, SIGTERM) }
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + grace) { [self] in
+            lock.withLock {
+                guard !finished else { return }
+                killpg(target.group, SIGKILL)
+            }
+        }
     }
 }
 
@@ -155,7 +166,7 @@ enum LocalProcessRunner {
         DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + timeout, execute: timer)
         defer {
             timer.cancel()
-            control.cancelTimers()
+            control.finish()
         }
 
         if let input {
@@ -169,7 +180,7 @@ enum LocalProcessRunner {
         var status: Int32 = 0
         while waitpid(pid, &status, 0) == -1, errno == EINTR {}
         control.markReaped()
-        control.waitForGroupToEnd()
+        control.endGroup()
 
         switch control.reason {
         case .timeout: throw AIProviderError.timeout(executable.lastPathComponent)

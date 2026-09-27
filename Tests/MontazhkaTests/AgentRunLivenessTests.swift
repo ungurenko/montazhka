@@ -86,15 +86,23 @@ struct AgentRunLivenessTests {
         let service = AgentService(baseDirectory: root)
         let run = try await runningJob(service)
         try await service.runs.update(id: run.id) {
-            $0.status = .completed; $0.progress = 1
+            $0.status = .completed; $0.progress = 1; $0.stage = "Экспорт готов"
         }
 
         try await service.runs.update(id: run.id) {
             $0.status = .running; $0.progress = 0.4
         }
+        try await service.runs.update(id: run.id) { $0.stage = "Записываю файл" }
+        try await service.runs.update(id: run.id) {
+            $0.status = .failed; $0.summary = "прервался"
+        }
+        try await service.runs.update(id: run.id) { $0.artifacts["result"] = "/tmp/result.json" }
 
         let reloaded = try await service.runs.load(id: run.id)
-        #expect(reloaded.status == .completed)
+        #expect(reloaded.status == .completed, "ни поздний прогресс, ни поздняя сверка не меняют итог")
         #expect(reloaded.progress == 1)
+        #expect(reloaded.stage == "Экспорт готов", "поздний этап не затирает итоговый")
+        #expect(reloaded.summary == nil)
+        #expect(reloaded.artifacts["result"] == "/tmp/result.json", "итоговые файлы дописываются")
     }
 }

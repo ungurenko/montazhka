@@ -225,10 +225,8 @@ enum Transcoder {
         // Надписи кладутся на кадры здесь же, одним проходом: сессия экспорта с Core Animation
         // на macOS 26 сдвигала цвет всего кадра (серый 128 → 145).
         var burnOverlay: (@Sendable (CMSampleBuffer) -> CMSampleBuffer)?
-        if let overlay = input.overlay {
-            let burner = FrameOverlayBurner(overlay: overlay)
-            burnOverlay = { sample in burner.burn(sample) }
-        }
+        let burner = input.overlay.map(FrameOverlayBurner.init(overlay:))
+        if let burner { burnOverlay = { sample in burner.burn(sample) } }
         let transform = burnOverlay
         await withTaskCancellationHandler {
             await withTaskGroup(of: Void.self) { group in
@@ -259,6 +257,12 @@ enum Transcoder {
             writer.cancelWriting()
             try? FileManager.default.removeItem(at: url)
             throw TranscodeError.readerFailed(reader.error)
+        }
+        // Файл без надписей, которые должны были быть, — не готовый файл.
+        if burner?.didFail == true {
+            writer.cancelWriting()
+            try? FileManager.default.removeItem(at: url)
+            throw TranscodeError.writerFailed(nil)
         }
         await writer.finishWriting()
         guard writer.status == .completed else {

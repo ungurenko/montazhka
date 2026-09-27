@@ -67,10 +67,12 @@ actor VoiceEnhanceStore {
             let working = scratch.appendingPathComponent("voice.caf")
             try await render(path, settings, working, { Task.isCancelled })
             if Task.isCancelled { throw CancellationError() }
-            // Готовый файл появляется атомарно и не удаляется заранее: тот же вариант, уже
-            // готовый у соседа, заменяется одним переименованием (читающие его не замечают).
-            guard Darwin.rename(working.path, url.path) == 0 else {
-                throw CocoaError(.fileWriteUnknown, userInfo: [NSFilePathErrorKey: url.path])
+            // Готовый файл появляется атомарно и никогда не подменяется: если сосед уже
+            // выложил тот же вариант, его файл остаётся (его могут держать склейки), наш уходит.
+            if renamex_np(working.path, url.path, UInt32(RENAME_EXCL)) != 0 {
+                guard errno == EEXIST else {
+                    throw CocoaError(.fileWriteUnknown, userInfo: [NSFilePathErrorKey: url.path])
+                }
             }
             Self.evictOldVariants(dir: dir, sourceHash: sourceHash, keep: url)
             Self.removeStaleWorkFolders(dir: dir)

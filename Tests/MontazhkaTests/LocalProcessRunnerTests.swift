@@ -71,6 +71,22 @@ struct LocalProcessRunnerTests {
         #expect(ContinuousClock.now - started < .seconds(8))
     }
 
+    @Test("children a program leaves behind in its group are stopped when it exits")
+    func leftoverChildrenAreStopped() async throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let pidFile = root.appendingPathComponent("child.pid")
+
+        let result = try await LocalProcessRunner.run(
+            executable: shell, arguments: ["-c", "sleep 30 & echo $! > '\(pidFile.path)'; exit 0"], timeout: 10)
+
+        #expect(result.exitCode == 0)
+        let text = try String(contentsOf: pidFile, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
+        let pid = try #require(pid_t(text))
+        for _ in 0..<50 where isAlive(pid) { try await Task.sleep(for: .milliseconds(20)) }
+        #expect(!isAlive(pid), "брошенный ребёнок программы не остаётся работать")
+    }
+
     @Test("a program that exits on its own returns its code, output and input echo")
     func earlyExitReturnsResult() async throws {
         let result = try await LocalProcessRunner.run(

@@ -13,6 +13,8 @@ final class FrameOverlayBurner: @unchecked Sendable {
     private var poolKey: (width: Int, height: Int, format: OSType)?
     private var lastImage: CGImage?
     private var lastOverlay: CIImage?
+    /// Надпись была, а на кадр не легла (нет памяти под кадр и т. п.): запись — ошибка.
+    private(set) var didFail = false
 
     init(overlay: @escaping @Sendable (Double) -> CGImage?) {
         self.overlay = overlay
@@ -20,9 +22,11 @@ final class FrameOverlayBurner: @unchecked Sendable {
 
     func burn(_ sample: CMSampleBuffer) -> CMSampleBuffer {
         let time = CMSampleBufferGetPresentationTimeStamp(sample).seconds
-        guard let image = overlay(time), let source = CMSampleBufferGetImageBuffer(sample),
-            let target = makeBuffer(like: source)
-        else { return sample }
+        guard let image = overlay(time) else { return sample }
+        guard let source = CMSampleBufferGetImageBuffer(sample), let target = makeBuffer(like: source) else {
+            didFail = true
+            return sample
+        }
         CVBufferPropagateAttachments(source, target)
         let base = CIImage(cvPixelBuffer: source)
         let colorSpace =
@@ -32,7 +36,11 @@ final class FrameOverlayBurner: @unchecked Sendable {
         context.render(
             overlayImage(image, fitting: base.extent).composited(over: base), to: target, bounds: base.extent,
             colorSpace: colorSpace)
-        return Self.sample(with: target, timingOf: sample) ?? sample
+        guard let burned = Self.sample(with: target, timingOf: sample) else {
+            didFail = true
+            return sample
+        }
+        return burned
     }
 
     /// Картинка надписей того же размера, что кадр; у одинаковых подряд — одна и та же.
