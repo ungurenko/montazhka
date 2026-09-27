@@ -3,6 +3,8 @@ import Foundation
 
 /// Подготовка экспорта окна: обычный проект и черновик шортса.
 extension EditorController {
+    var exportInputFiles: [URL] { project.exportInputFiles }
+
     /// Композиция для экспорта. Если улучшение включено — дожидается обработки всех
     /// исходников; при неудаче отдаёт оригинальный звук и текст предупреждения.
     /// `videoComposition` — анимации и вшитые субтитры; nil — кадр как есть.
@@ -47,7 +49,8 @@ extension EditorController {
             videoComposition: result.videoComposition,
             subtitleCues: speech.horizontalCues, subtitlesSkippedReason: speech.skippedReason,
             normalizeLoudness: exported.export.normalizeLoudness,
-            projectFingerprint: ExportProvenance.fingerprint(for: exported), sizing: .quality)
+            projectFingerprint: ExportProvenance.fingerprint(for: exported), sizing: .quality,
+            protectedInputs: exported.exportInputFiles)
     }
 
     /// Слова ленты только из готовой расшифровки — без распознавания.
@@ -76,6 +79,7 @@ extension EditorController {
             subtitleCues: words == nil ? nil : plan.subtitleFileCues,
             subtitlesSkippedReason: words == nil ? ExportSpeech.noTranscriptReason : nil,
             normalizeLoudness: exported.export.normalizeLoudness,
-            projectFingerprint: ExportProvenance.fingerprint(for: exported))
+            projectFingerprint: ExportProvenance.fingerprint(for: exported),
+            protectedInputs: exported.exportInputFiles)
     }
 }

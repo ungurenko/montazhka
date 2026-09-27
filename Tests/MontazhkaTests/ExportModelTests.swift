@@ -157,6 +157,7 @@ struct ExportModelTests {
 
 @MainActor
 private struct ImmediateExportPreparer: ExportPreparing {
+    var exportInputFiles: [URL] { [] }
     var warning: String?
 
     init(warning: String? = nil) {
@@ -170,6 +171,7 @@ private struct ImmediateExportPreparer: ExportPreparing {
 
 @MainActor
 private struct SlowExportPreparer: ExportPreparing {
+    var exportInputFiles: [URL] { [] }
     func prepareExport(step: @escaping @Sendable (ExportPreparationStep) -> Void) async throws -> PreparedExport {
         try await Task.sleep(for: .seconds(30))
         return PreparedExport(composition: AVMutableComposition(), audioMix: nil, warning: nil)
@@ -204,6 +206,7 @@ private final class ControlledVideoExporter: VideoExporting {
 /// Сообщает о распознавании речи и ждёт, пока тест его отпустит.
 @MainActor
 private final class SteppingExportPreparer: ExportPreparing {
+    var exportInputFiles: [URL] { [] }
     private var continuation: CheckedContinuation<Void, Never>?
 
     func prepareExport(step: @escaping @Sendable (ExportPreparationStep) -> Void) async throws -> PreparedExport {

@@ -25,6 +25,9 @@ struct FinalExportJob: @unchecked Sendable {
     var normalizeLoudness: Bool
     /// Из какой версии проекта собран файл: `ExportProvenance.fingerprint(for:)`.
     var projectFingerprint: String?
+    /// Входы, которых склейка не читает напрямую (исходная музыка до эквалайзера и т. п.):
+    /// поверх них, как и поверх файлов самой склейки, результат не пишется.
+    var protectedInputs: [URL] = []
 }
 
 /// Что стало со звуком и субтитрами готового файла.
@@ -68,6 +71,9 @@ enum FinalExport {
         progress: @escaping @Sendable (Double) -> Void,
         stage: (@Sendable (FinalExportStage) -> Void)? = nil
     ) async throws -> FinalExportReport {
+        // Входы проверяются до всей работы и ещё раз перед тем, как файл встанет на место.
+        let inputs = job.protectedInputs + ExportDestinationGuard.compositionInputs(job.input.composition)
+        try ExportDestinationGuard.check(url, inputs: inputs)
         let tracker = FinalExportProgress(normalizing: job.normalizeLoudness, report: progress, announce: stage)
         let scratch = FileManager.default.temporaryDirectory
             .appendingPathComponent("montazhka-master-\(UUID().uuidString)", isDirectory: true)
@@ -95,6 +101,7 @@ enum FinalExport {
         tracker.begin(.verifying)
         let loudness = try? await LoudnessMeter.measure(url: video.temporaryURL, progress: { tracker.update($0) })
         try Task.checkCancellation()
+        try ExportDestinationGuard.check(url, inputs: inputs)
         try video.commit()
         var warnings = subtitles.commit()
         tracker.update(1)

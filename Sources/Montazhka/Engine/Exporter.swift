@@ -118,6 +118,8 @@ struct PreparedExport {
     var projectFingerprint: String? = nil
     /// Черновик шортса — размер задаёт композиция; обычный проект — качество.
     var sizing: PreparedSizing = .composition
+    /// `Project.exportInputFiles`: поверх них файл не записывается.
+    var protectedInputs: [URL] = []
 }
 
 /// Что происходит до записи файла — подпись в окне.
@@ -152,6 +154,8 @@ extension FinalExportStage {
 
 @MainActor
 protocol ExportPreparing {
+    /// Файлы, из которых собирается ролик: поверх них экспорт не пишет.
+    var exportInputFiles: [URL] { get }
     /// `step` зовётся с любого потока.
     func prepareExport(step: @escaping @Sendable (ExportPreparationStep) -> Void) async throws -> PreparedExport
 }
@@ -185,7 +189,8 @@ struct TranscodingVideoExporter: VideoExporting {
             subtitleCues: prepared.subtitleCues,
             subtitlesSkippedReason: prepared.subtitlesSkippedReason,
             normalizeLoudness: prepared.normalizeLoudness,
-            projectFingerprint: prepared.projectFingerprint)
+            projectFingerprint: prepared.projectFingerprint,
+            protectedInputs: prepared.protectedInputs)
         return try await FinalExport.run(job, to: url, progress: progress, stage: stage)
     }
 }
@@ -312,6 +317,8 @@ final class ExportModel {
         operationTask = Task { [weak self] in
             guard let self else { return }
             do {
+                // До подготовки: расшифровка и обработка звука не тратятся на заведомый отказ.
+                try ExportDestinationGuard.check(url, inputs: preparer.exportInputFiles)
                 let prepared = try await preparer.prepareExport(step: onStep)
                 try Task.checkCancellation()
                 guard self.operationGeneration.isCurrent(generation) else { return }

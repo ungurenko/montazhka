@@ -28,10 +28,7 @@ extension AgentService {
                 ?? Self.defaultOutputURL(source: first.url, final: final)
             // Файл черновика шортса перевыгружается после каждой правки — это не чужой файл.
             let overwrite = overwrite || destination.standardized == draftPath?.standardized
-            let sources = Set(project.clips.map { URL(fileURLWithPath: $0.sourcePath).resolvingSymlinksInPath().path })
-            if sources.contains(destination.resolvingSymlinksInPath().path) {
-                throw AgentServiceError.invalidInput("Нельзя сохранять результат поверх исходника: \(destination.path)")
-            }
+            try ExportDestinationGuard.check(destination, inputs: project.exportInputFiles)
             if FileManager.default.fileExists(atPath: destination.path), !overwrite {
                 throw AgentServiceError.outputExists(destination.path)
             }
@@ -99,9 +96,10 @@ extension AgentService {
         if project.shorts != nil {
             let words = (try? await cachedTranscriptWords(for: project)) ?? nil
             let plan = try await shortsPlan(project, words: words, quality: quality)
-            let job = plan.exportJob(
+            var job = plan.exportJob(
                 quality: quality, normalizeLoudness: normalize, projectFingerprint: fingerprint,
                 subtitlesSkippedReason: words == nil ? ExportSpeech.noTranscriptReason : nil)
+            job.protectedInputs = project.exportInputFiles
             return (job, plan.warnings.map(\.message))
         }
         let speech = try await ExportSpeech.load(
@@ -122,7 +120,7 @@ extension AgentService {
                 videoComposition: rendered.videoPlan?.exportComposition),
             quality: quality, sizing: .quality(quality), subtitleCues: speech.horizontalCues,
             subtitlesSkippedReason: speech.skippedReason, normalizeLoudness: normalize,
-            projectFingerprint: fingerprint)
+            projectFingerprint: fingerprint, protectedInputs: project.exportInputFiles)
         return (job, rendered.warnings.map(\.message))
     }
 

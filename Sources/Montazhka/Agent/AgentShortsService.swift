@@ -65,10 +65,11 @@ extension AgentService {
                     request: request, faces: faces)
                 let plan = try await shortsPlan(draft, quality: quality)
                 let output = URL(fileURLWithPath: draft.shorts?.exportPath ?? "")
-                let job = plan.exportJob(
+                var job = plan.exportJob(
                     quality: quality, normalizeLoudness: draft.export.normalizeLoudness,
                     projectFingerprint: ExportProvenance.fingerprint(for: draft),
                     subtitlesSkippedReason: cached == nil ? ExportSpeech.noTranscriptReason : nil)
+                job.protectedInputs = project.exportInputFiles + draft.exportInputFiles
                 let report = try await FinalExport.run(job, to: output) { _ in }
                 var warnings = Self.draftWarnings(draft, plan: plan) + report.warnings
                 // Заметки черновика ведут к проекту-источнику: общий бриф и решения живут там.
