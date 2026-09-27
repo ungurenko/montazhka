@@ -93,6 +93,15 @@ struct ExportDestinationGuardTests {
         #expect(try Data(contentsOf: fixture.video) == before)
     }
 
+    @Test("a built-in music track is an input too")
+    func libraryMusicIsAnInput() throws {
+        let track = try #require(MusicLibrary.tracks.first)
+        var project = Project(name: "Музыка", clips: [])
+        project.music = MusicSettings(enabled: true, trackID: track.id)
+
+        #expect(project.exportInputFiles.map(\.path) == [track.url.path])
+    }
+
     @Test("the project lists its clips, custom music and animation files as inputs")
     func projectInputFiles() {
         let clip = URL(fileURLWithPath: "/tmp/guard/clip.mov")

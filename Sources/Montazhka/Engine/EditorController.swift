@@ -228,14 +228,26 @@ final class EditorController: ExportPreparing {
     }
 
     /// Закрытие: запись идёт первой, пока всё работает, — при ошибке проект остаётся открытым
-    /// и полностью рабочим, а ошибка выбрасывается. После записи всё останавливается; если
-    /// фоновая работа успела поменять проект между записью и остановкой, он дописывается.
+    /// и полностью рабочим, а ошибка выбрасывается. Всё останавливается только после записи
+    /// самой свежей версии.
     func close() async throws -> ProjectSaveCoordinator.FlushOutcome {
-        let flushed = project
-        var outcome = try await saveCoordinator.flush(flushed)
-        await stop()
-        if project != flushed { outcome = try await saveCoordinator.flush(project) }
-        return outcome
+        // Пока идёт закрытие, версия с диска не подменяет проект окна.
+        diskWatchTask?.cancel()
+        do {
+            var flushed = project
+            var outcome = try await saveCoordinator.flush(flushed)
+            // Пока шла запись, проект могли поправить (импорт, умный монтаж, человек) — дописываем.
+            while project != flushed {
+                flushed = project
+                outcome = try await saveCoordinator.flush(flushed)
+            }
+            // Между последней проверкой и остановкой нет ожиданий: новая правка не вклинится.
+            await stop()
+            return outcome
+        } catch {
+            watchDiskChanges()
+            throw error
+        }
     }
 
     /// Запись и остановка там, где закрытие не прерывается (тесты, самопроверка):
@@ -1125,7 +1137,9 @@ final class EditorController: ExportPreparing {
                 try? await Task.sleep(for: .seconds(1))
                 guard let self else { return }
                 guard self.saveCoordinator.diskChangedElsewhere(for: self.project.id) else { continue }
-                if self.saveCoordinator.hasPendingSave {
+                // Ошибку записи человек ещё не видел — правку окна не трогаем.
+                if case .failed = self.saveCoordinator.status { continue }
+                if self.saveCoordinator.hasUnsavedChanges {
                     await self.saveCoordinator.saveNow(self.project)
                 } else {
                     await self.reloadChangedProject(lostLocalEdit: false)

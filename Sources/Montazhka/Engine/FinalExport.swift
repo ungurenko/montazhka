@@ -275,8 +275,10 @@ private struct SubtitleSidecar {
     /// Прежний файл, который за время экспорта появился или изменился, уже не наш — он
     /// остаётся. Не удалось поставить новый — прежний тоже остаётся. Возвращает предупреждения.
     mutating func commit() -> [String] {
+        // Непрочитанный файл — не пустое место: он есть, просто чужой.
+        let exists = FileManager.default.fileExists(atPath: destination.path)
         let current = FileManager.default.contents(atPath: destination.path).map(ExportProvenance.subtitlesDigest)
-        let untouched = current == nil || current == ownedDigest
+        let untouched = !exists || (current != nil && current == ownedDigest)
         if var pending = output {
             guard untouched else {
                 pending.discard()
@@ -295,7 +297,7 @@ private struct SubtitleSidecar {
             }
             return notes
         }
-        guard removesStale, current != nil else { return notes }
+        guard removesStale, exists else { return notes }
         guard untouched else { return notes + [keptNote] }
         do {
             try FileManager.default.removeItem(at: destination)

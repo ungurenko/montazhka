@@ -76,6 +76,32 @@ struct AppModelPersistenceTests {
     }
 
     @MainActor
+    @Test("an edit made while the final save is running is saved too before the project closes")
+    func editDuringFinalSaveIsSaved() async throws {
+        let repository = ControlledProjectRepository()
+        repository.blocksSaves = true
+        let app = AppModel(store: repository)
+        let controller = EditorController(
+            project: Project(name: "Первая"), store: repository, openRouterKeyStore: EmptyOpenRouterKeyStore())
+        app.editor = controller
+
+        app.closeProject()
+        try await waitUntil { repository.pendingSaveCount == 1 }
+        controller.renameProject("Правка во время записи")
+        repository.completeNextSave()
+        try await waitUntil { repository.pendingSaveCount == 1 }
+        controller.renameProject("Ещё одна")
+        repository.completeNextSave()
+        // Закрытие не заканчивается, пока записан не самый свежий вариант (отложенное
+        // автосохранение сработало бы только через полсекунды — уже после закрытия).
+        try await waitUntil { app.editor == nil || repository.pendingSaveCount == 1 }
+        if app.editor != nil { repository.completeNextSave() }
+        try await waitUntil { app.editor == nil }
+
+        #expect(repository.savedNames.last == "Ещё одна")
+    }
+
+    @MainActor
     @Test("closing without saving is an explicit choice and writes nothing")
     func closeWithoutSaving() async throws {
         let repository = ControlledProjectRepository()

@@ -229,6 +229,31 @@ extension FinalExportTests {
         #expect(try String(contentsOf: subtitles, encoding: .utf8) == previous)
     }
 
+    @Test("a .srt that appears during the export and cannot be read is not replaced")
+    func unreadableSubtitlesStay() async throws {
+        let fixture = try await fixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let output = fixture.root.appendingPathComponent("ролик.mp4")
+        let subtitles = SubRipWriter.url(forVideo: output)
+        let path = subtitles.path
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: path) }
+
+        let report = try await FinalExport.run(
+            job(fixture.input, cues: [cue("Первая", 0.5, 2)], normalize: false), to: output, progress: { _ in },
+            stage: { stage in
+                guard stage == .writing else { return }
+                FileManager.default.createFile(
+                    atPath: path, contents: Data(Self.userSubtitles.utf8), attributes: [.posixPermissions: 0o000])
+            })
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: path)
+        #expect(try String(contentsOf: subtitles, encoding: .utf8) == Self.userSubtitles)
+        #expect(report.subtitlesURL == nil)
+        #expect(
+            report.subtitlesSkippedReason == "Рядом уже есть файл субтитров ролик.srt — не стал его заменять",
+            "чужой файл узнан, а не принят за пустое место")
+    }
+
     @Test("someone else's MP4 with its .srt: the .srt stays when the video is replaced", arguments: [true, false])
     func foreignPairKeepsSubtitles(withSpeech: Bool) async throws {
         let fixture = try await fixture()

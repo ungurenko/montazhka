@@ -131,6 +131,83 @@ extension ProjectRevisionTests {
     }
 }
 
+extension ProjectRevisionTests {
+    @MainActor
+    @Test("when the copy cannot be saved either, the window keeps its version instead of reloading")
+    func failedCopyKeepsWindowVersion() async throws {
+        let root = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let project = try await sharedProject(in: root)
+        let window = BarrierRepository(ProjectStore(baseDirectory: root))
+        window.refusesCopies = true
+        let controller = EditorController(
+            project: project, store: window, openRouterKeyStore: EmptyOpenRouterKeyStore())
+        controller.renameProject("правка окна")
+        var agentVersion = project
+        agentVersion.clips = [Clip(sourcePath: "/tmp/a.mov", start: 0, end: 4)]
+        try await ProjectStore(baseDirectory: root).save(agentVersion)
+
+        for _ in 0..<60 where !isFailed(controller.saveStatus) { try await Task.sleep(for: .milliseconds(50)) }
+        try await Task.sleep(for: .milliseconds(1500))
+
+        #expect(isFailed(controller.saveStatus), "человек видит, что правка не записана")
+        #expect(controller.project.name == "правка окна", "версия окна не заменена чужой")
+        #expect(try await ProjectStore(baseDirectory: root).load(id: project.id).clips.map(\.end) == [4])
+        await controller.stop()
+    }
+
+    @MainActor
+    @Test("a write queued before the window reloaded the agent's version does not overwrite it")
+    func queuedWriteAfterReloadIsAConflict() async throws {
+        let root = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let project = try await sharedProject(in: root)
+        let agentStore = ProjectStore(baseDirectory: root)
+        let window = BarrierRepository(ProjectStore(baseDirectory: root))
+        let coordinator = ProjectSaveCoordinator(repository: window)
+        coordinator.adoptDiskRevision(for: project.id)
+        // Как окно: при конфликте перечитать проект и принять версию агента.
+        coordinator.onExternalChange = { _ in coordinator.adopt(window.revision(of: project.id)) }
+        var agentVersion = project
+        agentVersion.clips = [Clip(sourcePath: "/tmp/a.mov", start: 0, end: 4)]
+        var stale = project
+        stale.name = "устаревшая запись"
+        let queued = QueuedFlag()
+        let agentWrite = agentVersion
+        let staleWrite = stale
+        window.beforeWrite = {
+            try await agentStore.save(agentWrite)
+            // Пока первая запись идёт, закрытие ставит в очередь вторую — со старым снимком окна.
+            Task { @MainActor in
+                queued.set()
+                _ = try? await coordinator.flush(staleWrite)
+            }
+            while !(await MainActor.run { queued.isSet }) { try await Task.sleep(for: .milliseconds(5)) }
+        }
+
+        var first = project
+        first.name = "первая запись"
+        await coordinator.saveNow(first)
+        for _ in 0..<100 where coordinator.status == .saving { try await Task.sleep(for: .milliseconds(20)) }
+        try await Task.sleep(for: .milliseconds(200))
+
+        let onDisk = try await agentStore.load(id: project.id)
+        #expect(onDisk.clips.map(\.end) == [4], "правка агента не затёрта")
+        #expect(onDisk.name == "общий")
+    }
+
+    private func isFailed(_ status: ProjectSaveStatus) -> Bool {
+        if case .failed = status { return true }
+        return false
+    }
+}
+
+@MainActor
+private final class QueuedFlag {
+    private(set) var isSet = false
+    func set() { isSet = true }
+}
+
 /// Настоящее хранилище, в которое тест вставляет чужую запись в нужный момент:
 /// перед записью окна или сразу после его чтения. Каждый барьер срабатывает один раз.
 private final class BarrierRepository: ProjectRepository, @unchecked Sendable {
@@ -138,12 +215,19 @@ private final class BarrierRepository: ProjectRepository, @unchecked Sendable {
     private let lock = NSLock()
     private var pendingBeforeWrite: (@Sendable () async throws -> Void)?
     private var pendingAfterRead: (@Sendable () async throws -> Void)?
+    private var refusingCopies = false
 
     init(_ store: ProjectStore) { self.store = store }
 
     var beforeWrite: (@Sendable () async throws -> Void)? {
         get { lock.withLock { pendingBeforeWrite } }
         set { lock.withLock { pendingBeforeWrite = newValue } }
+    }
+
+    /// Безусловная запись (копия версии окна) не проходит — как при полном диске.
+    var refusesCopies: Bool {
+        get { lock.withLock { refusingCopies } }
+        set { lock.withLock { refusingCopies = newValue } }
     }
 
     var afterRead: (@Sendable () async throws -> Void)? {
@@ -163,7 +247,10 @@ private final class BarrierRepository: ProjectRepository, @unchecked Sendable {
 
     var directories: ProjectDirectories { store.directories }
 
-    func save(_ project: Project) async throws { try await store.save(project) }
+    func save(_ project: Project) async throws {
+        if refusesCopies { throw CocoaError(.fileWriteOutOfSpace) }
+        try await store.save(project)
+    }
 
     func save(_ project: Project, expected: ProjectRevision?) async throws -> ProjectRevision {
         if let barrier = take(\.pendingBeforeWrite) { try await barrier() }

@@ -54,10 +54,12 @@ private struct FileIdentity: Equatable {
 }
 
 extension Project {
-    /// Файлы, из которых собирается ролик: видео ленты, своя музыка, анимации.
+    /// Файлы, из которых собирается ролик: видео ленты, своя или встроенная музыка, анимации.
+    /// Музыку с эквалайзером склейка читает из обработанной копии, поэтому оригинал — здесь.
     var exportInputFiles: [URL] {
         var files = clips.map(\.url)
         if let custom = music.customMedia { files.append(custom.fileURL) }
+        if let id = music.trackID, let track = MusicLibrary.track(id: id) { files.append(track.url) }
         files += overlays.map(\.media.fileURL)
         return files
     }
