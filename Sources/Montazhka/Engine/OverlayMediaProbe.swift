@@ -3,15 +3,6 @@ import CoreMedia
 import CoreVideo
 import Foundation
 
-/// Что узнали о файле анимации при проверке.
-struct OverlayMediaInfo: Equatable, Sendable {
-    let duration: Double
-    let size: CGSize
-    let frameRate: Float
-    let codec: FourCharCode
-    let hasAlpha: Bool
-}
-
 /// Проверка файла анимации (прозрачный ProRes 4444, например из HyperFrames)
 /// до того, как он попадёт в проект. Каждый отказ говорит, что сделать дальше.
 enum OverlayMediaProbe {
@@ -31,13 +22,11 @@ enum OverlayMediaProbe {
         let track: AVAssetTrack
         let duration: Double
         let size: CGSize
-        let frameRate: Float
         let codec: FourCharCode
         let containsAlpha: Bool
     }
 
-    static func validate(_ url: URL, projectFrame: CGSize) async throws -> (info: OverlayMediaInfo, warnings: [String])
-    {
+    static func validate(_ url: URL, projectFrame: CGSize) async throws -> (duration: Double, warnings: [String]) {
         guard FileManager.default.fileExists(atPath: url.path) else {
             throw AgentServiceError.invalidInput(
                 "Файл анимации не найден: \(url.path). Проверьте путь или отрендерьте анимацию заново.")
@@ -62,10 +51,7 @@ enum OverlayMediaProbe {
             throw AgentServiceError.invalidInput(
                 "Фон непрозрачный — анимация закроет видео, рендерьте с прозрачным фоном.")
         }
-        let info = OverlayMediaInfo(
-            duration: video.duration, size: video.size, frameRate: video.frameRate, codec: video.codec,
-            hasAlpha: true)
-        return (info, aspectWarning(size: video.size, projectFrame: projectFrame).map { [$0] } ?? [])
+        return (video.duration, aspectWarning(size: video.size, projectFrame: projectFrame).map { [$0] } ?? [])
     }
 
     private static func loadVideoTrack(of asset: AVURLAsset, name: String) async throws -> VideoTrack {
@@ -73,13 +59,13 @@ enum OverlayMediaProbe {
             "В файле \(name) нет видео, которое можно прочитать: \(renderHint).")
         do {
             guard let track = try await asset.loadTracks(withMediaType: .video).first else { throw unreadable }
-            let (naturalSize, transform, frameRate, formats, traits) = try await track.load(
-                .naturalSize, .preferredTransform, .nominalFrameRate, .formatDescriptions, .mediaCharacteristics)
+            let (naturalSize, transform, formats, traits) = try await track.load(
+                .naturalSize, .preferredTransform, .formatDescriptions, .mediaCharacteristics)
             guard let format = formats.first else { throw unreadable }
             let shown = naturalSize.applying(transform)
             return VideoTrack(
                 track: track, duration: try await asset.load(.duration).seconds,
-                size: CGSize(width: abs(shown.width), height: abs(shown.height)), frameRate: frameRate,
+                size: CGSize(width: abs(shown.width), height: abs(shown.height)),
                 codec: CMFormatDescriptionGetMediaSubType(format),
                 containsAlpha: traits.contains(.containsAlphaChannel))
         } catch {

@@ -93,10 +93,7 @@ actor TranscriptStore {
 
     func cacheURL(for source: MediaReference) -> URL {
         let path = source.resolvedURL?.path ?? source.lastKnownPath
-        let attrs = try? FileManager.default.attributesOfItem(atPath: path)
-        let size = (attrs?[.size] as? NSNumber)?.int64Value ?? 0
-        let mtime = (attrs?[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0
-        let key = "v2|parakeet-tdt-0.6b-v3|ru|\(path)|\(size)|\(Int(mtime))"
+        let key = "v2|parakeet-tdt-0.6b-v3|ru|\(SourceFileFingerprint.key(for: path))"
         let hash = SHA256.hash(data: Data(key.utf8)).hex
         return cacheDir.appendingPathComponent("\(hash).json")
     }

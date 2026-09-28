@@ -131,17 +131,6 @@ enum AIRequestConfiguration: Sendable {
         case .codexCLI, .openCodeCLI: return 1
         }
     }
-
-    func withEffort(_ effort: String?) -> AIRequestConfiguration {
-        switch self {
-        case .openRouter(let model, _, let apiKey):
-            return .openRouter(model: model, effort: effort, apiKey: apiKey)
-        case .codexCLI(let modelID, _, let executable):
-            return .codexCLI(modelID: modelID, effort: effort, executable: executable)
-        case .openCodeCLI(let modelID, _, let executable):
-            return .openCodeCLI(modelID: modelID, effort: effort, executable: executable)
-        }
-    }
 }
 
 enum AIProviderError: LocalizedError, Equatable {

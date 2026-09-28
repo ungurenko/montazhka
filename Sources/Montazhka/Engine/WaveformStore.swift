@@ -56,10 +56,7 @@ final class WaveformStore: @unchecked Sendable {
     // MARK: - Кэш
 
     private func cacheFileURL(for path: String) -> URL {
-        let attrs = try? FileManager.default.attributesOfItem(atPath: path)
-        let size = (attrs?[.size] as? Int) ?? 0
-        let mtime = (attrs?[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0
-        let key = "\(path)|\(size)|\(Int(mtime))"
+        let key = SourceFileFingerprint.key(for: path)
         let hash = SHA256.hash(data: Data(key.utf8)).hex
         return cacheDir.appendingPathComponent("\(hash).f32")
     }

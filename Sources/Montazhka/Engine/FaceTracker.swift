@@ -174,10 +174,7 @@ actor FaceTrackStore {
     }
 
     private func cacheURL(for source: URL) -> URL {
-        let attrs = try? FileManager.default.attributesOfItem(atPath: source.path)
-        let size = (attrs?[.size] as? NSNumber)?.int64Value ?? 0
-        let mtime = (attrs?[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0
-        let key = "faces-v1|\(source.path)|\(size)|\(Int(mtime))"
+        let key = "faces-v1|\(SourceFileFingerprint.key(for: source.path))"
         let hash = SHA256.hash(data: Data(key.utf8)).hex
         return cacheDir.appendingPathComponent("\(hash).json")
     }

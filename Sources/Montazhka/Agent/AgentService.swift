@@ -371,7 +371,7 @@ actor AgentService {
     func resource(uri: String, offset: Int? = nil, limit: Int? = nil) async throws -> String {
         guard uri.hasPrefix("montazhka://runs/"),
             let url = URL(string: uri), url.pathComponents.count >= 3,
-            let id = UUID(uuidString: url.host == "runs" ? url.pathComponents[1] : url.pathComponents[2])
+            let id = UUID(uuidString: url.pathComponents[1])
         else { throw AgentServiceError.invalidInput("Неверный адрес ресурса.") }
         let run = try await runs.load(id: id)
         let name = url.lastPathComponent

@@ -232,18 +232,15 @@ enum AgentCommand {
 
     /// Запрос фонового экспорта из аргументов MCP. `normalizeLoudness`/`burnSubtitles`
     /// не переданы — nil: как в настройках экспорта проекта.
-    static func mcpExportRequest(projectID: UUID, arguments: [String: AgentJSONValue]) -> AgentWorkerRequest {
-        func flag(_ key: String) -> Bool? {
-            if case .bool(let value)? = arguments[key] { value } else { nil }
-        }
-        func text(_ key: String) -> String? {
-            if case .string(let value)? = arguments[key] { value } else { nil }
-        }
+    static func mcpExportRequest(projectID: UUID, arguments: [String: Value]) -> AgentWorkerRequest {
         return .export(
-            projectID: projectID, outputPath: text("outputPath"), quality: text("quality") ?? "compact",
-            final: flag("final") ?? false, confirmFinal: flag("confirmFinal") ?? false,
-            overwrite: flag("overwrite") ?? false, normalizeLoudness: flag("normalizeLoudness"),
-            burnSubtitles: flag("burnSubtitles"))
+            projectID: projectID, outputPath: arguments["outputPath"]?.stringValue,
+            quality: arguments["quality"]?.stringValue ?? "compact",
+            final: arguments["final"]?.boolValue ?? false,
+            confirmFinal: arguments["confirmFinal"]?.boolValue ?? false,
+            overwrite: arguments["overwrite"]?.boolValue ?? false,
+            normalizeLoudness: arguments["normalizeLoudness"]?.boolValue,
+            burnSubtitles: arguments["burnSubtitles"]?.boolValue)
     }
 
     private static let usage =
@@ -353,10 +350,8 @@ private struct AgentMCPServer {
                 return .failure(command: "export", code: "INVALID_PROJECT_ID", message: "Нужен projectId.")
             }
             do {
-                let values = try JSONDecoder().decode(
-                    [String: AgentJSONValue].self, from: JSONEncoder().encode(arguments))
                 return try await AgentBackgroundJob.submit(
-                    AgentCommand.mcpExportRequest(projectID: id, arguments: values))
+                    AgentCommand.mcpExportRequest(projectID: id, arguments: arguments))
             } catch {
                 return .failure(command: "export", code: "JOB_START_FAILED", message: error.localizedDescription)
             }

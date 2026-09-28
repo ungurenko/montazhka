@@ -24,25 +24,6 @@ struct AIAgentTests {
     }
 
     @Test
-    func cliConfigurationsPreserveTheirExecutableWhenEffortChanges() {
-        let executable = URL(fileURLWithPath: "/usr/local/bin/codex")
-        let configuration = AIRequestConfiguration.codexCLI(
-            modelID: "gpt-test",
-            effort: nil,
-            executable: executable
-        ).withEffort("high")
-
-        guard case .codexCLI(let modelID, let effort, let configuredExecutable) = configuration
-        else {
-            Issue.record("Ожидалась конфигурация Codex CLI")
-            return
-        }
-        #expect(modelID == "gpt-test")
-        #expect(effort == "high")
-        #expect(configuredExecutable == executable)
-    }
-
-    @Test
     func cliAgentsDisableExternalTools() {
         let disabledFeatures = Set(CLIAgentClient.disabledCodexFeatures)
         #expect(disabledFeatures.contains("shell_tool"))

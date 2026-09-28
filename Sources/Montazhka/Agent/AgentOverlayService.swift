@@ -49,11 +49,11 @@ extension AgentService {
         let anchor = try Self.overlayAnchor(operation, clips: clips, words: words)
         let source = URL(fileURLWithPath: path).standardized
         let frame = await Self.frameSize(of: clips) ?? .zero
-        let (info, warnings) = try await OverlayMediaProbe.validate(source, projectFrame: frame)
+        let (duration, warnings) = try await OverlayMediaProbe.validate(source, projectFrame: frame)
         let payoffAt = placement.align == .payoff ? operation.payoffAt ?? 0 : 0
-        guard payoffAt <= info.duration else {
+        guard payoffAt <= duration else {
             throw AgentServiceError.invalidInput(
-                "addOverlay: payoffAt=\(payoffAt) дальше конца анимации (\(Self.rounded(info.duration)) с).")
+                "addOverlay: payoffAt=\(payoffAt) дальше конца анимации (\(Self.rounded(duration)) с).")
         }
         let id = UUID()
         let directory = store.directories.overlays
@@ -63,7 +63,7 @@ extension AgentService {
         project.overlays.append(
             ProjectOverlay(
                 id: id, media: MediaReference(url: copy), anchor: anchor, align: placement.align, payoffAt: payoffAt,
-                duration: info.duration, position: placement.position, scale: placement.scale))
+                duration: duration, position: placement.position, scale: placement.scale))
         return OverlayOpResult(copy: copy, warnings: warnings)
     }
 

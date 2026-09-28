@@ -82,9 +82,4 @@ final class WaveformAnalysisCoordinator {
         isDetecting = false
         hasResult = false
     }
-
-    func clearCandidates() {
-        candidates = []
-        hasResult = false
-    }
 }

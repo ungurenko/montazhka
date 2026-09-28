@@ -98,10 +98,7 @@ actor VoiceEnhanceStore {
     }
 
     private static func sourceHash(for path: String) -> String {
-        let attrs = try? FileManager.default.attributesOfItem(atPath: path)
-        let size = (attrs?[.size] as? Int) ?? 0
-        let mtime = (attrs?[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0
-        return hash("\(path)|\(size)|\(Int(mtime))")
+        hash(SourceFileFingerprint.key(for: path))
     }
 
     private static func hash(_ key: String) -> String {

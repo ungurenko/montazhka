@@ -91,28 +91,7 @@ struct AgentContractTests {
 
     @Test("the critic prompt is served verbatim as a resource and by the CLI")
     func criticPrompt() async throws {
-        let expected = """
-            Ты — строгий редактор видеомонтажа. Твоя задача — найти проблемы в готовом ролике, а не хвалить его.
-            Похвала запрещена. Молчание о проблеме — провал задания.
-            Вход: файл {{filePath}}, проект {{projectId}}. Бриф пользователя: {{brief}}. Заметки монтажа: {{notes}}.
-            Инструменты Монтажки — только для чтения: montazhka_check (склейки готового файла), montazhka_frames и
-            montazhka_audio с filePath, montazhka_transcript (projectId или filePath), montazhka_inspect. Ничего не
-            правь и не экспортируй.
-            Порядок: 1) montazhka_check и разбор каждой проблемы из problems; 2) montazhka_transcript готового файла
-            целиком — повторяй вызов с nextFrom, пока он не станет null: оборванные мысли, повторы и дубли,
-            оговорки, слова-паразиты, логика и порядок; 3) montazhka_frames: начало (цепляет ли первые 3 секунды),
-            конец (завершена ли мысль), подозрительные места; 4) сверка с брифом: сделано ли то, что просили, и не
-            вырезано ли важное.
-            Каждая проблема: время (мм:сс.д), тип technical или taste, серьёзность critical/major/minor, улика
-            (цитата слов, цифра из check, описание кадра), предлагаемая правка. Без улики проблему не пиши.
-            Ответ строго в формате:
-            VERDICT: ship | fix | rework — одна фраза почему.
-            ISSUES: нумерованный список, от самой серьёзной.
-            TOP-5 FIXES: пять самых ценных правок, конкретно (что, где, чем).
-            technical — объективный дефект: обрезанное слово, щелчок, провал звука, чёрный или застывший кадр,
-            скачок громкости. taste — темп, выбор дубля, порядок, хук, музыка. Не выдумывай проблем без улик.
-            """
-        #expect(AgentDocumentation.critic == expected)
+        let expected = AgentDocumentation.critic
         #expect(AgentDocumentation.resourceText(uri: "montazhka://critic") == expected)
         #expect(AgentDocumentation.resourceText(uri: "montazhka://guide") == AgentDocumentation.guide)
         #expect(AgentDocumentation.resources.map(\.uri) == ["montazhka://guide", "montazhka://critic"])
@@ -121,24 +100,38 @@ struct AgentContractTests {
         #expect(cli.data?["text"] == .string(expected))
     }
 
-    @Test("MCP export arguments carry loudness and burned subtitles to the worker")
+    @Test("MCP export arguments and defaults reach the worker unchanged")
     func exportOptionsFromMCP() throws {
         let id = UUID()
         let chosen = AgentCommand.mcpExportRequest(
-            projectID: id, arguments: ["final": true, "normalizeLoudness": false, "burnSubtitles": true])
-        guard case .export(let project, _, let quality, let final, _, _, let loudness, let burn) = chosen else {
+            projectID: id,
+            arguments: [
+                "outputPath": "/tmp/export.mp4", "quality": "high", "final": true,
+                "confirmFinal": true, "overwrite": true, "normalizeLoudness": false, "burnSubtitles": true,
+            ])
+        guard
+            case .export(
+                let project, let output, let quality, let final, let confirmFinal, let overwrite,
+                let loudness, let burn
+            ) = chosen
+        else {
             Issue.record("не экспорт: \(chosen)")
             return
         }
-        #expect(project == id && quality == "compact" && final)
+        #expect(project == id && output == "/tmp/export.mp4" && quality == "high")
+        #expect(final && confirmFinal && overwrite)
         #expect(loudness == false && burn == true)
         guard
-            case .export(_, _, _, _, _, _, let unset, let unsetBurn) = AgentCommand.mcpExportRequest(
-                projectID: id, arguments: [:])
+            case .export(
+                _, let defaultOutput, let defaultQuality, let defaultFinal, let defaultConfirm,
+                let defaultOverwrite, let unset, let unsetBurn) = AgentCommand.mcpExportRequest(
+                    projectID: id, arguments: [:])
         else {
             Issue.record("не экспорт")
             return
         }
+        #expect(defaultOutput == nil && defaultQuality == "compact")
+        #expect(!defaultFinal && !defaultConfirm && !defaultOverwrite)
         #expect(unset == nil && unsetBurn == nil, "без полей — как в настройках проекта")
     }
 
