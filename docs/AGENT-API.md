@@ -295,3 +295,15 @@ Parakeet Core ML-модель в известной папке использу�
 - `montazhka_check` готового MP4 разобран: каждая запись `problems` проверена или исправлена.
 - Критик (`montazhka://critic`) отработал: вердикт `ship` или три круга, вкусовые замечания показаны пользователю.
 - Исходные видео не изменились.
+
+## Source analysis and final assembly
+
+`montazhka agent analyze-source --file <source> --output <report.json> --vad --ocr` writes local Silero speech intervals and sampled Apple Vision privacy candidates. The first VAD installation needs `--confirm-model-download`. OCR reports only categories, confidence, times and normalized boxes (bottom-left origin); recognized credentials are never serialized. Sampled OCR does not prove privacy. VAD boundaries are guards, not cut points.
+
+`doctor.features` exposes `source-analysis-v1`, `cover-overlay`, `freeze-tail`, `expected-timeline`; `runtimeIdentity` lets a pipeline invalidate artifacts after updating the executable. `inspect` includes `timeline`, `exportFingerprint`, stable clip `id` and `sourceId`.
+
+`apply-edits`: `addOverlay` accepts `mode: transparent | cover` (default transparent); cover requires `position: full`. `setFreezeTail {seconds: 0...5}` holds the last frame without replaying speech. `setMusic` also works for ordinary projects. These settings affect the export fingerprint and undo. Legacy projects keep zero tail and transparent overlays; default fields are omitted on encoding to preserve existing provenance.
+
+An operation may include `expectedTimeline` from `inspect`. The batch rejects a stale fingerprint while holding the project lock. Source-bound plans must first project their ranges against a fresh full inspect; repeated source ranges need the stable clip occurrence ID.
+
+`check --skip-loudness` / MCP `includeLoudness: false` skips the repeated whole-file loudness measurement on later report pages. The first page retains it. Word checks and all seam checks remain enabled. Full report collectors must follow every `nextFrom`, wait pending jobs, and independently transcribe the final file. The critic permits zero findings and explicitly reports whether it heard the supplied audio.

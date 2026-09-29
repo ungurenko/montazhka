@@ -143,7 +143,8 @@ enum CompositionBuilder {
         enhancedAudio: [String: URL] = [:],
         music: MusicInput? = nil,
         videoCopies: Int = 1,
-        overlays: [ResolvedOverlay] = []
+        overlays: [ResolvedOverlay] = [],
+        freezeTailSeconds: Double = 0
     ) async -> CompositionBuildResult {
         let composition = AVMutableComposition()
         let extraVideoTracks = (1..<max(1, videoCopies)).compactMap { _ in
@@ -243,6 +244,35 @@ enum CompositionBuilder {
             previousAudioInserted = audioInserted
             previousDuration = range.duration
             cursor = cursor + range.duration
+        }
+        if freezeTailSeconds.isFinite, freezeTailSeconds > 0, freezeTailSeconds <= 5,
+            let clip = clips.last, let geometry = segments.last,
+            let index = plan.clipSourceIndices.last, let source = loadedSources[index], let video = source.video
+        {
+            let fps = (try? await video.load(.nominalFrameRate)) ?? 30
+            let frameSeconds = min(clip.duration, 1 / Double(max(1, fps)))
+            let frame = CMTimeRange(
+                start: CMTime(seconds: max(clip.start, clip.end - frameSeconds), preferredTimescale: 60_000),
+                duration: CMTime(seconds: frameSeconds, preferredTimescale: 60_000))
+            let tail = CMTime(seconds: freezeTailSeconds, preferredTimescale: 60_000)
+            do {
+                for track in [videoTrack] + extraVideoTracks {
+                    // Повтор кадра с обычным шагом, без растяжения sample: writer иначе
+                    // получает непредсказуемую длительность последнего H.264 кадра.
+                    var position = cursor
+                    while position < cursor + tail {
+                        let step = CMTimeMinimum(frame.duration, cursor + tail - position)
+                        try track.insertTimeRange(
+                            CMTimeRange(start: frame.start, duration: step), of: video, at: position)
+                        position = position + step
+                    }
+                }
+                segments.append(
+                    VideoSegmentGeometry(
+                        timeRange: CMTimeRange(start: cursor, duration: tail),
+                        naturalSize: geometry.naturalSize, preferredTransform: geometry.preferredTransform))
+                cursor = cursor + tail
+            } catch { warnings.append(.videoInsertFailed(source.name)) }
         }
         let overlayTracks = await addOverlayTracks(overlays, to: composition, warnings: &warnings)
 

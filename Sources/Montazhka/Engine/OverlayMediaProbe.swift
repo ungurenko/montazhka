@@ -26,7 +26,9 @@ enum OverlayMediaProbe {
         let containsAlpha: Bool
     }
 
-    static func validate(_ url: URL, projectFrame: CGSize) async throws -> (duration: Double, warnings: [String]) {
+    static func validate(_ url: URL, projectFrame: CGSize, mode: OverlayMode = .transparent) async throws -> (
+        duration: Double, warnings: [String]
+    ) {
         guard FileManager.default.fileExists(atPath: url.path) else {
             throw AgentServiceError.invalidInput(
                 "Файл анимации не найден: \(url.path). Проверьте путь или отрендерьте анимацию заново.")
@@ -41,13 +43,15 @@ enum OverlayMediaProbe {
                 "Анимация длится \(seconds(video.duration)) с, а нужно от 0,2 до 60 с: "
                     + "поменяйте длину композиции HyperFrames и отрендерьте заново.")
         }
-        guard alphaCodecs.contains(video.codec) || video.containsAlpha else {
+        guard mode == .cover || alphaCodecs.contains(video.codec) || video.containsAlpha else {
             throw AgentServiceError.invalidInput(
                 "У файла \(url.lastPathComponent) (кодек \(fourCC(video.codec))) нет прозрачности: "
                     + "фон непрозрачный — анимация закроет видео. Чтобы получить ProRes 4444 "
                     + "с прозрачным фоном, \(renderHint).")
         }
-        guard try middleFrameHasTransparency(asset: asset, track: video.track, duration: video.duration) else {
+        guard
+            try mode == .cover || middleFrameHasTransparency(asset: asset, track: video.track, duration: video.duration)
+        else {
             throw AgentServiceError.invalidInput(
                 "Фон непрозрачный — анимация закроет видео, рендерьте с прозрачным фоном.")
         }

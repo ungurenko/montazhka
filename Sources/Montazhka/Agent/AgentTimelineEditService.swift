@@ -38,6 +38,8 @@ struct AgentEditOperation: Codable, Sendable {
     var position: String?
     var scale: Double?
     var overlay: String?
+    var mode: String?
+    var expectedTimeline: String?
 
     var isUndo: Bool { op == "undo" }
     var isWordDelete: Bool { op == "deleteWords" }
@@ -46,7 +48,9 @@ struct AgentEditOperation: Codable, Sendable {
     var isOverlayOp: Bool { Self.overlayOps.contains(op) }
     /// Операции, которые меняют не ленту, а текст расшифровки, оформление или анимации.
     var isProjectOp: Bool { op == "fixWords" || Self.draftOps.contains(op) || isOverlayOp }
-    static let draftOps: Set<String> = ["setHook", "setLayout", "setSubtitles", "zoom", "clearZooms", "setMusic"]
+    static let draftOps: Set<String> = [
+        "setHook", "setLayout", "setSubtitles", "zoom", "clearZooms", "setMusic", "setFreezeTail",
+    ]
     static let overlayOps: Set<String> = ["addOverlay", "removeOverlay", "clearOverlays"]
 
     init(op: String, steps: Int? = nil) {
@@ -104,6 +108,12 @@ extension AgentService {
             let loaded = try await store.loadWithRevision(id: projectID)
             var project = loaded.project
             let original = project
+            for operation in operations {
+                if let expected = operation.expectedTimeline, expected != AgentWordCuts.fingerprint(project.clips) {
+                    throw AgentServiceError.invalidInput(
+                        "Лента изменилась после подготовки edit-plan — пересчитайте команды.")
+                }
+            }
 
             // Исправления слов меняют общие файлы исходника и словарь, а не ленту: отдельным
             // вызовом, до любых записей — иначе ошибка следующей операции прятала бы их.
@@ -289,6 +299,29 @@ extension AgentService {
     private func applyDraftOp(
         _ operation: AgentEditOperation, to project: inout Project, clips: [Clip], words: [TranscriptWord]?
     ) throws {
+        if operation.op == "setFreezeTail" {
+            guard project.shorts == nil, let seconds = operation.seconds, seconds.isFinite, (0...5).contains(seconds)
+            else {
+                throw AgentServiceError.invalidInput("setFreezeTail: seconds — 0...5, только обычный проект.")
+            }
+            project.export.freezeTailSeconds = seconds
+            return
+        }
+        if operation.op == "setMusic", project.shorts == nil {
+            if let track = operation.track {
+                guard track == "none" || MusicLibrary.track(id: track) != nil else {
+                    throw AgentServiceError.invalidInput("setMusic: нет трека «\(track)». Список — в montazhka_doctor.")
+                }
+                project.music = ShortsDraftFactory.music(track: track, mood: nil, variant: 0)
+            }
+            if let volume = operation.volume {
+                guard volume.isFinite, (0...100).contains(volume) else {
+                    throw AgentServiceError.invalidInput("setMusic: volume — 0...100.")
+                }
+                project.music.volume = volume
+            }
+            return
+        }
         if operation.op == "setSubtitles", project.shorts == nil {
             project.export.burnSubtitles = operation.on == true
             return
@@ -399,6 +432,8 @@ extension AgentService {
                 let (clip, start) = pair
                 return .object([
                     "clip": .number(Double(index)),
+                    "id": .string(clip.id.uuidString),
+                    "sourceId": .string(clip.source.id.uuidString),
                     "timelineStart": .number(Self.rounded(start)),
                     "timelineEnd": .number(Self.rounded(start + clip.duration)),
                     "sourcePath": .string(clip.sourcePath),

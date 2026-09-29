@@ -83,14 +83,19 @@ actor MediaPipeline {
             enhancedAudio: request.project.voiceEnhance.enabled ? enhanced : [:],
             music: music,
             videoCopies: request.videoCopies,
-            overlays: isNormal ? availableOverlays(request.project, warnings: &warnings) : []
+            overlays: isNormal ? availableOverlays(request.project, warnings: &warnings) : [],
+            freezeTailSeconds: isNormal ? request.project.export.freezeTailSeconds : 0
         )
         warnings.append(contentsOf: built.warnings)
         CacheFileLease.attach(leases, to: built.composition)
         let subtitles = isNormal ? request.subtitleLayer : nil
         // Разные повороты и размеры исходников собираются по кускам (кроме черновика шортса:
         // его вертикальный кадр строит ShortsRenderer).
-        let segments = isNormal && built.hasMixedGeometry ? built.baseSegments : []
+        // Явная кадровая композиция заставляет reader выдавать кадры с обычной частотой
+        // и в растянутом хвосте; один растянутый sample writer заканчивает слишком рано.
+        let segments =
+            isNormal && (built.hasMixedGeometry || request.project.export.freezeTailSeconds > 0)
+            ? built.baseSegments : []
         var videoPlan: ProjectVideoPlan?
         if !built.overlayTracks.isEmpty || subtitles != nil || !segments.isEmpty {
             do {

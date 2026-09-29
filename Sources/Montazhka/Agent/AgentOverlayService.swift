@@ -46,10 +46,16 @@ extension AgentService {
             throw AgentServiceError.invalidInput("addOverlay: нужно поле file — .mov с прозрачным фоном.")
         }
         let placement = try Self.overlayPlacement(operation)
+        guard let mode = OverlayMode(rawValue: operation.mode ?? "transparent") else {
+            throw AgentServiceError.invalidInput("addOverlay: mode — transparent или cover.")
+        }
+        guard mode != .cover || placement.position == .full else {
+            throw AgentServiceError.invalidInput("addOverlay: cover требует position=full.")
+        }
         let anchor = try Self.overlayAnchor(operation, clips: clips, words: words)
         let source = URL(fileURLWithPath: path).standardized
         let frame = await Self.frameSize(of: clips) ?? .zero
-        let (duration, warnings) = try await OverlayMediaProbe.validate(source, projectFrame: frame)
+        let (duration, warnings) = try await OverlayMediaProbe.validate(source, projectFrame: frame, mode: mode)
         let payoffAt = placement.align == .payoff ? operation.payoffAt ?? 0 : 0
         guard payoffAt <= duration else {
             throw AgentServiceError.invalidInput(
@@ -63,7 +69,7 @@ extension AgentService {
         project.overlays.append(
             ProjectOverlay(
                 id: id, media: MediaReference(url: copy), anchor: anchor, align: placement.align, payoffAt: payoffAt,
-                duration: duration, position: placement.position, scale: placement.scale))
+                duration: duration, position: placement.position, scale: placement.scale, mode: mode))
         return OverlayOpResult(copy: copy, warnings: warnings)
     }
 
@@ -151,6 +157,7 @@ extension AgentService {
                         "payoffTimeline": item.overlay.align == .payoff
                             ? item.anchorTimeline.map { .number(Self.rounded($0)) } ?? .null : .null,
                         "position": .string(item.overlay.position.rawValue),
+                        "mode": .string(item.overlay.mode.rawValue),
                         "status": .string(item.status.rawValue),
                     ])
                 }),

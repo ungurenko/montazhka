@@ -223,18 +223,33 @@ public struct ExportPreferences: Codable, Equatable, Sendable {
     public var normalizeLoudness: Bool = true
     /// Субтитры впечатаны в кадр.
     public var burnSubtitles: Bool = false
+    /// Последний кадр удерживается; голос не повторяется, музыка плавно заканчивается.
+    public var freezeTailSeconds: Double = 0
 
-    public init(normalizeLoudness: Bool = true, burnSubtitles: Bool = false) {
+    public init(normalizeLoudness: Bool = true, burnSubtitles: Bool = false, freezeTailSeconds: Double = 0) {
         self.normalizeLoudness = normalizeLoudness
         self.burnSubtitles = burnSubtitles
+        self.freezeTailSeconds = freezeTailSeconds.isFinite ? max(0, min(5, freezeTailSeconds)) : 0
     }
 
-    private enum CodingKeys: String, CodingKey { case normalizeLoudness, burnSubtitles }
+    private enum CodingKeys: String, CodingKey { case normalizeLoudness, burnSubtitles, freezeTailSeconds }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(normalizeLoudness, forKey: .normalizeLoudness)
+        try c.encode(burnSubtitles, forKey: .burnSubtitles)
+        if freezeTailSeconds != 0 { try c.encode(freezeTailSeconds, forKey: .freezeTailSeconds) }
+    }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         normalizeLoudness = try c.decodeIfPresent(Bool.self, forKey: .normalizeLoudness) ?? true
         burnSubtitles = try c.decodeIfPresent(Bool.self, forKey: .burnSubtitles) ?? false
+        freezeTailSeconds = try c.decodeIfPresent(Double.self, forKey: .freezeTailSeconds) ?? 0
+        guard freezeTailSeconds.isFinite, (0...5).contains(freezeTailSeconds) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .freezeTailSeconds, in: c, debugDescription: "freezeTailSeconds must be 0...5")
+        }
     }
 }
 
@@ -255,7 +270,7 @@ public struct Project: Identifiable, Codable, Equatable, Sendable {
     var overlays: [ProjectOverlay]
     /// Оформление черновика шортса; nil — обычный проект.
     var shorts: ShortsPresentation?
-    public var totalDuration: Double { clips.reduce(0) { $0 + $1.duration } }
+    public var totalDuration: Double { clips.reduce(0) { $0 + $1.duration } + export.freezeTailSeconds }
 
     public init(
         id: UUID = UUID(), schemaVersion: Int = Project.currentSchemaVersion,

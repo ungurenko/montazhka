@@ -13,6 +13,8 @@ struct AgentCheckRequest: Sendable {
     /// Сверять слова ленты со словами файла (нужна расшифровка файла).
     var words = true
     var confirmModelDownload = false
+    /// Полную громкость достаточно измерить на первой странице отчёта.
+    var includeLoudness = true
 }
 
 /// Дефект у склейки. Порядок случаев — порядок важности в ответе.
@@ -138,7 +140,7 @@ extension AgentService {
                                 "evidence": .string($0.evidence),
                             ])
                         }),
-                    "loudness": media.hasAudio ? await Self.fileLoudness(media.url) : .null,
+                    "loudness": media.hasAudio && request.includeLoudness ? await Self.fileLoudness(media.url) : .null,
                     "wordsCheck": words.status,
                     "imagePath": await cutsSheet(cuts.map(\.time), problems: problems, project: project, media: media),
                     "nextFrom": allCuts.count > cuts.count ? .number(Self.rounded(allCuts[cuts.count].time)) : .null,
@@ -149,6 +151,7 @@ extension AgentService {
     /// "confirmed" — в файле отпечаток этой версии проекта; "unconfirmed" — отпечатка нет, но длительность
     /// сходится; nil — файл собран из другой версии (лента, анимации, музыка, субтитры…).
     private static func fileMatch(_ media: CheckMedia, project: Project) async -> String? {
+        guard abs(media.seconds - project.totalDuration) <= checkDurationTolerance else { return nil }
         if let stamp = await ExportProvenance.read(url: media.url) {
             return stamp == ExportProvenance.fingerprint(for: project) ? "confirmed" : nil
         }

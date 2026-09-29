@@ -173,7 +173,7 @@ enum AgentToolCatalog {
                 + "громкости с уликами; LUFS, сетка кадров. filePath не нужен у черновика шортса. До 40 склеек, дальше nextFrom.",
             properties: [
                 "projectId": string, "filePath": string, "from": number, "to": number, "window": number,
-                "words": boolean, "confirmModelDownload": boolean,
+                "words": boolean, "confirmModelDownload": boolean, "includeLoudness": boolean,
             ], required: ["projectId"], readOnly: true),
     ]
 
@@ -225,7 +225,7 @@ enum AgentToolCatalog {
             "op": enumStrings([
                 "deleteWords", "delete", "split", "move", "trim", "insert", "fixWords", "setHook", "setLayout",
                 "setSubtitles", "zoom", "clearZooms", "setMusic", "note", "setNotes", "undo", "addOverlay",
-                "removeOverlay", "clearOverlays",
+                "removeOverlay", "clearOverlays", "setFreezeTail",
             ]),
             "ranges": array(
                 .object([
@@ -239,11 +239,11 @@ enum AgentToolCatalog {
                     "type": "object", "properties": .object(["from": integer, "to": integer]),
                     "required": .array([.string("from"), .string("to")]),
                 ])),
-            "timeline": string, "text": string, "remember": boolean,
+            "timeline": string, "expectedTimeline": string, "text": string, "remember": boolean,
             "layout": enumStrings(["face", "split", "fit"]), "on": boolean, "track": string, "volume": number,
             "file": string, "align": enumStrings(["payoff", "start"]), "payoffAt": number,
             "position": enumStrings(["full", "center", "topLeft", "topRight", "bottomLeft", "bottomRight"]),
-            "scale": number, "overlay": string,
+            "scale": number, "overlay": string, "mode": enumStrings(["transparent", "cover"]),
         ]),
         "required": .array([.string("op")]),
     ])

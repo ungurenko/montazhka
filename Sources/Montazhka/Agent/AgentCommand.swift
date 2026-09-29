@@ -34,6 +34,17 @@ enum AgentCommand {
             return .failure(command: "help", code: "MISSING_COMMAND", message: usage)
         }
         switch command {
+        case "analyze-source":
+            guard let path = value("--file", in: args), let output = value("--output", in: args) else {
+                return .failure(command: command, code: "INVALID_INPUT", message: "Нужны --file и --output.")
+            }
+            do {
+                try await SourceAnalysis.run(
+                    file: URL(fileURLWithPath: path), output: URL(fileURLWithPath: output),
+                    vad: args.contains("--vad"), ocr: args.contains("--ocr"),
+                    confirmDownload: args.contains("--confirm-model-download"))
+                return .success(command: command, data: ["path": .string(output)])
+            } catch { return await service.failure(command, error) }
         case "doctor": return await service.doctor()
         case "projects", "get-projects":
             return await service.projects(
@@ -110,7 +121,8 @@ enum AgentCommand {
                     projectID: id, filePath: value("--file", in: args), from: number("--from", in: args),
                     to: number("--to", in: args), window: number("--window", in: args),
                     words: !args.contains("--no-words"),
-                    confirmModelDownload: args.contains("--confirm-model-download")))
+                    confirmModelDownload: args.contains("--confirm-model-download"),
+                    includeLoudness: !args.contains("--skip-loudness")))
         case "critic-prompt":
             return .success(command: "critic_prompt", data: ["text": .string(AgentDocumentation.critic)])
         case "make-shorts":
@@ -401,7 +413,8 @@ private struct AgentMCPServer {
                     projectID: id, filePath: arguments["filePath"]?.stringValue, from: Self.double(arguments["from"]),
                     to: Self.double(arguments["to"]), window: Self.double(arguments["window"]),
                     words: arguments["words"]?.boolValue ?? true,
-                    confirmModelDownload: arguments["confirmModelDownload"]?.boolValue ?? false))
+                    confirmModelDownload: arguments["confirmModelDownload"]?.boolValue ?? false,
+                    includeLoudness: arguments["includeLoudness"]?.boolValue ?? true))
         case "montazhka_apply_edits":
             guard let id = arguments["projectId"]?.stringValue.flatMap(UUID.init(uuidString:)) else {
                 return .failure(command: "apply_edits", code: "INVALID_PROJECT_ID", message: "Нужен projectId.")
@@ -501,23 +514,29 @@ enum AgentDocumentation {
     /// Промпт критика. Подставьте {{filePath}}, {{projectId}}, {{brief}} (бриф пользователя дословно)
     /// и {{notes}} (заметки проекта) и отдайте субагенту со свежим контекстом.
     static let critic = """
-        Ты — строгий редактор видеомонтажа. Твоя задача — найти проблемы в готовом ролике, а не хвалить его.
-        Похвала запрещена. Молчание о проблеме — провал задания.
+        Ты — строгий редактор видеомонтажа. Оцени готовый ролик по брифу и проверяемым уликам.
+        Замечаний может быть ноль. Квоты правок нет; не придумывай проблемы ради списка.
         Вход: файл {{filePath}}, проект {{projectId}}. Бриф пользователя: {{brief}}. Заметки монтажа: {{notes}}.
         Инструменты Монтажки — только для чтения: montazhka_check (склейки готового файла), montazhka_frames и
         montazhka_audio с filePath, montazhka_transcript (projectId или filePath), montazhka_inspect. Ничего не
         правь и не экспортируй.
-        Порядок: 1) montazhka_check и разбор каждой проблемы из problems; 2) montazhka_transcript готового файла
+        Порядок: 1) полный отчёт всех страниц montazhka_check и разбор каждой проблемы из problems;
+        готовый qa.json можно читать вместо повторных вызовов; 2) montazhka_transcript готового файла
         целиком — повторяй вызов с nextFrom, пока он не станет null: оборванные мысли, повторы и дубли,
         оговорки, слова-паразиты, логика и порядок; 3) montazhka_frames: начало (цепляет ли первые 3 секунды),
         конец (завершена ли мысль), подозрительные места; 4) сверка с брифом: сделано ли то, что просили, и не
         вырезано ли важное.
+        Первый редакторский проход полный. После исправлений используй изменённые окна с контекстом;
+        при изменении порядка, длительности или смысла перечитай связанные разделы. Технический отчёт
+        каждый раз охватывает весь финал. Прослушай аудиофрагменты, если среда даёт аудиовход;
+        иначе явно напиши «на слух не проверено». Уровни звука слуховую оценку не заменяют.
         Каждая проблема: время (мм:сс.д), тип technical или taste, серьёзность critical/major/minor, улика
         (цитата слов, цифра из check, описание кадра), предлагаемая правка. Без улики проблему не пиши.
         Ответ строго в формате:
         VERDICT: ship | fix | rework — одна фраза почему.
         ISSUES: нумерованный список, от самой серьёзной.
-        TOP-5 FIXES: пять самых ценных правок, конкретно (что, где, чем).
+        FIXES: только обоснованные правки (что, где, чем), допустимо «нет».
+        LISTENING: проверенные аудиофрагменты или «на слух не проверено».
         technical — объективный дефект: обрезанное слово, щелчок, провал звука, чёрный или застывший кадр,
         скачок громкости. taste — темп, выбор дубля, порядок, хук, музыка. Не выдумывай проблем без улик.
         """

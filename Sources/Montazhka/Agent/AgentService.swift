@@ -238,8 +238,18 @@ actor AgentService {
                 "modelPath": model.map { .string($0.path) } ?? .null,
                 "projectsDirectory": .string(store.projectsDir.path),
                 "catalogTokens": .number(Double(AgentToolCatalog.estimatedTokenCount)),
+                "features": .array(
+                    ["source-analysis-v1", "cover-overlay", "freeze-tail", "expected-timeline"].map { .string($0) }),
+                "runtimeIdentity": .string(Self.runtimeIdentity),
                 "music": .array(MusicLibrary.tracks.map(Self.musicData)),
             ])
+    }
+
+    private static var runtimeIdentity: String {
+        let path = Bundle.main.executableURL?.path ?? CommandLine.arguments[0]
+        let attrs = try? FileManager.default.attributesOfItem(atPath: path)
+        return
+            "\(AgentBuildInfo.version)|\(path)|\(attrs?[.size] ?? 0)|\(attrs?[.modificationDate] ?? Date.distantPast)"
     }
 
     /// Трек для выбора музыки агентом: id и то, что известно о настроении.
@@ -317,6 +327,8 @@ actor AgentService {
             var data: [String: AgentJSONValue] = [
                 "projectId": .string(project.id.uuidString), "duration": .number(project.totalDuration),
                 "clipCount": .number(Double(project.clips.count)),
+                "timeline": .string(AgentWordCuts.fingerprint(project.clips)),
+                "exportFingerprint": .string(ExportProvenance.fingerprint(for: project)),
                 "missingFiles": .array(missing.sorted().map { .string($0) }),
                 "revision": .number(Double(await revisions.revision(of: project.id))),
                 "clips": clipsData(project, offset: start, limit: end - start),
