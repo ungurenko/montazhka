@@ -243,7 +243,7 @@ enum AgentToolCatalog {
             "layout": enumStrings(["face", "split", "fit"]), "on": boolean, "track": string, "volume": number,
             "file": string, "align": enumStrings(["payoff", "start"]), "payoffAt": number,
             "position": enumStrings(["full", "center", "topLeft", "topRight", "bottomLeft", "bottomRight"]),
-            "scale": number, "overlay": string, "mode": enumStrings(["transparent", "cover"]),
+            "scale": number, "overlay": string, "mode": enumStrings(["transparent", "cover"]), "snapToWord": boolean,
         ]),
         "required": .array([.string("op")]),
     ])

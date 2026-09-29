@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import UniformTypeIdentifiers
 
@@ -329,6 +330,9 @@ actor AgentService {
                 "clipCount": .number(Double(project.clips.count)),
                 "timeline": .string(AgentWordCuts.fingerprint(project.clips)),
                 "exportFingerprint": .string(ExportProvenance.fingerprint(for: project)),
+                "dependencyFingerprint": .string(
+                    await inputDependencyFingerprint(
+                        sources: uniqueSources(project.clips), project: project)),
                 "missingFiles": .array(missing.sorted().map { .string($0) }),
                 "revision": .number(Double(await revisions.revision(of: project.id))),
                 "clips": clipsData(project, offset: start, limit: end - start),
@@ -347,6 +351,40 @@ actor AgentService {
             data.merge(await overlaysData(project)) { _, new in new }
             return .success(command: "inspect", data: data)
         } catch { return failure("inspect", error) }
+    }
+
+    /// External inputs are not stored inside Project. Keep their separate version
+    /// so legacy export provenance remains compatible while pipeline caches are safe.
+    func inputDependencyFingerprint(sources: [MediaReference], project: Project? = nil) async -> String {
+        let transcripts = makeTranscriptStore()
+        var documents = [store.glossaryURL]
+        var media = sources.compactMap(\.resolvedURL)
+        for source in sources {
+            let cache = await transcripts.cacheURL(for: source)
+            documents += [cache, TranscriptCorrections.url(forTranscript: cache)]
+        }
+        if let project {
+            media += project.overlays.compactMap { $0.media.resolvedURL }
+            if project.music.enabled {
+                if let custom = project.music.customMedia?.resolvedURL {
+                    media.append(custom)
+                } else if let id = project.music.trackID, let track = MusicLibrary.track(id: id) {
+                    media.append(track.url)
+                }
+            }
+        }
+        let versions =
+            documents.map { url -> String in
+                let hash = (try? Data(contentsOf: url)).map { SHA256.hash(data: $0).hex } ?? "missing"
+                return "\(url.path)|\(hash)"
+            }
+            + media.map { url -> String in
+                let attributes = try? FileManager.default.attributesOfItem(atPath: url.path)
+                return
+                    "\(url.path)|\(attributes?[.size] ?? "missing")|\((attributes?[.modificationDate] as? Date)?.timeIntervalSince1970 ?? -1)"
+            }
+        let subtitles = project?.export.burnSubtitles == true ? String(reflecting: ShortsSubtitleSettings.saved()) : ""
+        return SHA256.hash(data: Data((versions.sorted().joined(separator: "\n") + subtitles).utf8)).hex
     }
 
     /// Оформление черновика шортса для агента; у обычного проекта — null.

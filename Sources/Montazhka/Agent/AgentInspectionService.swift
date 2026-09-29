@@ -231,6 +231,13 @@ extension AgentService {
                     recovery: "montazhka_transcript сам запускает её в фоне; дождитесь задачи в montazhka_get_job.")
             }
             var data = view.identity
+            let sources: [MediaReference]
+            if let id = request.target.projectID {
+                sources = uniqueSources(try await store.load(id: id).clips)
+            } else {
+                sources = [MediaReference(path: Self.transcriptFilePath(request.target))]
+            }
+            data["dependencyFingerprint"] = .string(await inputDependencyFingerprint(sources: sources))
             if let query = request.query, !query.trimmingCharacters(in: .whitespaces).isEmpty {
                 data.merge(Self.transcriptSearch(query, words: view.words)) { _, new in new }
             } else {

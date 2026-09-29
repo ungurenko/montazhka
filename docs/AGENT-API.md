@@ -307,3 +307,8 @@ Parakeet Core ML-модель в известной папке использу�
 An operation may include `expectedTimeline` from `inspect`. The batch rejects a stale fingerprint while holding the project lock. Source-bound plans must first project their ranges against a fresh full inspect; repeated source ranges need the stable clip occurrence ID.
 
 `check --skip-loudness` / MCP `includeLoudness: false` skips the repeated whole-file loudness measurement on later report pages. The first page retains it. Word checks and all seam checks remain enabled. Full report collectors must follow every `nextFrom`, wait pending jobs, and independently transcribe the final file. The critic permits zero findings and explicitly reports whether it heard the supplied audio.
+### Pipeline cache and exact anchors
+
+`inspect.dependencyFingerprint` versions external transcripts, manual word corrections, glossary, source/overlay/music files, and burned-subtitle appearance separately from legacy `exportFingerprint`. Transcript pages expose their own `dependencyFingerprint`; reread cached pages after `fixWords`. Cache consumers must include these dependencies.
+
+`addOverlay` accepts `snapToWord: false` with `at` for exact timeline positioning (the opening uses zero). The default word snapping remains compatible. Freeze-tail holds the final base frame, active overlays and subtitle state, without repeating speech. Saved projects use schema 3; older apps reject them to avoid silently discarding these settings.

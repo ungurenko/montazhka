@@ -254,7 +254,7 @@ public struct ExportPreferences: Codable, Equatable, Sendable {
 }
 
 public struct Project: Identifiable, Codable, Equatable, Sendable {
-    public static let currentSchemaVersion = 2
+    public static let currentSchemaVersion = 3
 
     public var id: UUID
     public var schemaVersion: Int

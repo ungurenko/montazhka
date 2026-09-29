@@ -9,6 +9,33 @@ import Testing
 /// ложится в кадр как задумано и в предпросмотре, и в готовом MP4.
 @Suite("Project picture: overlays and burned subtitles")
 struct ProjectVideoCompositionTests {
+    @Test("frozen tail preserves the last visible overlay in exported frames")
+    func frozenOverlay() async throws {
+        var scene = try await Scene.make()
+        defer { scene.remove() }
+        scene.project.overlays[0].anchor.sourceTime = 2
+        scene.project.export.freezeTailSeconds = 0.5
+        let result = await scene.pipeline.render(
+            MediaRenderRequest(project: scene.project, mode: .export, readyEnhancedAudio: [:]))
+        let plan = try #require(result.videoPlan)
+        let output = scene.root.appendingPathComponent("frozen.mp4")
+        try await export(result, videoComposition: plan.frameComposition, to: output)
+        let centre = CGPoint(x: 160, y: 90)
+        #expect(pixel(try await decodedFrame(output, at: 2.9), centre).isClose(to: .red, within: 20))
+        #expect(pixel(try await decodedFrame(output, at: 3.3), centre).isClose(to: .red, within: 20))
+        scene.project.export.burnSubtitles = true
+        let words = TranscriptTimelineMapper.make(
+            clips: scene.project.clips,
+            transcripts: [
+                TranscriptWord(sourceID: scene.base.id, text: "Финал", start: 2.5, end: 3, confidence: 1)
+            ]
+        ).words
+        let subtitled = try await scene.pipeline.framePlan(for: scene.project, words: words)
+        let last = try #require(subtitled.overlayAt?(2.98))
+        let tail = try #require(subtitled.overlayAt?(3.3))
+        #expect(last.dataProvider?.data == tail.dataProvider?.data)
+    }
+
     private struct RGB: CustomStringConvertible {
         let r: Int
         let g: Int

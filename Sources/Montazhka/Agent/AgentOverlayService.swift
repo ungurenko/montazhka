@@ -119,7 +119,10 @@ extension AgentService {
             throw AgentServiceError.invalidInput(
                 "addOverlay: нужен якорь — words [{from, to}] с timeline или at (секунды ленты).")
         }
-        guard let anchor = OverlayTimeline.anchor(atTimeline: at, clips: clips, words: map) else {
+        guard
+            let anchor = OverlayTimeline.anchor(
+                atTimeline: at, clips: clips, words: operation.snapToWord == false ? nil : map)
+        else {
             throw AgentServiceError.invalidInput("addOverlay: at=\(at) вне ленты.")
         }
         return anchor

@@ -101,7 +101,8 @@ actor MediaPipeline {
             do {
                 videoPlan = try await ProjectVideoComposition.make(
                     composition: built.composition, baseTrackID: built.baseVideoTrackID,
-                    overlays: built.overlayTracks, subtitles: subtitles, segments: segments)
+                    overlays: built.overlayTracks, subtitles: subtitles, segments: segments,
+                    freezeAt: built.freezeAt?.seconds)
             } catch {
                 Logger.export.error("Картинка проекта не собралась: \(String(reflecting: error), privacy: .public)")
                 warnings.append(.pictureFailed)

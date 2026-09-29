@@ -79,6 +79,42 @@ struct FinalAssemblyTests {
 
 @Suite("Pipeline safety contracts")
 struct PipelineSafetyTests {
+    @Test("external transcript corrections and overlay files invalidate dependencies")
+    func externalDependencies() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = root.appendingPathComponent("source.mov")
+        try await TestVideoFactory.make(segments: [(duration: 2, loud: true)], to: source)
+        var project = Project(name: "test", clips: [Clip(sourceURL: source, start: 0, end: 2)])
+        let service = AgentService(baseDirectory: root)
+        try await service.store.save(project)
+        let first = await service.inspect(projectID: project.id)
+        let glossaryURL = await service.store.glossaryURL
+        try Glossary(entries: [GlossaryEntry(match: ["old"], replace: "new")]).save(to: glossaryURL)
+        let second = await service.inspect(projectID: project.id)
+        #expect(first.data?["dependencyFingerprint"] != second.data?["dependencyFingerprint"])
+        let cache = await service.makeTranscriptStore().cacheURL(for: project.clips[0].source)
+        try FileManager.default.createDirectory(
+            at: cache.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try TranscriptCorrections.save([0: "corrected"], to: TranscriptCorrections.url(forTranscript: cache))
+        let third = await service.inspect(projectID: project.id)
+        #expect(second.data?["dependencyFingerprint"] != third.data?["dependencyFingerprint"])
+        let overlay = root.appendingPathComponent("overlay.mov")
+        try Data("one".utf8).write(to: overlay)
+        project.overlays = [
+            ProjectOverlay(
+                id: UUID(), media: MediaReference(url: overlay),
+                anchor: OverlayAnchor(sourceID: project.clips[0].source.id, sourceTime: 0, wordText: nil),
+                align: .start, payoffAt: 0, duration: 1, position: .full, scale: 1, mode: .cover)
+        ]
+        try await service.store.save(project)
+        let fourth = await service.inspect(projectID: project.id)
+        try Data("replacement".utf8).write(to: overlay)
+        let fifth = await service.inspect(projectID: project.id)
+        #expect(fourth.data?["dependencyFingerprint"] != fifth.data?["dependencyFingerprint"])
+    }
+
     @Test("a stale timeline rejects the whole batch without changing clips")
     func staleTimeline() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)

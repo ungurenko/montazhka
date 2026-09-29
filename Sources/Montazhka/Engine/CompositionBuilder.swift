@@ -58,6 +58,7 @@ struct CompositionBuildResult: @unchecked Sendable {
     var overlayTracks: [OverlayTrack] = []
     /// Куски основной дорожки по порядку ленты.
     var baseSegments: [VideoSegmentGeometry] = []
+    var freezeAt: CMTime?
 
     /// У исходников ленты разные поворот или размер: одного поворота дорожки на всё
     /// не хватает, кадр собирается по кускам.
@@ -245,12 +246,15 @@ enum CompositionBuilder {
             previousDuration = range.duration
             cursor = cursor + range.duration
         }
+        let pictureEnd = cursor
+        var freezeAt: CMTime?
         if freezeTailSeconds.isFinite, freezeTailSeconds > 0, freezeTailSeconds <= 5,
             let clip = clips.last, let geometry = segments.last,
             let index = plan.clipSourceIndices.last, let source = loadedSources[index], let video = source.video
         {
             let fps = (try? await video.load(.nominalFrameRate)) ?? 30
             let frameSeconds = min(clip.duration, 1 / Double(max(1, fps)))
+            freezeAt = cursor - CMTime(seconds: frameSeconds, preferredTimescale: 60_000)
             let frame = CMTimeRange(
                 start: CMTime(seconds: max(clip.start, clip.end - frameSeconds), preferredTimescale: 60_000),
                 duration: CMTime(seconds: frameSeconds, preferredTimescale: 60_000))
@@ -274,7 +278,9 @@ enum CompositionBuilder {
                 cursor = cursor + tail
             } catch { warnings.append(.videoInsertFailed(source.name)) }
         }
-        let overlayTracks = await addOverlayTracks(overlays, to: composition, warnings: &warnings)
+        let overlayTracks = await addOverlayTracks(
+            overlays, to: composition, pictureEnd: pictureEnd, freezeAt: freezeAt,
+            tailEnd: cursor, warnings: &warnings)
 
         var mixParameters: [AVAudioMixInputParameters] = []
         if let voice = voiceMixParameters(track: audioTrack, joints: voiceJoints) {
@@ -295,7 +301,8 @@ enum CompositionBuilder {
             }()
         return CompositionBuildResult(
             composition: composition, audioMix: audioMix, warnings: warnings,
-            baseVideoTrackID: videoTrack.trackID, overlayTracks: overlayTracks, baseSegments: segments)
+            baseVideoTrackID: videoTrack.trackID, overlayTracks: overlayTracks, baseSegments: segments,
+            freezeAt: freezeAt)
     }
 
     /// Каждая видимая анимация — своя дорожка: кусок файла с `mediaStart` длиной в окно
@@ -303,6 +310,7 @@ enum CompositionBuilder {
     /// короче, и за его концом дорожка держала бы последний кадр.
     private static func addOverlayTracks(
         _ overlays: [ResolvedOverlay], to composition: AVMutableComposition,
+        pictureEnd: CMTime, freezeAt: CMTime?, tailEnd: CMTime,
         warnings: inout [CompositionWarning]
     ) async -> [OverlayTrack] {
         var tracks: [OverlayTrack] = []
@@ -340,10 +348,30 @@ enum CompositionBuilder {
                 warnings.append(.overlayUnavailable(overlay.media.displayName))
                 continue
             }
+            var windowEnd = (at + piece.duration).seconds
+            if let freezeAt, resolved.window.from <= freezeAt.seconds,
+                windowEnd > freezeAt.seconds, tailEnd > pictureEnd
+            {
+                let fps = (try? await source.load(.nominalFrameRate)) ?? 30
+                let frame = CMTime(
+                    seconds: min(piece.duration.seconds, 1 / Double(max(1, fps))), preferredTimescale: timescale)
+                let sampleAt = CMTimeMinimum(
+                    piece.end - frame, piece.start + freezeAt - at)
+                do {
+                    var position = pictureEnd
+                    while position < tailEnd {
+                        let step = CMTimeMinimum(frame, tailEnd - position)
+                        try track.insertTimeRange(
+                            CMTimeRange(start: sampleAt, duration: step), of: source, at: position)
+                        position = position + step
+                    }
+                    windowEnd = tailEnd.seconds
+                } catch { warnings.append(.overlayUnavailable(overlay.media.displayName)) }
+            }
             tracks.append(
                 OverlayTrack(
                     overlayID: overlay.id, trackID: track.trackID,
-                    window: TimelineRange(from: resolved.window.from, to: (at + piece.duration).seconds),
+                    window: TimelineRange(from: resolved.window.from, to: windowEnd),
                     naturalSize: size, preferredTransform: transform, position: overlay.position,
                     scale: overlay.scale))
         }

@@ -39,6 +39,7 @@ struct AgentEditOperation: Codable, Sendable {
     var scale: Double?
     var overlay: String?
     var mode: String?
+    var snapToWord: Bool?
     var expectedTimeline: String?
 
     var isUndo: Bool { op == "undo" }

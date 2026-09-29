@@ -66,7 +66,7 @@ enum ProjectVideoComposition {
     /// как у первого куска, остальные вписываются в него целиком по центру, поля чёрные.
     static func make(
         composition: AVComposition, baseTrackID: CMPersistentTrackID, overlays: [OverlayTrack],
-        subtitles: ProjectSubtitleLayer?, segments: [VideoSegmentGeometry] = []
+        subtitles: ProjectSubtitleLayer?, segments: [VideoSegmentGeometry] = [], freezeAt: Double? = nil
     ) async throws -> ProjectVideoPlan? {
         guard !overlays.isEmpty || subtitles != nil || !segments.isEmpty else { return nil }
         guard let base = try await composition.loadTrack(withTrackID: baseTrackID) else { throw BuildError.noBaseVideo }
@@ -126,7 +126,13 @@ enum ProjectVideoComposition {
             OverlayFrameRenderer(
                 renderSize: renderSize, cues: $0.cues, appearance: $0.appearance, highlight: $0.highlight, hook: nil)
         }
-        return ProjectVideoPlan(frameComposition: frame, overlayImageAt: overlay.map { renderer in renderer.image })
+        let imageAt: (@Sendable (Double) -> CGImage?)?
+        if let renderer = overlay {
+            imageAt = { time in renderer.image(at: min(time, freezeAt ?? time)) }
+        } else {
+            imageAt = nil
+        }
+        return ProjectVideoPlan(frameComposition: frame, overlayImageAt: imageAt)
     }
 
     /// Шаг кадров ровно как у обычного экспорта (`videoComposition(withPropertiesOf:)`):

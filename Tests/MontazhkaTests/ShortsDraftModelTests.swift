@@ -23,7 +23,6 @@ struct ShortsDraftModelTests {
         let project = try JSONDecoder().decode(Project.self, from: Data(json.utf8))
         #expect(project.shorts == nil)
         #expect(project.schemaVersion == Project.currentSchemaVersion)
-        #expect(Project.currentSchemaVersion == 2)
     }
 
     @Test("a shorts draft survives saving and loading")

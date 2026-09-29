@@ -145,6 +145,24 @@ struct AgentOverlayTests {
         #expect(try await fixture.service.store.load(id: fixture.project.id).overlays.isEmpty)
     }
 
+    @Test("an exact opening anchor stays at zero before the first recognized word")
+    func exactOpeningAnchor() async throws {
+        let fixture = try await fixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let file = try await straightAlphaOverlay(in: fixture.root)
+        let data = try JSONSerialization.data(withJSONObject: [
+            [
+                "op": "addOverlay", "file": file.path,
+                "at": 0, "snapToWord": false,
+            ]
+        ])
+        let added = await fixture.service.applyEdits(
+            projectID: fixture.project.id, operations: try AgentEditOperation.decodeList(data))
+        #expect(added.ok)
+        let project = try await fixture.service.store.load(id: fixture.project.id)
+        #expect(project.overlays.first?.anchor.sourceTime == 0)
+    }
+
     @Test("deleting words before the anchor moves the animation; deleting the anchor word hides it with a warning")
     func anchorFollowsWordsAndWarnsWhenCut() async throws {
         let fixture = try await fixture()
