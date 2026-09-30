@@ -56,6 +56,8 @@ private struct CheckContext: Sendable {
     /// Склейка проекта без улучшения голоса и музыки: с ней сравнивается звук пропавшего слова.
     /// nil — сверки слов нет.
     let source: AVAsset?
+    /// Только исходники текущей страницы; освобождаются вместе с её контекстом.
+    var sourceAssets: [URL: AVURLAsset]
 }
 
 /// Что есть в файле: без звука или без картинки соответствующая проверка — null.
@@ -114,8 +116,12 @@ extension AgentService {
             let source: AVAsset? =
                 words.heard != nil && media.hasAudio
                 ? await CompositionBuilder.buildResult(clips: project.clips).composition : nil
-            let context = CheckContext(
-                media: media, file: asset, window: window, words: words, music: project.music.enabled, source: source)
+            var context = CheckContext(
+                media: media, file: asset, window: window, words: words, music: project.music.enabled, source: source,
+                sourceAssets: Dictionary(
+                    uniqueKeysWithValues: Set(cuts.flatMap { [$0.before.url, $0.after.url] }).map {
+                        ($0, $0 == media.url ? asset : AVURLAsset(url: $0))
+                    }))
 
             var results: [AgentJSONValue] = []
             var problems: [CheckProblem] = []
@@ -124,6 +130,8 @@ extension AgentService {
                 results.append(result)
                 problems += found
             }
+            // Исходники больше не нужны: освобождаем их до громкости и полноразмерных миниатюр.
+            context.sourceAssets.removeAll()
             problems.sort { ($0.priority, $0.time) < ($1.priority, $1.time) }
             return .success(
                 command: "check",
@@ -289,7 +297,7 @@ extension AgentService {
         let times = [max(0, cut.time - 0.08), min(max(0, context.media.seconds - 0.01), cut.time + 0.04)]
         let luma = try await SeamProbe.meanLuma(asset: context.file, times: times)
         let fileBlack = luma.map(SeamProbe.isBlack(meanLuma:))
-        let source = await sourceLuma(cut)
+        let source = await sourceLuma(cut, assets: context.sourceAssets)
         let black: Bool
         if let source {
             black = zip(fileBlack, source).contains { $0 && !SeamProbe.isBlack(meanLuma: $1) }
@@ -318,11 +326,17 @@ extension AgentService {
 
     /// Яркость исходника в те же моменты ленты: за 0,08 с до конца клипа перед склейкой и через
     /// 0,04 с от начала клипа после неё. nil — исходник не прочитать.
-    private static func sourceLuma(_ cut: CheckCut) async -> [Double]? {
+    private static func sourceLuma(_ cut: CheckCut, assets: [URL: AVURLAsset]) async -> [Double]? {
         let before = max(cut.before.start, cut.before.end - 0.08)
         let after = min(cut.after.end, cut.after.start + 0.04)
-        guard let first = try? await SeamProbe.meanLuma(asset: AVURLAsset(url: cut.before.url), times: [before]),
-            let second = try? await SeamProbe.meanLuma(asset: AVURLAsset(url: cut.after.url), times: [after]),
+        let beforeURL = cut.before.url, afterURL = cut.after.url
+        let beforeAsset = assets[beforeURL] ?? AVURLAsset(url: beforeURL)
+        if beforeURL == afterURL {
+            return try? await SeamProbe.meanLuma(asset: beforeAsset, times: [before, after])
+        }
+        guard let first = try? await SeamProbe.meanLuma(asset: beforeAsset, times: [before]),
+            let second = try? await SeamProbe.meanLuma(
+                asset: assets[afterURL] ?? AVURLAsset(url: afterURL), times: [after]),
             let beforeLuma = first.first, let afterLuma = second.first
         else { return nil }
         return [beforeLuma, afterLuma]

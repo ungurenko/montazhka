@@ -218,6 +218,24 @@ struct AgentCheckTests {
         #expect(!objects(response.data?["problems"]).contains { $0["kind"] == .string("black") })
     }
 
+    @Test("an unavailable source keeps null source brightness and the finished file remains checkable")
+    func unavailableSourceKeepsItsFallback() async throws {
+        let fixture = try await fixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let path = try await export(fixture)
+        try FileManager.default.removeItem(atPath: fixture.source.lastKnownPath)
+
+        let response = await fixture.service.check(request(fixture, file: path))
+
+        #expect(response.ok, "\(String(describing: response.error))")
+        let cuts = objects(response.data?["cuts"])
+        let cut = try #require(cuts.first)
+        let video = part(cut, "video")
+        #expect(video["sourceLumaBefore"] == .null)
+        #expect(video["sourceLumaAfter"] == .null)
+        #expect(video["black"] == .bool(false))
+    }
+
     @Test("a black frame introduced only at the cut is reported")
     func blackAtCutIsReported() async throws {
         let fixture = try await fixture()

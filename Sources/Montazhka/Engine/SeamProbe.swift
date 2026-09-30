@@ -294,27 +294,123 @@ enum SeamProbe {
     /// готового файла: AVAssetImageGenerator с композициями отдаёт на роликах с iPhone
     /// (HEVC, 60 к/с) чёрные кадры, а чтение показывает ровно то, что лежит в файле.
     static func meanLuma(asset: AVAsset, times: [Double]) async throws -> [Double] {
+        try await meanLuma(asset: asset, times: times, onReaderStart: {})
+    }
+
+    /// Локальный счётчик для повторяемых замеров; состояние читателей не разделяется между запросами.
+    static func meanLuma(asset: AVAsset, times: [Double], onReaderStart: () -> Void) async throws -> [Double] {
         guard let track = try await asset.loadTracks(withMediaType: .video).first else {
             throw SeamProbeError.noVideo
         }
-        return try times.map { try frameLuma(asset: asset, track: track, at: $0) }
+        var result: [Double] = []
+        var index = 0
+        while index < times.count {
+            if index + 1 < times.count, canReadPair(times[index], times[index + 1]) {
+                let pair = try? autoreleasepool {
+                    try pairedFrameLuma(
+                        asset: asset, track: track, first: times[index], second: times[index + 1],
+                        onReaderStart: onReaderStart)
+                }
+                if let pair {
+                    result += pair
+                } else {
+                    // Неоднозначная метка или ошибка декодера: сохраняем прежние кадры и порядок ошибок.
+                    for time in times[index...(index + 1)] {
+                        result.append(
+                            try autoreleasepool {
+                                try frameLuma(asset: asset, track: track, at: time, onReaderStart: onReaderStart)
+                            })
+                    }
+                }
+                index += 2
+            } else {
+                result.append(
+                    try autoreleasepool {
+                        try frameLuma(asset: asset, track: track, at: times[index], onReaderStart: onReaderStart)
+                    })
+                index += 1
+            }
+        }
+        return result
     }
 
-    private static func frameLuma(asset: AVAsset, track: AVAssetTrack, at time: Double) throws -> Double {
+    private static let frameReadWindow = CMTime(value: 1, timescale: 5)
+
+    private static func frameTime(_ seconds: Double) -> CMTime {
+        CMTime(seconds: max(0, seconds), preferredTimescale: 600)
+    }
+
+    private static func canReadPair(_ first: Double, _ second: Double) -> Bool {
+        guard first.isFinite, second.isFinite, second >= first, second - first <= frameReadWindow.seconds else {
+            return false
+        }
+        return CMTimeCompare(CMTimeSubtract(frameTime(second), frameTime(first)), frameReadWindow) <= 0
+    }
+
+    /// Храним только яркость предыдущего кадра: полноразмерные буферы пары не накапливаются.
+    private static func pairedFrameLuma(
+        asset: AVAsset, track: AVAssetTrack, first: Double, second: Double, onReaderStart: () -> Void
+    ) throws -> [Double]? {
+        let start = frameTime(first), target = frameTime(second)
+        let range = CMTimeRange(start: start, duration: frameReadWindow)
+        let (reader, output) = try frameReader(asset: asset, track: track, range: range, onReaderStart: onReaderStart)
+        defer { reader.cancelReading() }
+        guard let firstFrame = nextFrameLuma(output) else { return nil }
+        let firstLuma = firstFrame.luma
+        var previousTime = firstFrame.time
+        guard previousTime.isNumeric, CMTimeCompare(previousTime, start) == 0 else { return nil }
+        if CMTimeCompare(start, target) == 0 { return [firstLuma, firstLuma] }
+        var previousLuma = firstLuma
+        while let next = nextFrameLuma(output) {
+            let time = next.time
+            guard time.isNumeric, CMTimeCompare(time, previousTime) > 0 else { return nil }
+            // Отдельный reader подрезает PTS первого кадра под начало диапазона.
+            // Нужен кадр, который покрывает target, а не следующий кадр после target.
+            if CMTimeCompare(time, target) > 0 { return [firstLuma, previousLuma] }
+            let value = next.luma
+            if CMTimeCompare(time, target) == 0 { return [firstLuma, value] }
+            previousTime = time
+            previousLuma = value
+        }
+        // У последнего кадра длительность может быть неизвестна; проверит исходный одиночный путь.
+        return nil
+    }
+
+    private static func nextFrameLuma(_ output: AVAssetReaderTrackOutput) -> (time: CMTime, luma: Double)? {
+        autoreleasepool {
+            guard let sample = output.copyNextSampleBuffer(), let buffer = CMSampleBufferGetImageBuffer(sample),
+                let value = luma(of: buffer)
+            else { return nil }
+            return (CMSampleBufferGetPresentationTimeStamp(sample), value)
+        }
+    }
+
+    private static func frameLuma(
+        asset: AVAsset, track: AVAssetTrack, at time: Double, onReaderStart: () -> Void
+    ) throws -> Double {
+        let (reader, output) = try frameReader(
+            asset: asset, track: track,
+            range: CMTimeRange(start: frameTime(time), duration: frameReadWindow), onReaderStart: onReaderStart)
+        defer { reader.cancelReading() }
+        guard let sample = output.copyNextSampleBuffer(), let image = CMSampleBufferGetImageBuffer(sample),
+            let luma = luma(of: image)
+        else { throw SeamProbeError.noFrame(time) }
+        return luma
+    }
+
+    private static func frameReader(
+        asset: AVAsset, track: AVAssetTrack, range: CMTimeRange, onReaderStart: () -> Void
+    ) throws -> (AVAssetReader, AVAssetReaderTrackOutput) {
         let reader = try AVAssetReader(asset: asset)
         let output = AVAssetReaderTrackOutput(
             track: track, outputSettings: [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA])
         output.alwaysCopiesSampleData = false
         guard reader.canAdd(output) else { throw SeamProbeError.unreadable }
         reader.add(output)
-        reader.timeRange = CMTimeRange(
-            start: CMTime(seconds: max(0, time), preferredTimescale: 600), duration: CMTime(value: 1, timescale: 5))
+        reader.timeRange = range
         guard reader.startReading() else { throw SeamProbeError.unreadable }
-        defer { reader.cancelReading() }
-        guard let sample = output.copyNextSampleBuffer(), let image = CMSampleBufferGetImageBuffer(sample),
-            let luma = luma(of: image)
-        else { throw SeamProbeError.noFrame(time) }
-        return luma
+        onReaderStart()
+        return (reader, output)
     }
 
     /// Средняя яркость BGRA-кадра по сетке `lumaWidth` × (пропорциональная высота) точек.
