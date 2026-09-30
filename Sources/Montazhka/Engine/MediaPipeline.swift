@@ -18,6 +18,8 @@ struct MediaRenderRequest: Sendable {
     var videoCopies = 1
     /// Субтитры, впечатанные в кадр обычного проекта; nil — без них.
     var subtitleLayer: ProjectSubtitleLayer? = nil
+    /// Только обычный экспорт. Предпросмотр и шортсы сохраняют собственные размеры.
+    var exportQuality: ExportQuality? = nil
 }
 
 struct MediaRenderResult: @unchecked Sendable {
@@ -88,25 +90,15 @@ actor MediaPipeline {
         )
         warnings.append(contentsOf: built.warnings)
         CacheFileLease.attach(leases, to: built.composition)
-        let subtitles = isNormal ? request.subtitleLayer : nil
-        // Разные повороты и размеры исходников собираются по кускам (кроме черновика шортса:
-        // его вертикальный кадр строит ShortsRenderer).
-        // Явная кадровая композиция заставляет reader выдавать кадры с обычной частотой
-        // и в растянутом хвосте; один растянутый sample writer заканчивает слишком рано.
-        let segments =
-            isNormal && (built.hasMixedGeometry || request.project.export.freezeTailSeconds > 0)
-            ? built.baseSegments : []
-        var videoPlan: ProjectVideoPlan?
-        if !built.overlayTracks.isEmpty || subtitles != nil || !segments.isEmpty {
-            do {
-                videoPlan = try await ProjectVideoComposition.make(
-                    composition: built.composition, baseTrackID: built.baseVideoTrackID,
-                    overlays: built.overlayTracks, subtitles: subtitles, segments: segments,
-                    freezeAt: built.freezeAt?.seconds)
-            } catch {
-                Logger.export.error("Картинка проекта не собралась: \(String(reflecting: error), privacy: .public)")
-                warnings.append(.pictureFailed)
-            }
+        let videoPlan: ProjectVideoPlan?
+        do {
+            videoPlan = try await ProjectVideoComposition.prepare(built, for: request)
+        } catch is CancellationError {
+            videoPlan = nil
+        } catch {
+            videoPlan = nil
+            Logger.export.error("Картинка проекта не собралась: \(String(reflecting: error), privacy: .public)")
+            warnings.append(.pictureFailed)
         }
         return MediaRenderResult(
             composition: built.composition,

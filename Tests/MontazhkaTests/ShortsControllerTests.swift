@@ -8,6 +8,119 @@ import Testing
 @MainActor
 struct ShortsControllerTests {
     @Test
+    func appearanceChangesReuseReadyPlanWithFreshPlayerItems() async throws {
+        let root = temporaryDirectory("preview-reuse")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let url = root.appendingPathComponent("source.mov")
+        try await TestVideoFactory.make(segments: [(duration: 5, loud: false)], to: url)
+        let builder = ControlledShortsPreviewBuilder()
+        let words = [TranscriptWord(sourceID: UUID(), text: "Latest", start: 0, end: 1, confidence: 1)]
+        let controller = ShortsController(
+            sourceURL: url, store: ProjectStore(baseDirectory: root), openRouterKeyStore: EmptyOpenRouterKeyStore(),
+            previewBuilder: builder, preferences: ControllerPreferenceStore(), initialTranscriptWords: words)
+        controller.subtitlesEnabled = true
+        let item = candidate(title: "Reuse")
+        controller.candidates = [item]
+        controller.preview(item)
+        try await waitUntil { builder.pendingIDs.contains(item.id) }
+        builder.complete(item.id, with: url)
+        try await waitUntil { controller.player.currentItem != nil }
+        let first = controller.player.currentItem
+        for _ in 0..<10 {
+            controller.currentTime = 3
+            controller.subtitleHighlight.toggle()
+            #expect(controller.currentTime == 0)
+            #expect(controller.player.currentItem !== first)
+            #expect(controller.previewFrameSize == CGSize(width: 1080, height: 1920))
+            #expect(controller.currentPreviewSubtitle?.words == ["Latest"])
+            #expect(controller.currentPreviewSubtitle?.activeWordIndex == (controller.subtitleHighlight ? 0 : nil))
+        }
+        #expect(builder.callCount == 1)
+        #expect(builder.pendingIDs.isEmpty)
+        await controller.shutdown()
+    }
+
+    @Test
+    func pendingAppearanceChangesShareOneBuildAndGeometryInvalidates() async throws {
+        let root = temporaryDirectory("preview-pending-reuse")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let builder = ControlledShortsPreviewBuilder()
+        let controller = ShortsController(
+            sourceURL: root.appendingPathComponent("source.mov"), store: ProjectStore(baseDirectory: root),
+            openRouterKeyStore: EmptyOpenRouterKeyStore(), previewBuilder: builder,
+            preferences: ControllerPreferenceStore())
+        let item = candidate(title: "Pending")
+        controller.candidates = [item]
+        controller.preview(item)
+        try await waitUntil { builder.pendingIDs.contains(item.id) }
+        for _ in 0..<10 { controller.subtitlesEnabled.toggle() }
+        await Task.yield()
+        #expect(builder.callCount == 1)
+        builder.complete(item.id, with: root.appendingPathComponent("first.mov"))
+        try await waitUntil { controller.player.currentItem != nil }
+        controller.frameMode = .verticalFit
+        try await waitUntil { builder.callCount == 2 }
+        #expect(builder.requests[item.id]?.frameSettings.mode == .verticalFit)
+        builder.complete(item.id, with: root.appendingPathComponent("second.mov"))
+        try await waitUntil { currentAssetURL(controller) == root.appendingPathComponent("second.mov") }
+        await controller.shutdown()
+    }
+
+    @Test
+    func sourceFingerprintAndTimeMapChangesInvalidateThePlan() async throws {
+        let root = temporaryDirectory("preview-key")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let url = root.appendingPathComponent("source.mov")
+        try Data([0]).write(to: url)
+        let builder = ControlledShortsPreviewBuilder()
+        let controller = ShortsController(
+            sourceURL: url, store: ProjectStore(baseDirectory: root), openRouterKeyStore: EmptyOpenRouterKeyStore(),
+            previewBuilder: builder, preferences: ControllerPreferenceStore())
+        var item = candidate(title: "Key")
+        item.segments = [ShortsSegment(start: 0, end: 2), ShortsSegment(start: 3, end: 5)]
+        controller.candidates = [item]
+        controller.preview(item)
+        try await waitUntil { builder.callCount == 1 }
+        builder.complete(item.id, with: url)
+        try await waitUntil { controller.player.currentItem != nil }
+        controller.trimPauses.toggle()
+        try await waitUntil { builder.callCount == 2 }
+        #expect(builder.requests[item.id]?.timeMap.outputDuration == 5)
+        builder.complete(item.id, with: url)
+        try await waitUntil { controller.previewFrameSize != nil }
+        try Data([0, 1]).write(to: url)
+        controller.subtitleHighlight.toggle()
+        try await waitUntil { builder.callCount == 3 }
+        builder.complete(item.id, with: url)
+        try await waitUntil { controller.previewFrameSize != nil }
+        await controller.shutdown()
+    }
+
+    @Test
+    func failedBuildCanBeRetriedForTheSameKey() async throws {
+        let root = temporaryDirectory("preview-retry")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let builder = ControlledShortsPreviewBuilder()
+        let controller = ShortsController(
+            sourceURL: root.appendingPathComponent("source.mov"), store: ProjectStore(baseDirectory: root),
+            openRouterKeyStore: EmptyOpenRouterKeyStore(), previewBuilder: builder,
+            preferences: ControllerPreferenceStore())
+        let item = candidate(title: "Retry")
+        controller.preview(item)
+        try await waitUntil { builder.callCount == 1 }
+        builder.fail(item.id, with: ShortsVideoCompositionError.invalidVideoTrack)
+        try await waitUntil { controller.previewError != nil }
+        controller.preview(item)
+        try await waitUntil { builder.callCount == 2 }
+        builder.complete(item.id, with: root.appendingPathComponent("ready.mov"))
+        try await waitUntil { controller.player.currentItem != nil }
+        #expect(controller.previewError == nil)
+        await controller.shutdown()
+    }
+
+    @Test
     func controllersLoadAndSaveOnlyThroughInjectedPreferences() async throws {
         let root = temporaryDirectory("injected-preferences")
         defer { try? FileManager.default.removeItem(at: root) }
@@ -209,10 +322,12 @@ private final class ControllerPreferenceStore: PreferenceStoring, @unchecked Sen
 private final class ControlledShortsPreviewBuilder: ShortsPreviewBuilding {
     private var continuations: [UUID: CheckedContinuation<ShortsPreviewItem, Error>] = [:]
     private(set) var requests: [UUID: ShortsPreviewRequest] = [:]
+    private(set) var callCount = 0
 
     var pendingIDs: Set<UUID> { Set(continuations.keys) }
 
     func makeItem(for request: ShortsPreviewRequest) async throws -> ShortsPreviewItem {
+        callCount += 1
         requests[request.candidateID] = request
         return try await withCheckedThrowingContinuation { continuation in
             continuations[request.candidateID] = continuation

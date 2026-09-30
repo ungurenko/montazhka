@@ -20,14 +20,33 @@ struct LoudnessReport: Equatable, Sendable {
 enum LoudnessProbe {
     static let floorDB = -100.0
 
+    static func normalizedRange(total: Double, from: Double, to: Double) -> TimelineRange {
+        let lower = min(max(0, from), total)
+        return TimelineRange(from: lower, to: min(max(lower, to), total))
+    }
+
+    static func sourcePaths(clips: [Clip], range: TimelineRange) -> Set<String> {
+        var offset = 0.0
+        var paths = Set<String>()
+        for clip in clips {
+            defer { offset += clip.duration }
+            // A zero-length request can still contain a clipped pause at this point.
+            if offset < range.to, offset + clip.duration > range.from {
+                paths.insert(clip.sourcePath)
+            }
+        }
+        return paths
+    }
+
     static func measure(
         clips: [Clip], peaksFor: (String) -> [Float]?,
         from: Double, to: Double, buckets: Int,
         settings: DetectionSettings = DetectionSettings()
     ) -> LoudnessReport {
         let total = clips.reduce(0) { $0 + $1.duration }
-        let lower = min(max(0, from), total)
-        let upper = min(max(lower, to), total)
+        let range = normalizedRange(total: total, from: from, to: to)
+        let lower = range.from
+        let upper = range.to
         // Отрезок не короче одного окна волны (10 мс), иначе часть отрезков пустая.
         let windows = Int(((upper - lower) * WaveformStore.windowsPerSecond).rounded(.down))
         let count = max(1, min(200, buckets, windows))
@@ -59,9 +78,11 @@ enum LoudnessProbe {
         let levels = zip(energy, samples).map { sum, n in
             n == 0 ? floorDB : decibels(Float(sqrt(sum / Double(n))))
         }
-        let silences = SilenceDetector.findPauses(clips: clips, peaksFor: peaksFor, settings: settings)
-            .filter { $0.fullEnd > lower && $0.fullStart < upper }
-            .map { LoudnessReport.Silence(from: max(lower, $0.fullStart), to: min(upper, $0.fullEnd)) }
+        let silences = SilenceDetector.findPauses(
+            clips: clips, peaksFor: peaksFor, settings: settings, timelineRange: range
+        )
+        .filter { $0.fullEnd > lower && $0.fullStart < upper }
+        .map { LoudnessReport.Silence(from: max(lower, $0.fullStart), to: min(upper, $0.fullEnd)) }
         return LoudnessReport(
             from: lower, to: upper, bucketSeconds: bucketSeconds,
             levelsDB: levels, loudestDB: decibels(loudest), silences: silences)

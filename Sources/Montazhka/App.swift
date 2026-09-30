@@ -359,9 +359,17 @@ final class AppModel {
         projectOperationTask = Task { [weak self] in
             guard let self else { return }
             guard isCurrentProjectOperation(generation) else { return }
-            let controller = ShortsController(sourceURL: url, store: store)
+            let words: [TranscriptWord] =
+                UITestMode.isActive && seedUITestCandidate
+                ? ["Локальные", "данные", "без", "сети"].enumerated().map { index, text in
+                    TranscriptWord(
+                        sourceID: UUID(), text: text, start: Double(index) * 0.5,
+                        end: Double(index + 1) * 0.5, confidence: 1)
+                } : []
+            let controller = ShortsController(sourceURL: url, store: store, initialTranscriptWords: words)
             if seedUITestCandidate {
                 controller.candidates = [Self.uiTestShortCandidate]
+                if UITestMode.isActive { controller.subtitlesEnabled = true }
             }
             shorts = controller
             controller.prepare()

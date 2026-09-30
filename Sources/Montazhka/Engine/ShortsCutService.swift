@@ -273,16 +273,16 @@ actor ShortsCutService {
             lastError: proposalRun.lastError)
     }
 
-    private struct WindowRun<Value: Sendable>: Sendable {
+    struct WindowRun<Value: Sendable>: Sendable {
         let values: [Value?]
         let failed: Int
         let lastError: (any Error)?
     }
 
-    /// Окна независимы, поэтому опрашиваются пачками параллельно. Порядок
+    /// Окна независимы, поэтому свободный слот сразу получает следующее. Порядок
     /// результатов сохраняется по индексу окна, отмена пробрасывается наружу,
     /// а ошибки отдельных окон копятся — анализ переживает молчание одного.
-    private static func runWindows<Value: Sendable>(
+    static func runWindows<Value: Sendable>(
         count: Int,
         limit: Int,
         status: @escaping @Sendable (Int) async -> Void,
@@ -291,38 +291,49 @@ actor ShortsCutService {
         var values = [Value?](repeating: nil, count: count)
         var failed = 0
         var lastError: (any Error)?
-        let batchSize = max(1, limit)
+        var highestFailedIndex = -1
+        let concurrency = max(1, limit)
 
         await status(0)
-        for batchStart in stride(from: 0, to: count, by: batchSize) {
-            try Task.checkCancellation()
-            let batchEnd = min(batchStart + batchSize, count)
-            let results = await withTaskGroup(of: (Int, Result<Value, any Error>).self) { group in
-                for index in batchStart..<batchEnd {
-                    group.addTask {
-                        do { return (index, .success(try await work(index))) } catch {
-                            return (index, .failure(error))
-                        }
+        try await withThrowingTaskGroup(of: (Int, Result<Value, any Error>).self) { group in
+            var nextIndex = 0
+            var completed = 0
+            while true {
+                try Task.checkCancellation()
+                while nextIndex < count, nextIndex - completed < concurrency {
+                    let index = nextIndex
+                    guard
+                        group.addTaskUnlessCancelled(operation: {
+                            try Task.checkCancellation()
+                            do { return (index, .success(try await work(index))) } catch {
+                                return (index, .failure(error))
+                            }
+                        })
+                    else {
+                        throw CancellationError()
                     }
+                    nextIndex += 1
                 }
-                var collected: [(Int, Result<Value, any Error>)] = []
-                for await result in group { collected.append(result) }
-                return collected
-            }
-            for (index, result) in results.sorted(by: { $0.0 < $1.0 }) {
+                // Пополняем очередь до отчёта: медленный наблюдатель не держит свободный слот.
+                if completed > 0 { await status(completed) }
+                guard let (index, result) = try await group.next() else { break }
+                try Task.checkCancellation()
                 switch result {
                 case .success(let value):
                     values[index] = value
                 case .failure(let error):
                     if error is CancellationError { throw CancellationError() }
                     failed += 1
-                    lastError = error
+                    if index > highestFailedIndex {
+                        highestFailedIndex = index
+                        lastError = error
+                    }
                     Logger.network.error(
                         "Shorts: окно \(index + 1)/\(count) не ответило: \(error.localizedDescription, privacy: .public)"
                     )
                 }
+                completed += 1
             }
-            await status(batchEnd)
         }
         return WindowRun(values: values, failed: failed, lastError: lastError)
     }

@@ -9,7 +9,8 @@ extension EditorController {
     /// исходников; при неудаче отдаёт оригинальный звук и текст предупреждения.
     /// `videoComposition` — анимации; `overlay` — вшитые субтитры; nil — кадр как есть.
     func compositionForExport(
-        _ snapshot: Project, speechRanges: [TimelineRange]?, subtitleLayer: ProjectSubtitleLayer? = nil
+        _ snapshot: Project, speechRanges: [TimelineRange]?, subtitleLayer: ProjectSubtitleLayer? = nil,
+        exportQuality: ExportQuality? = nil
     ) async -> (
         composition: AVComposition,
         audioMix: AVAudioMix?,
@@ -18,7 +19,8 @@ extension EditorController {
         audioWarning: String?
     ) {
         let result = await renderComposition(
-            snapshot, mode: .export, speechRanges: speechRanges, subtitleLayer: subtitleLayer)
+            snapshot, mode: .export, speechRanges: speechRanges, subtitleLayer: subtitleLayer,
+            exportQuality: exportQuality)
         let warning =
             result.warnings.isEmpty
             ? nil
@@ -44,7 +46,8 @@ extension EditorController {
         step(.assembling)
         let burned = exported.export.burnSubtitles ? ProjectSubtitleLayer.saved(cues: speech.horizontalCues) : nil
         let result = await compositionForExport(
-            exported, speechRanges: speech.speechRanges, subtitleLayer: burned)
+            exported, speechRanges: speech.speechRanges, subtitleLayer: burned,
+            exportQuality: ExportRenderResolutionPolicy.requestedQuality(quality))
         // Речь распознана сейчас (или расшифровка сменилась) — предпросмотр собирается
         // заново: в нём появляются субтитры и музыка стихает под голосом.
         if exported.clips == project.clips, (speech.horizontalCues ?? []) != previewSubtitleCues {

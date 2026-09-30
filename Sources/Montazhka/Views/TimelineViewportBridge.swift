@@ -1,5 +1,51 @@
 import AppKit
+import Observation
 import SwiftUI
+
+/// Наблюдается только рисовальщиками, а не раскладкой всех клипов.
+@MainActor
+@Observable
+final class TimelineViewportState {
+    var bounds = CGRect(x: 0, y: 0, width: 800, height: 0)
+}
+
+enum TimelineDrawingRange {
+    static let overscan: CGFloat = 128
+
+    static func local(contentX: CGFloat, width: CGFloat, viewport: CGRect) -> Range<CGFloat> {
+        let lower = max(0, viewport.minX - contentX - overscan)
+        let upper = min(width, viewport.maxX - contentX + overscan)
+        return lower < upper ? lower..<upper : 0..<0
+    }
+}
+
+enum TimelineWaveformDrawing {
+    /// Шаг и начало сетки — прежние, даже когда рисуется только часть клипа.
+    static func path(clip: Clip, peaks: [Float], size: CGSize, range: Range<CGFloat>) -> Path {
+        guard size.width > 0, !peaks.isEmpty, !range.isEmpty else { return Path() }
+        let wps = WaveformStore.windowsPerSecond
+        let mid = size.height / 2
+        let step: CGFloat = 2
+        let secondsPerPixel = clip.duration / Double(size.width)
+        var x = floor(range.lowerBound / step) * step
+        var path = Path()
+        while x < min(size.width, range.upperBound) {
+            let from = clip.start + Double(x) * secondsPerPixel
+            let to = from + Double(step) * secondsPerPixel
+            let i0 = max(0, min(peaks.count - 1, Int(from * wps)))
+            let i1 = max(i0 + 1, min(peaks.count, Int(to * wps)))
+            var peak: Float = 0
+            for i in i0..<i1 where peaks[i] > peak { peak = peaks[i] }
+            let value = min(1.0, pow(Double(peak) * 4.0, 0.8))
+            let h = max(1, mid * CGFloat(value))
+            path.addRoundedRect(
+                in: CGRect(x: x, y: mid - h, width: 1.5, height: h * 2),
+                cornerSize: CGSize(width: 0.75, height: 0.75))
+            x += step
+        }
+        return path
+    }
+}
 
 enum TimelineViewportMath {
     static func clampedPixelsPerSecond(_ proposed: CGFloat) -> CGFloat {
@@ -43,8 +89,10 @@ enum TimelineViewportMath {
 
 @MainActor
 final class TimelineViewportProxy {
+    let drawingState = TimelineViewportState()
     private weak var scrollView: NSScrollView?
     private var boundsObserver: NSObjectProtocol?
+    private var frameObserver: NSObjectProtocol?
     private var programmaticScrollDepth = 0
     private var lastKnownOffset: CGFloat = 0
     var onManualScroll: (() -> Void)?
@@ -58,11 +106,25 @@ final class TimelineViewportProxy {
     }
 
     func attach(to scrollView: NSScrollView) {
+        drawingState.bounds = scrollView.contentView.bounds
         guard self.scrollView !== scrollView else { return }
         if let boundsObserver { NotificationCenter.default.removeObserver(boundsObserver) }
+        if let frameObserver { NotificationCenter.default.removeObserver(frameObserver) }
         self.scrollView = scrollView
         lastKnownOffset = scrollView.contentView.bounds.minX
         scrollView.contentView.postsBoundsChangedNotifications = true
+        scrollView.contentView.postsFrameChangedNotifications = true
+        frameObserver = NotificationCenter.default.addObserver(
+            forName: NSView.frameDidChangeNotification,
+            object: scrollView.contentView,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, let scrollView = self.scrollView else { return }
+                self.drawingState.bounds = scrollView.contentView.bounds
+                self.lastKnownOffset = scrollView.contentView.bounds.minX
+            }
+        }
         boundsObserver = NotificationCenter.default.addObserver(
             forName: NSView.boundsDidChangeNotification,
             object: scrollView.contentView,
@@ -70,10 +132,14 @@ final class TimelineViewportProxy {
         ) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self, let scrollView = self.scrollView else { return }
+                let oldSize = self.drawingState.bounds.size
+                let newSize = scrollView.contentView.bounds.size
+                let resized = abs(oldSize.width - newSize.width) > 0.25 || abs(oldSize.height - newSize.height) > 0.25
+                self.drawingState.bounds = scrollView.contentView.bounds
                 let offset = scrollView.contentView.bounds.minX
                 guard abs(offset - self.lastKnownOffset) > 0.25 else { return }
                 self.lastKnownOffset = offset
-                if self.programmaticScrollDepth == 0 { self.onManualScroll?() }
+                if self.programmaticScrollDepth == 0, !resized { self.onManualScroll?() }
             }
         }
     }
@@ -94,6 +160,7 @@ final class TimelineViewportProxy {
         programmaticScrollDepth += 1
         scrollView.contentView.scroll(to: origin)
         scrollView.reflectScrolledClipView(scrollView.contentView)
+        drawingState.bounds = scrollView.contentView.bounds
         lastKnownOffset = x
         programmaticScrollDepth -= 1
     }
@@ -110,6 +177,7 @@ final class TimelineViewportProxy {
     deinit {
         MainActor.assumeIsolated {
             if let boundsObserver { NotificationCenter.default.removeObserver(boundsObserver) }
+            if let frameObserver { NotificationCenter.default.removeObserver(frameObserver) }
         }
     }
 }
@@ -133,6 +201,11 @@ struct TimelineScrollResolver: NSViewRepresentable {
 
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
+            resolveScrollView()
+        }
+
+        override func layout() {
+            super.layout()
             resolveScrollView()
         }
 

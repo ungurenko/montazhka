@@ -200,23 +200,25 @@ struct TimelineView: View {
         let laneSpace = showsOverlayLane ? TimelineOverlayLane.height + laneSpacing : 0
 
         return VStack(alignment: .leading, spacing: laneSpacing) {
-            RulerView(duration: layout.duration, pps: pps)
-                .frame(width: width, height: rulerHeight)
-                .contentShape(Rectangle())
-                .gesture(scrubGesture)
-                .accessibilityElement()
-                .accessibilityLabel("Линейка времени")
-                .accessibilityHint("Увеличивай или уменьшай значение, чтобы перемещаться по видео")
-                .accessibilityAdjustableAction { direction in
-                    switch direction {
-                    case .increment:
-                        controller.seek(to: min(controller.duration, controller.currentTime + 1))
-                    case .decrement:
-                        controller.seek(to: max(0, controller.currentTime - 1))
-                    @unknown default:
-                        break
-                    }
+            RulerView(
+                duration: layout.duration, pps: pps, viewport: viewportProxy.drawingState, contentX: timelineInset
+            )
+            .frame(width: width, height: rulerHeight)
+            .contentShape(Rectangle())
+            .gesture(scrubGesture)
+            .accessibilityElement()
+            .accessibilityLabel("Линейка времени")
+            .accessibilityHint("Увеличивай или уменьшай значение, чтобы перемещаться по видео")
+            .accessibilityAdjustableAction { direction in
+                switch direction {
+                case .increment:
+                    controller.seek(to: min(controller.duration, controller.currentTime + 1))
+                case .decrement:
+                    controller.seek(to: max(0, controller.currentTime - 1))
+                @unknown default:
+                    break
                 }
+            }
 
             if showsOverlayLane {
                 TimelineOverlayLane(
@@ -328,6 +330,8 @@ struct TimelineView: View {
             originalClip: item.clip,
             width: geometry.width,
             height: clipHeight,
+            contentX: timelineInset + geometry.x,
+            viewport: viewportProxy.drawingState,
             selected: controller.selectedClipID == item.clip.id,
             waveforms: controller.waveforms,
             waveformVersion: controller.waveformVersion,
@@ -516,15 +520,21 @@ private struct TimelinePlayhead: View {
 private struct RulerView: View {
     let duration: Double
     let pps: CGFloat
+    let viewport: TimelineViewportState
+    let contentX: CGFloat
 
     var body: some View {
+        let bounds = viewport.bounds
         Canvas { context, size in
             guard duration > 0 else { return }
+            let range = TimelineDrawingRange.local(contentX: contentX, width: size.width, viewport: bounds)
+            guard !range.isEmpty else { return }
             // Шаг подписей: чтобы между ними было не меньше ~64 пикселей.
             let steps: [Double] = [0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600]
             let step = steps.first { CGFloat($0) * pps >= 64 } ?? 600
-            var t: Double = 0
-            while t <= duration {
+            var t = floor(Double(range.lowerBound / pps) / step) * step
+            let end = min(duration, Double(range.upperBound / pps))
+            while t <= end {
                 let x = CGFloat(t) * pps
                 context.fill(
                     Path(CGRect(x: x, y: size.height - 6, width: 1, height: 6)),
@@ -561,6 +571,8 @@ private struct ClipCell: View, Equatable {
     let originalClip: Clip
     let width: CGFloat
     let height: CGFloat
+    let contentX: CGFloat
+    let viewport: TimelineViewportState
     let selected: Bool
     let waveforms: WaveformStore
     let waveformVersion: Int
@@ -579,6 +591,7 @@ private struct ClipCell: View, Equatable {
         lhs.clip == rhs.clip
             && lhs.originalClip == rhs.originalClip
             && lhs.width == rhs.width
+            && lhs.contentX == rhs.contentX
             && lhs.selected == rhs.selected
             && lhs.waveformVersion == rhs.waveformVersion
             && lhs.isDragged == rhs.isDragged
@@ -591,8 +604,10 @@ private struct ClipCell: View, Equatable {
             RoundedRectangle(cornerRadius: Theme.radiusSmall, style: .continuous)
                 .fill(Theme.clipBackground)
 
-            WaveformCanvas(clip: clip, waveforms: waveforms, version: waveformVersion)
-                .padding(.vertical, 6)
+            WaveformCanvas(
+                clip: clip, waveforms: waveforms, version: waveformVersion, contentX: contentX, viewport: viewport
+            )
+            .padding(.vertical, 6)
 
             if width > 60 {
                 Text(clip.fileName)
@@ -796,9 +811,14 @@ private struct WaveformCanvas: View {
     let clip: Clip
     let waveforms: WaveformStore
     let version: Int
+    let contentX: CGFloat
+    let viewport: TimelineViewportState
 
     var body: some View {
+        let bounds = viewport.bounds
         Canvas { context, size in
+            let range = TimelineDrawingRange.local(contentX: contentX, width: size.width, viewport: bounds)
+            guard !range.isEmpty else { return }
             guard let peaks = waveforms.peaks(for: clip.sourcePath), !peaks.isEmpty else {
                 // Волна ещё считается — рисуем тонкую линию-заглушку.
                 let mid = size.height / 2
@@ -808,28 +828,9 @@ private struct WaveformCanvas: View {
                 )
                 return
             }
-            let wps = WaveformStore.windowsPerSecond
-            let mid = size.height / 2
-            let step: CGFloat = 2
-            let secondsPerPixel = clip.duration / Double(size.width)
-            var x: CGFloat = 0
-            var path = Path()
-            while x < size.width {
-                let from = clip.start + Double(x) * secondsPerPixel
-                let to = from + Double(step) * secondsPerPixel
-                let i0 = max(0, min(peaks.count - 1, Int(from * wps)))
-                let i1 = max(i0 + 1, min(peaks.count, Int(to * wps)))
-                var peak: Float = 0
-                for i in i0..<i1 where peaks[i] > peak { peak = peaks[i] }
-                let value = min(1.0, pow(Double(peak) * 4.0, 0.8))
-                let h = max(1, mid * CGFloat(value))
-                path.addRoundedRect(
-                    in: CGRect(x: x, y: mid - h, width: 1.5, height: h * 2),
-                    cornerSize: CGSize(width: 0.75, height: 0.75)
-                )
-                x += step
-            }
-            context.fill(path, with: .color(Theme.waveform))
+            context.fill(
+                TimelineWaveformDrawing.path(clip: clip, peaks: peaks, size: size, range: range),
+                with: .color(Theme.waveform))
         }
     }
 }

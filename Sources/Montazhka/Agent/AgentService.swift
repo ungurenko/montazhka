@@ -213,6 +213,7 @@ actor AgentService {
 
     init(
         baseDirectory: URL? = nil, runs suppliedRuns: AgentRunStore? = nil,
+        waveforms suppliedWaveforms: WaveformStore? = nil,
         startJob: @escaping AgentJobStarter = { try await AgentBackgroundJob.submit($0) }
     ) {
         store = ProjectStore(baseDirectory: baseDirectory)
@@ -221,7 +222,7 @@ actor AgentService {
             ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Montazhka", isDirectory: true)
         runs = suppliedRuns ?? AgentRunStore(baseDirectory: base.appendingPathComponent("AgentRuns", isDirectory: true))
-        waveforms = WaveformStore(cacheDir: store.waveformsDir)
+        waveforms = suppliedWaveforms ?? WaveformStore(cacheDir: store.waveformsDir)
         revisions = AgentRevisionStore(baseDirectory: base.appendingPathComponent("AgentRevisions", isDirectory: true))
         notes = AgentNotesStore(baseDirectory: base.appendingPathComponent("AgentNotes", isDirectory: true))
         self.startJob = startJob

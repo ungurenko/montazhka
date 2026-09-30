@@ -21,26 +21,30 @@ final class FrameOverlayBurner: @unchecked Sendable {
     }
 
     func burn(_ sample: CMSampleBuffer) -> CMSampleBuffer {
-        let time = CMSampleBufferGetPresentationTimeStamp(sample).seconds
-        guard let image = overlay(time) else { return sample }
-        guard let source = CMSampleBufferGetImageBuffer(sample), let target = makeBuffer(like: source) else {
-            didFail = true
-            return sample
+        // Колбэк reader может обработать много кадров до возврата в RunLoop.
+        // Освобождаем временные Core Image/AVFoundation объекты после каждого кадра.
+        autoreleasepool {
+            let time = CMSampleBufferGetPresentationTimeStamp(sample).seconds
+            guard let image = overlay(time) else { return sample }
+            guard let source = CMSampleBufferGetImageBuffer(sample), let target = makeBuffer(like: source) else {
+                didFail = true
+                return sample
+            }
+            CVBufferPropagateAttachments(source, target)
+            let base = CIImage(cvPixelBuffer: source)
+            let colorSpace =
+                CVBufferCopyAttachments(source, .shouldPropagate).flatMap {
+                    CVImageBufferCreateColorSpaceFromAttachments($0)?.takeRetainedValue()
+                } ?? CGColorSpace(name: CGColorSpace.itur_709)
+            context.render(
+                overlayImage(image, fitting: base.extent).composited(over: base), to: target, bounds: base.extent,
+                colorSpace: colorSpace)
+            guard let burned = Self.sample(with: target, timingOf: sample) else {
+                didFail = true
+                return sample
+            }
+            return burned
         }
-        CVBufferPropagateAttachments(source, target)
-        let base = CIImage(cvPixelBuffer: source)
-        let colorSpace =
-            CVBufferCopyAttachments(source, .shouldPropagate).flatMap {
-                CVImageBufferCreateColorSpaceFromAttachments($0)?.takeRetainedValue()
-            } ?? CGColorSpace(name: CGColorSpace.itur_709)
-        context.render(
-            overlayImage(image, fitting: base.extent).composited(over: base), to: target, bounds: base.extent,
-            colorSpace: colorSpace)
-        guard let burned = Self.sample(with: target, timingOf: sample) else {
-            didFail = true
-            return sample
-        }
-        return burned
     }
 
     /// Картинка надписей того же размера, что кадр; у одинаковых подряд — одна и та же.

@@ -165,8 +165,9 @@ extension AgentService {
                 throw AgentServiceError.invalidInput("Нужен projectId или filePath.")
             }
             guard !clips.isEmpty else { throw AgentServiceError.emptyProject }
-            for path in Set(clips.map(\.sourcePath)) { await waveforms.ensure(path: path) }
             let total = clips.reduce(0) { $0 + $1.duration }
+            let range = LoudnessProbe.normalizedRange(total: total, from: from ?? 0, to: to ?? total)
+            for path in LoudnessProbe.sourcePaths(clips: clips, range: range) { await waveforms.ensure(path: path) }
             let report = LoudnessProbe.measure(
                 clips: clips, peaksFor: { self.waveforms.peaks(for: $0) },
                 from: from ?? 0, to: to ?? total, buckets: buckets ?? 60, settings: settings)
@@ -311,8 +312,14 @@ extension AgentService {
         _ page: [(offset: Int, element: MappedTranscriptWord)], view: TranscriptView
     ) async -> [String] {
         var peaksBySource: [UUID: [Float]] = [:]
-        for clip in view.clips where peaksBySource[clip.source.id] == nil {
-            peaksBySource[clip.source.id] = await waveforms.ensure(path: clip.sourcePath)
+        let needed = Set(page.map { $0.element.sourceID })
+        var idsByPath: [String: Set<UUID>] = [:]
+        for clip in view.clips where needed.contains(clip.source.id) {
+            idsByPath[clip.sourcePath, default: []].insert(clip.source.id)
+        }
+        for (path, ids) in idsByPath {
+            let peaks = await waveforms.ensure(path: path)
+            for id in ids { peaksBySource[id] = peaks }
         }
         var lines: [String] = []
         var previous: MappedTranscriptWord?

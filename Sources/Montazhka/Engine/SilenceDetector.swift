@@ -51,7 +51,8 @@ enum SilenceDetector {
     static func findPauses(
         clips: [Clip],
         peaksFor: (String) -> [Float]?,
-        settings: DetectionSettings
+        settings: DetectionSettings,
+        timelineRange: TimelineRange? = nil
     ) -> [PauseCandidate] {
         var result: [PauseCandidate] = []
         var timelineOffset = 0.0
@@ -59,6 +60,11 @@ enum SilenceDetector {
         for clip in clips {
             if Task.isCancelled { return [] }
             defer { timelineOffset += clip.duration }
+            if let range = timelineRange,
+                !(timelineOffset < range.to && timelineOffset + clip.duration > range.from)
+            {
+                continue
+            }
             guard let peaks = peaksFor(clip.sourcePath), !peaks.isEmpty else { continue }
 
             let offset = timelineOffset - clip.start

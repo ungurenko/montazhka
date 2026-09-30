@@ -358,7 +358,7 @@ final class EditorController: ExportPreparing {
 
     func renderComposition(
         _ snapshot: Project, mode: MediaRenderMode, speechRanges: [TimelineRange]?,
-        subtitleLayer: ProjectSubtitleLayer? = nil
+        subtitleLayer: ProjectSubtitleLayer? = nil, exportQuality: ExportQuality? = nil
     ) async -> MediaRenderResult {
         let processesMusic = snapshot.music.enabled && snapshot.music.eqEnabled
         if processesMusic { musicProcessing = true }
@@ -367,7 +367,7 @@ final class EditorController: ExportPreparing {
             mode: mode,
             readyEnhancedAudio: enhancedAudioURLs,
             speechRanges: speechRanges,
-            subtitleLayer: subtitleLayer)
+            subtitleLayer: subtitleLayer, exportQuality: exportQuality)
         let result = await mediaPipeline.render(request)
         if processesMusic { musicProcessing = false }
         return result

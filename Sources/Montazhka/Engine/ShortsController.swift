@@ -32,6 +32,36 @@ struct ShortsPreviewItem {
     let frameSize: CGSize?
 }
 
+/// Только подготовленные данные; каждый перезапуск получает отдельный элемент плеера.
+@MainActor
+private struct ShortsPreviewPlan {
+    let asset: AVAsset
+    let audioMix: AVAudioMix?
+    let videoComposition: AVVideoComposition?
+    let frameSize: CGSize?
+
+    init(_ preview: ShortsPreviewItem) {
+        asset = preview.item.asset
+        audioMix = preview.item.audioMix?.copy() as? AVAudioMix
+        videoComposition = preview.item.videoComposition?.copy() as? AVVideoComposition
+        frameSize = preview.frameSize
+    }
+
+    func makeItem() -> ShortsPreviewItem {
+        let item = AVPlayerItem(asset: asset)
+        item.audioMix = audioMix
+        item.videoComposition = videoComposition
+        return ShortsPreviewItem(item: item, frameSize: frameSize)
+    }
+}
+
+private struct ShortsPreviewKey: Equatable {
+    let candidateID: UUID
+    let sourceFingerprint: String
+    let timeMap: ShortsTimeMap
+    let frameSettings: ShortsFrameSettings
+}
+
 @MainActor
 struct DefaultShortsPreviewBuilder: ShortsPreviewBuilding {
     func makeItem(for request: ShortsPreviewRequest) async throws -> ShortsPreviewItem {
@@ -175,6 +205,8 @@ final class ShortsController {
     @ObservationIgnored private let exportOperation = LatestOperation()
     @ObservationIgnored private let prepareOperation = LatestOperation()
     @ObservationIgnored private let previewOperation = LatestOperation()
+    @ObservationIgnored private var preparedPreview: (key: ShortsPreviewKey, plan: ShortsPreviewPlan)?
+    @ObservationIgnored private var pendingPreviewKey: ShortsPreviewKey?
     @ObservationIgnored private let seekOperation = LatestOperation()
     @ObservationIgnored private var sourceAccess: MediaAccessLease?
     @ObservationIgnored private var previewBoundary: Any?
@@ -229,11 +261,13 @@ final class ShortsController {
         openRouterKeyStore: any OpenRouterKeyStoring = OpenRouterKeyStore(),
         previewBuilder: any ShortsPreviewBuilding = DefaultShortsPreviewBuilder(),
         preferences: any PreferenceStoring = UserDefaultsPreferenceStore.standard,
-        activity: ActivityCenter = .shared
+        activity: ActivityCenter = .shared,
+        initialTranscriptWords: [TranscriptWord] = []
     ) {
         self.activity = activity
         let source = MediaReference(url: sourceURL)
         self.source = source
+        self.transcriptWords = initialTranscriptWords
         self.preferences = preferences
         count = ShortsCount.saved(in: preferences)
         subtitleSettings = ShortsSubtitleSettings.saved(in: preferences)
@@ -277,6 +311,8 @@ final class ShortsController {
         prepareOperation.cancel()
         aiConnection.shutdown()
         previewOperation.cancel()
+        preparedPreview = nil
+        pendingPreviewKey = nil
         seekOperation.cancel()
         sourceAccess = nil
         cancelPreviewStop()
@@ -459,6 +495,18 @@ final class ShortsController {
             timeMap: map,
             frameSettings: frameSettings
         )
+        let key = ShortsPreviewKey(
+            candidateID: candidate.id,
+            sourceFingerprint: SourceFileFingerprint.key(for: request.sourceURL.resolvingSymlinksInPath().path),
+            timeMap: map, frameSettings: request.frameSettings)
+        if pendingPreviewKey == key { return }
+        if let prepared = preparedPreview, prepared.key == key, player.currentItem?.status != .failed {
+            previewOperation.cancel()
+            pendingPreviewKey = nil
+            playPreview(prepared.plan.makeItem(), map: map)
+            return
+        }
+        pendingPreviewKey = key
         previewOperation.start { [weak self] token in
             guard let self else { return }
             let preview: ShortsPreviewItem
@@ -466,26 +514,34 @@ final class ShortsController {
                 preview = try await self.previewBuilder.makeItem(for: request)
                 try Task.checkCancellation()
             } catch is CancellationError {
+                if self.previewOperation.isCurrent(token) { self.pendingPreviewKey = nil }
                 return
             } catch {
                 guard self.previewOperation.isCurrent(token) else { return }
+                self.pendingPreviewKey = nil
                 self.previewError = UserFacingError.make(error, context: .preview)
                 return
             }
             guard self.previewOperation.isCurrent(token) else { return }
-            self.previewFrameSize = preview.frameSize
-            self.player.replaceCurrentItem(with: preview.item)
-            self.currentTime = 0
-            self.player.play()
-            self.isPlaying = true
-            let stop = NSValue(
-                time: CMTime(seconds: map.outputDuration, preferredTimescale: 600))
-            self.previewBoundary = self.player.addBoundaryTimeObserver(forTimes: [stop], queue: .main) { [weak self] in
-                MainActor.assumeIsolated {
-                    self?.player.pause()
-                    self?.isPlaying = false
-                    self?.cancelPreviewStop()
-                }
+            self.pendingPreviewKey = nil
+            let plan = ShortsPreviewPlan(preview)
+            self.preparedPreview = (key, plan)
+            self.playPreview(plan.makeItem(), map: map)
+        }
+    }
+
+    private func playPreview(_ preview: ShortsPreviewItem, map: ShortsTimeMap) {
+        previewFrameSize = preview.frameSize
+        player.replaceCurrentItem(with: preview.item)
+        currentTime = 0
+        player.play()
+        isPlaying = true
+        let stop = NSValue(time: CMTime(seconds: map.outputDuration, preferredTimescale: 600))
+        previewBoundary = player.addBoundaryTimeObserver(forTimes: [stop], queue: .main) { [weak self] in
+            MainActor.assumeIsolated {
+                self?.player.pause()
+                self?.isPlaying = false
+                self?.cancelPreviewStop()
             }
         }
     }
