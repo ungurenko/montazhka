@@ -54,8 +54,8 @@ struct ExportInput: @unchecked Sendable {
     }
 }
 
-/// Входы/выходы насосов перекодирования: колбэк каждого живёт на своей
-/// последовательной очереди, гонок между потоками нет.
+/// Входы/выходы насосов перекодирования: оба колбэка живут на общей
+/// последовательной очереди вместе с отменой reader.
 private struct VideoPumpIO: @unchecked Sendable {
     let videoOutput: AVAssetReaderVideoCompositionOutput
     let videoInput: AVAssetWriterInput
@@ -101,6 +101,7 @@ enum Transcoder {
         metadata: [AVMetadataItem] = [],
         progress: @escaping @Sendable (Double) -> Void
     ) async throws {
+        try Task.checkCancellation()
         var output = AtomicMediaOutput(destinationURL: url)
         defer { output.discard() }
         try await exportDirect(
@@ -208,6 +209,7 @@ enum Transcoder {
             audioInput = input
         }
 
+        try Task.checkCancellation()
         guard writer.startWriting() else {
             throw TranscodeError.writerFailed(writer.error)
         }
@@ -218,8 +220,11 @@ enum Transcoder {
         }
         writer.startSession(atSourceTime: .zero)
 
-        // Отмена: сбрасываем ридер — насосы получают nil и сворачиваются сами.
+        // Чтение обеих дорожек и системная отмена reader строго последовательны.
         nonisolated(unsafe) let cancelReader = reader
+        let cancellation = MediaReaderPumpQueue(label: "montazhka.transcode") {
+            cancelReader.cancelReading()
+        }
         let videoIO = VideoPumpIO(videoOutput: videoOutput, videoInput: videoInput)
         let audioIO = AudioPumpIO(audioOutput: audioOutput, audioInput: audioInput)
         // Надписи кладутся на кадры здесь же, одним проходом: сессия экспорта с Core Animation
@@ -232,7 +237,8 @@ enum Transcoder {
             await withTaskGroup(of: Void.self) { group in
                 group.addTask {
                     await pump(
-                        from: videoIO.videoOutput, to: videoIO.videoInput, label: "video", transform: transform
+                        from: videoIO.videoOutput, to: videoIO.videoInput, cancellation: cancellation,
+                        transform: transform
                     ) { time in
                         guard duration > 0 else { return }
                         progress(min(0.999, time.seconds / duration))
@@ -240,12 +246,12 @@ enum Transcoder {
                 }
                 if let audioOutput = audioIO.audioOutput, let audioInput = audioIO.audioInput {
                     group.addTask {
-                        await pump(from: audioOutput, to: audioInput, label: "audio", onSample: nil)
+                        await pump(from: audioOutput, to: audioInput, cancellation: cancellation, onSample: nil)
                     }
                 }
             }
         } onCancel: {
-            cancelReader.cancelReading()
+            cancellation.cancel()
         }
 
         if Task.isCancelled {
@@ -273,10 +279,11 @@ enum Transcoder {
     }
 
     /// Потоки ридер → писатель. Колбэк requestMediaDataWhenReady зовётся строго
-    /// последовательно на своей очереди — бокс хранит его рабочее состояние.
+    /// последовательно на общей очереди reader — бокс хранит состояние дорожки.
     private final class PumpState: @unchecked Sendable {
         var finished = false
         var lastReported = -1.0
+        var cancellationHandler: UUID?
     }
 
     /// Перекачка одного потока ридер → писатель.
@@ -286,37 +293,51 @@ enum Transcoder {
     private static func pump(
         from outputParam: AVAssetReaderOutput,
         to inputParam: AVAssetWriterInput,
-        label: String,
+        cancellation: MediaReaderPumpQueue,
         transform: (@Sendable (CMSampleBuffer) -> CMSampleBuffer)? = nil,
         onSample: (@Sendable (CMTime) -> Void)?
     ) async {
-        // Колбэк живёт на своей последовательной очереди — гонок нет, помечаем осознанно
+        // Колбэк и завершение по отмене живут на общей очереди reader.
         nonisolated(unsafe) let output = outputParam
         nonisolated(unsafe) let input = inputParam
-        let queue = DispatchQueue(label: "montazhka.transcode.\(label)")
+        let queue = cancellation.queue
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            let state = PumpState()
-            input.requestMediaDataWhenReady(on: queue) {
-                while input.isReadyForMoreMediaData {
+            queue.async {
+                let state = PumpState()
+                let finish: @Sendable () -> Void = {
                     guard !state.finished else { return }
-                    guard let sample = output.copyNextSampleBuffer() else {
-                        state.finished = true
-                        input.markAsFinished()
-                        continuation.resume()
-                        return
-                    }
-                    if let onSample {
-                        let time = CMSampleBufferGetPresentationTimeStamp(sample)
-                        if time.seconds - state.lastReported >= 0.25 {
-                            state.lastReported = time.seconds
-                            onSample(time)
+                    state.finished = true
+                    cancellation.removeHandler(state.cancellationHandler)
+                    input.markAsFinished()
+                    continuation.resume()
+                }
+                state.cancellationHandler = cancellation.onCancel(finish)
+                guard !state.finished else { return }
+                if cancellation.isCancelled {
+                    cancellation.stopOnQueue()
+                    return finish()
+                }
+                input.requestMediaDataWhenReady(on: queue) {
+                    while input.isReadyForMoreMediaData {
+                        guard !state.finished else { return }
+                        if cancellation.isCancelled {
+                            cancellation.stopOnQueue()
+                            return finish()
                         }
-                    }
-                    if !input.append(transform?(sample) ?? sample) {
-                        state.finished = true
-                        input.markAsFinished()
-                        continuation.resume()
-                        return
+                        guard let sample = output.copyNextSampleBuffer() else { return finish() }
+                        // Отмена могла прийти во время copyNextSampleBuffer.
+                        if cancellation.isCancelled {
+                            cancellation.stopOnQueue()
+                            return finish()
+                        }
+                        if let onSample {
+                            let time = CMSampleBufferGetPresentationTimeStamp(sample)
+                            if time.seconds - state.lastReported >= 0.25 {
+                                state.lastReported = time.seconds
+                                onSample(time)
+                            }
+                        }
+                        if !input.append(transform?(sample) ?? sample) { return finish() }
                     }
                 }
             }

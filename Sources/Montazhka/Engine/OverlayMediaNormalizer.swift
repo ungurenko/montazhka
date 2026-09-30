@@ -47,6 +47,7 @@ enum OverlayMediaNormalizer {
     static func normalize(
         _ source: URL, to destination: URL, isCancelled: @escaping @Sendable () -> Bool = { false }
     ) async throws {
+        try Task.checkCancellation()
         let name = source.lastPathComponent
         let asset = AVURLAsset(url: source)
         let video = try await loadVideo(of: asset, name: name)
@@ -143,6 +144,7 @@ enum OverlayMediaNormalizer {
                 pump.cancel()
             }
         } else {
+            reader.cancelReading()
             outcome = .failed(writeFailed)
         }
 
@@ -155,23 +157,19 @@ enum OverlayMediaNormalizer {
                 throw writeFailed
             }
         case .cancelled:
-            reader.cancelReading()
             writer.cancelWriting()
             throw CancellationError()
         case .readFailed:
             Logger.export.error("Overlay reader failed: \(String(describing: reader.error), privacy: .public)")
-            reader.cancelReading()
             writer.cancelWriting()
             throw unreadable(name)
         case .stalled:
-            reader.cancelReading()
             writer.cancelWriting()
             throw AgentServiceError.invalidInput(
                 "Подготовка анимации \(name) зависла: добавьте анимацию в проект ещё раз.")
         case .failed(let error):
             Logger.export.error(
                 "Overlay frame failed: \(String(describing: writer.error ?? error), privacy: .public)")
-            reader.cancelReading()
             writer.cancelWriting()
             throw error
         }
@@ -272,8 +270,8 @@ enum OverlayMediaNormalizer {
 
     /// Ридер → преобразование → писатель. Кадры и `continuation` живут только на `queue`
     /// (колбэк писателя), как в `Transcoder`: писатель трогают, лишь когда насос отдал итог.
-    /// Сторож тикает на своей очереди — чтение кадра может застрять в декодере и занять
-    /// очередь насоса. Общее с ним и с отменой задачи лежит под замком. Отсюда @unchecked Sendable.
+    /// Сторож тикает отдельно и лишь запрашивает остановку. Системная отмена ждёт
+    /// текущего чтения на очереди насоса; зависший декодер принудительно не прерываем.
     /// Только requestMediaDataWhenReady: ручной опрос isReadyForMoreMediaData виснет без RunLoop.
     private final class Pump: @unchecked Sendable {
         private enum StopReason: Sendable {
@@ -295,7 +293,8 @@ enum OverlayMediaNormalizer {
         private let adaptor: AVAssetWriterInputPixelBufferAdaptor
         private let converter: FrameConverter
         private let isCancelled: @Sendable () -> Bool
-        private let queue = DispatchQueue(label: "montazhka.overlay-normalizer")
+        private let cancellation: MediaReaderPumpQueue
+        private var queue: DispatchQueue { cancellation.queue }
         private let watchdogQueue = DispatchQueue(label: "montazhka.overlay-normalizer.watchdog")
         private let control = OSAllocatedUnfairLock(initialState: Control())
         /// Оба меняются только на `queue`.
@@ -308,6 +307,10 @@ enum OverlayMediaNormalizer {
             isCancelled: @escaping @Sendable () -> Bool
         ) {
             self.reader = reader
+            nonisolated(unsafe) let cancelReader = reader
+            cancellation = MediaReaderPumpQueue(label: "montazhka.overlay-normalizer") {
+                cancelReader.cancelReading()
+            }
             self.output = output
             self.input = input
             self.adaptor = adaptor
@@ -319,6 +322,9 @@ enum OverlayMediaNormalizer {
             await withCheckedContinuation { continuation in
                 queue.async {
                     self.continuation = continuation
+                    self.cancellation.onCancel { [self] in
+                        finish(stopReason?.outcome ?? .cancelled)
+                    }
                     // Задачу могли отменить ещё до старта: её `finish` тогда пришёл раньше нас.
                     if let stopReason = self.stopReason { return self.finish(stopReason.outcome) }
                     self.control.withLock { $0.lastProgress = .now() }
@@ -337,8 +343,7 @@ enum OverlayMediaNormalizer {
             control.withLock { $0.stopReason }
         }
 
-        /// Остановка снаружи: причину запоминаем, ридер отменяем сразу — это выводит насос
-        /// из чтения кадра, застрявшего в декодере, — а итог насос отдаёт на своей очереди.
+        /// Остановка снаружи только фиксирует причину и ставит отмену на очередь чтения.
         private func stop(_ reason: StopReason) {
             let isFirst = control.withLock { state in
                 guard state.stopReason == nil else { return false }
@@ -346,21 +351,22 @@ enum OverlayMediaNormalizer {
                 return true
             }
             guard isFirst else { return }
-            reader.cancelReading()
-            queue.async { self.finish(reason.outcome) }
+            cancellation.cancel()
         }
 
         private func feed() {
             while continuation != nil, input.isReadyForMoreMediaData {
                 if let stopReason { return finish(stopReason.outcome) }
                 if isCancelled() { return finish(.cancelled) }
+                if let stopReason { return finish(stopReason.outcome) }
                 guard let sample = output.copyNextSampleBuffer() else {
-                    // Ридер отменили снаружи: итог задаёт причина, а не статус ридера.
+                    // Запрос остановки задаёт итог, даже если чтение вернуло nil.
                     if let stopReason { return finish(stopReason.outcome) }
                     guard reader.status == .completed else { return finish(.readFailed) }
                     input.markAsFinished()
                     return finish(.completed)
                 }
+                if let stopReason { return finish(stopReason.outcome) }
                 // Служебные сэмплы без картинки пропускаем.
                 guard let frame = CMSampleBufferGetImageBuffer(sample) else { continue }
                 guard let converted = converter.convert(frame) else {
@@ -375,7 +381,7 @@ enum OverlayMediaNormalizer {
         }
 
         /// Отмена флагом и зависание замечаются, даже если писатель перестал звать колбэк
-        /// или чтение кадра застряло в декодере.
+        /// или чтение кадра застряло в декодере. Остановка дождётся возврата из чтения.
         private func startWatchdog(stallLimit: DispatchTimeInterval) {
             let timer = DispatchSource.makeTimerSource(queue: watchdogQueue)
             timer.schedule(deadline: .now() + .milliseconds(250), repeating: .milliseconds(250))
@@ -393,6 +399,12 @@ enum OverlayMediaNormalizer {
         private func finish(_ outcome: PumpOutcome) {
             guard let continuation else { return }
             self.continuation = nil
+            cancellation.removeHandlers()
+            if case .completed = outcome {
+                // Обычное завершение не отменяет reader.
+            } else {
+                cancellation.stopOnQueue()
+            }
             watchdog?.cancel()
             watchdog = nil
             continuation.resume(returning: outcome)

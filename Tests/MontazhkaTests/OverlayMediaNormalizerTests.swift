@@ -374,6 +374,21 @@ struct OverlayMediaNormalizerTests {
 
     // MARK: - Отмена
 
+    @Test("an already cancelled preparation leaves no file")
+    func taskCancelBeforeRun() async throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let input = directory.appendingPathComponent("input.mov")
+        try await writeOverlay(Self.sources[0], to: input)
+        let preparation = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            try await OverlayMediaNormalizer.normalize(input, to: directory.appendingPathComponent("prepared.mov"))
+        }
+        let result = await preparation.result
+        #expect(throws: CancellationError.self) { try result.get() }
+        #expect(try FileManager.default.contentsOfDirectory(atPath: directory.path) == ["input.mov"])
+    }
+
     /// Флаг «отменили» говорит «нет» при первом вопросе и «да» потом: подготовка обязана
     /// заметить это посреди записи, а не только после последнего кадра.
     @Test("cancelling through the flag mid-run stops early and leaves no file")
