@@ -62,11 +62,15 @@ struct FinalExportTests {
         let output = fixture.root.appendingPathComponent("ролик.mp4")
         let cues = [cue("Первая", 0.5, 2), cue("Хвост", 5.5, 7), cue("За концом", 6.5, 8)]
         let stages = StageRecorder()
+        let owner = UUID()
+        var exportJob = job(fixture.input, cues: cues, normalize: true)
+        exportJob.ownerProjectID = owner
 
         let report = try await FinalExport.run(
-            job(fixture.input, cues: cues, normalize: true), to: output, progress: { _ in },
+            exportJob, to: output, progress: { _ in },
             stage: { stages.append($0) })
 
+        #expect(await ExportProvenance.stamp(url: output)?.ownerProjectID == owner)
         let loudness = try #require(report.loudness)
         let integrated = try #require(loudness.integratedLUFS)
         #expect(report.normalized)
@@ -219,7 +223,7 @@ extension FinalExportTests {
             stage: { stage in
                 guard stage == .writing else { return }
                 let names = (try? FileManager.default.contentsOfDirectory(atPath: root.path)) ?? []
-                for name in names where name.hasPrefix(".ролик.montazhka-") && name.hasSuffix(".srt") {
+                for name in names where name.hasPrefix(".montazhka-") && name.hasSuffix(".srt") {
                     try? FileManager.default.removeItem(at: root.appendingPathComponent(name))
                 }
             })
@@ -227,6 +231,10 @@ extension FinalExportTests {
         #expect(report.subtitlesURL == nil)
         #expect(report.subtitlesSkippedReason?.hasPrefix("Субтитры не сохранились: ") == true)
         #expect(try String(contentsOf: subtitles, encoding: .utf8) == previous)
+        let retried = try await FinalExport.run(
+            job(fixture.input, cues: [cue("Повтор", 0, 1)], normalize: false), to: output, progress: { _ in })
+        #expect(retried.subtitlesURL == subtitles)
+        #expect(try String(contentsOf: subtitles, encoding: .utf8).contains("Повтор"))
     }
 
     @Test("a .srt that appears during the export and cannot be read is not replaced")

@@ -81,6 +81,29 @@ struct ProjectRevisionTests {
     }
 
     @MainActor
+    @Test("editing during reload preserves both the agent's and window's versions")
+    func editDuringReloadKeepsBothVersions() async throws {
+        let root = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let project = try await sharedProject(in: root)
+        let agent = ProjectStore(baseDirectory: root)
+        let window = BarrierRepository(ProjectStore(baseDirectory: root))
+        let controller = EditorController(
+            project: project, store: window, openRouterKeyStore: EmptyOpenRouterKeyStore())
+        var external = project
+        external.clips = [Clip(sourcePath: "/tmp/a.mov", start: 0, end: 4)]
+        try await agent.save(external)
+        window.afterRead = {
+            await MainActor.run { controller.renameProject("во время чтения") }
+        }
+        await controller.reloadChangedProject(lostLocalEdit: false)
+        #expect(try await agent.load(id: project.id).clips.map(\.end) == [4])
+        let copies = try await agent.listProjects().projects.filter { $0.id != project.id }
+        #expect(copies.contains { $0.name.hasPrefix("во время чтения") })
+        await controller.stop()
+    }
+
+    @MainActor
     @Test("quitting after an agent edit keeps the window's version as a recoverable copy")
     func terminationConflictKeepsCopy() async throws {
         let root = temporaryDirectory()

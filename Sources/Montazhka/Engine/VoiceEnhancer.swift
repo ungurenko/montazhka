@@ -124,6 +124,7 @@ enum VoiceEnhancer {
         renderLoop: while true {
             if isCancelled() { throw CancellationError() }
             let status = try engine.renderOffline(4096, to: buffer)
+            if let error = feeder.error { throw error }
             switch status {
             case .success:
                 // Обрезаем хвостовые нули: пишем не больше, чем реально пришло из исходника.
@@ -302,6 +303,7 @@ final class ReaderFeeder {
 
     /// Сколько настоящих (не добитых нулями) кадров уже отдано движку.
     private(set) var framesServed: AVAudioFramePosition = 0
+    private(set) var error: Error?
     var isExhausted: Bool { readerDone && leftoverOffset >= leftover.count }
 
     init(reader: AVAssetReader, output: AVAssetReaderTrackOutput, channels: Int) {
@@ -365,6 +367,9 @@ final class ReaderFeeder {
             leftover = data
             leftoverOffset = 0
             return true
+        }
+        if reader.status != .completed {
+            error = reader.error ?? VoiceEnhanceError.renderFailed
         }
         readerDone = true
         return false

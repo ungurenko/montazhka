@@ -2,6 +2,8 @@
 struct Generation {
     private var value = 0
 
+    var current: Int { value }
+
     mutating func advance() -> Int {
         value += 1
         return value

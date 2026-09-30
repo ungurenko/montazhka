@@ -28,6 +28,7 @@ struct FinalExportJob: @unchecked Sendable {
     /// Входы, которых склейка не читает напрямую (исходная музыка до эквалайзера и т. п.):
     /// поверх них, как и поверх файлов самой склейки, результат не пишется.
     var protectedInputs: [URL] = []
+    var ownerProjectID: UUID? = nil
 }
 
 /// Что стало со звуком и субтитрами готового файла.
@@ -69,7 +70,8 @@ enum FinalExport {
     static func run(
         _ job: FinalExportJob, to url: URL,
         progress: @escaping @Sendable (Double) -> Void,
-        stage: (@Sendable (FinalExportStage) -> Void)? = nil
+        stage: (@Sendable (FinalExportStage) -> Void)? = nil,
+        overwrite: Bool = true
     ) async throws -> FinalExportReport {
         // Входы проверяются до всей работы и ещё раз перед тем, как файл встанет на место.
         let inputs = job.protectedInputs + ExportDestinationGuard.compositionInputs(job.input.composition)
@@ -98,14 +100,15 @@ enum FinalExport {
         defer { video.discard() }
         tracker.begin(.writing)
         try await writeVideo(
-            job, input: input, subtitlesDigest: subtitles.pendingDigest, to: video.temporaryURL,
+            job, input: input, subtitlesDigest: subtitles.pendingDigest, previousSubtitles: ownedSubtitles,
+            to: video.temporaryURL,
             progress: { tracker.update($0) })
 
         tracker.begin(.verifying)
         let loudness = try? await LoudnessMeter.measure(url: video.temporaryURL, progress: { tracker.update($0) })
         try Task.checkCancellation()
         try ExportDestinationGuard.check(url, inputs: inputs)
-        try video.commit()
+        try video.commit(overwrite: overwrite)
         var warnings = subtitles.commit()
         tracker.update(1)
         let targetMet = mastered == nil ? nil : loudness.map(meetsTarget)
@@ -168,30 +171,30 @@ enum FinalExport {
     }
 
     private static func writeVideo(
-        _ job: FinalExportJob, input: ExportInput, subtitlesDigest: String?, to url: URL,
+        _ job: FinalExportJob, input: ExportInput, subtitlesDigest: String?, previousSubtitles: String?, to url: URL,
         progress: @escaping @Sendable (Double) -> Void
     ) async throws {
-        let metadata = ExportProvenance.metadataItems(fingerprint: job.projectFingerprint, subtitles: subtitlesDigest)
-        let quality: ExportQuality
+        let metadata = ExportProvenance.metadataItems(
+            fingerprint: job.projectFingerprint, subtitles: subtitlesDigest, previousSubtitles: previousSubtitles,
+            ownerProjectID: job.ownerProjectID)
+        let settings: Transcoder.Settings
         switch job.sizing {
-        case .settings(let settings):
-            try await Transcoder.export(
-                input: input, settings: settings, to: url, metadata: metadata, progress: progress)
-            return
-        case .composition where input.videoComposition != nil:
-            try await Transcoder.export(
-                composed: input, quality: job.quality, to: url, metadata: metadata, progress: progress)
-            return
+        case .settings(let explicit):
+            settings = explicit
         case .composition:
-            // Без своей композиции размер кадра задаёт качество.
-            quality = job.quality
-        case .quality(let sized):
-            quality = sized
+            if let dimensions = input.videoComposition?.renderSize {
+                settings = Transcoder.Settings(
+                    dimensions: dimensions, videoBitrate: job.quality.videoBitrate(forDimensions: dimensions),
+                    audioBitrate: job.quality.audioBitrate)
+            } else {
+                settings = try await Transcoder.settings(for: job.quality, input: input)
+            }
+        case .quality(let quality):
+            settings = try await Transcoder.settings(for: quality, input: input)
         }
-        // Размер считается по кадру самой склейки, без своей видеокомпозиции.
-        let base = ExportInput(composition: input.composition, audioMix: input.audioMix)
-        let settings = try await Transcoder.settings(for: quality, input: base)
-        try await Transcoder.export(input: input, settings: settings, to: url, metadata: metadata, progress: progress)
+        // FinalExport owns the transaction; the encoder writes its already-private temporary file.
+        try await Transcoder.writeTemporary(
+            input: input, settings: settings, to: url, metadata: metadata, progress: progress)
     }
 }
 
@@ -216,10 +219,10 @@ private struct SubtitleSidecar {
     /// Отпечаток .srt рядом с `video`, если его положил прошлый экспорт этого MP4 и его не правили.
     static func ownedDigest(video: URL) async -> String? {
         guard let data = FileManager.default.contents(atPath: SubRipWriter.url(forVideo: video).path),
-            let recorded = await ExportProvenance.stamp(url: video)?.subtitles
+            let recorded = await ExportProvenance.stamp(url: video)
         else { return nil }
         let digest = ExportProvenance.subtitlesDigest(data)
-        return digest == recorded ? digest : nil
+        return digest == recorded.subtitles || digest == recorded.previousSubtitles ? digest : nil
     }
 
     init(job: FinalExportJob, duration: Double, video: URL, ownedDigest: String?) {

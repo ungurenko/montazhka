@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 /// Безопасная запись медиафайла: незавершённый экспорт живёт во временном
@@ -14,21 +15,25 @@ struct AtomicMediaOutput {
         self.fileManager = fileManager
 
         let directory = destinationURL.deletingLastPathComponent()
-        let stem = destinationURL.deletingPathExtension().lastPathComponent
         let suffix = destinationURL.pathExtension
         let temporaryName =
             suffix.isEmpty
-            ? ".\(stem).montazhka-\(UUID().uuidString)"
-            : ".\(stem).montazhka-\(UUID().uuidString).\(suffix)"
+            ? ".montazhka-\(UUID().uuidString)"
+            : ".montazhka-\(UUID().uuidString).\(suffix)"
         temporaryURL = directory.appendingPathComponent(temporaryName)
     }
 
-    mutating func commit() throws {
+    mutating func commit(overwrite: Bool = true) throws {
         guard fileManager.fileExists(atPath: temporaryURL.path) else {
             throw CocoaError(.fileNoSuchFile)
         }
 
-        if fileManager.fileExists(atPath: destinationURL.path) {
+        if !overwrite {
+            // Exclusive rename installs the completed file atomically, including on external volumes.
+            guard Darwin.renamex_np(temporaryURL.path, destinationURL.path, UInt32(RENAME_EXCL)) == 0 else {
+                throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+            }
+        } else if fileManager.fileExists(atPath: destinationURL.path) {
             _ = try fileManager.replaceItemAt(
                 destinationURL,
                 withItemAt: temporaryURL,

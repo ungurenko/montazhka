@@ -69,8 +69,9 @@ extension AgentService {
                     quality: quality, normalizeLoudness: draft.export.normalizeLoudness,
                     projectFingerprint: ExportProvenance.fingerprint(for: draft),
                     subtitlesSkippedReason: cached == nil ? ExportSpeech.noTranscriptReason : nil)
+                job.ownerProjectID = draft.id
                 job.protectedInputs = project.exportInputFiles + draft.exportInputFiles
-                let report = try await FinalExport.run(job, to: output) { _ in }
+                let report = try await FinalExport.run(job, to: output, progress: { _ in }, overwrite: false)
                 var warnings = Self.draftWarnings(draft, plan: plan) + report.warnings
                 // Заметки черновика ведут к проекту-источнику: общий бриф и решения живут там.
                 do {

@@ -82,18 +82,11 @@ enum ShortsExporter {
         return url
     }
 
-    /// Свободное имя для копии готового ролика рядом с ним: «имя копия.mp4»,
-    /// «имя копия (2).mp4»… Файл оригинала при этом не трогается.
+    /// Уникальное имя копии рядом с оригиналом, даже если оба файла ещё не экспортированы.
     static func copyURL(for url: URL) -> URL {
         let folder = url.deletingLastPathComponent()
         let base = "\(url.deletingPathExtension().lastPathComponent) копия"
-        var candidate = folder.appendingPathComponent("\(base).mp4")
-        var counter = 2
-        while FileManager.default.fileExists(atPath: candidate.path) {
-            candidate = folder.appendingPathComponent("\(base) (\(counter)).mp4")
-            counter += 1
-        }
-        return candidate
+        return folder.appendingPathComponent("\(base) \(UUID().uuidString).mp4")
     }
 
     static func sanitize(_ title: String) -> String {

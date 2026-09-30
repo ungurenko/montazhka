@@ -399,15 +399,20 @@ extension AgentService {
             throw AgentServiceError.invalidInput("fixWords: в расшифровке только \(mapped.count) слов.")
         }
         let chosen = Array(mapped[(range.from - 1)...(range.to - 1)])
-        guard let sourceID = chosen.first?.sourceID, chosen.allSatisfy({ $0.sourceID == sourceID }),
+        guard let sourceID = chosen.first?.sourceID,
+            chosen.allSatisfy({ $0.sourceID == sourceID && $0.clipID == chosen.first?.clipID }),
             let source = clips.first(where: { $0.source.id == sourceID })?.source
         else { throw AgentServiceError.invalidInput("fixWords: слова должны быть из одного исходника.") }
 
         let transcriptStore = makeTranscriptStore()
-        let raw = try await transcriptStore.ensure(source: source)
+        guard let raw = await transcriptStore.validatedCachedWords(source: source) else {
+            throw AgentServiceError.invalidInput("Расшифровка устарела. Вызовите montazhka_transcript.")
+        }
         let fixesURL = TranscriptCorrections.url(forTranscript: await transcriptStore.cacheURL(for: source))
         let indices = chosen.compactMap { word in raw.firstIndex { abs($0.start - word.sourceStart) < 0.0005 } }
-        guard indices.count == chosen.count else {
+        guard indices.count == chosen.count,
+            zip(indices, indices.dropFirst()).allSatisfy({ $1 == $0 + 1 })
+        else {
             throw AgentServiceError.invalidInput("fixWords: не удалось сопоставить слова с расшифровкой.")
         }
         try TranscriptCorrections.update(at: fixesURL) { fixes in

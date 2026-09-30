@@ -1124,10 +1124,7 @@ final class EditorController: ExportPreparing {
 
     // MARK: - Правки снаружи
 
-    /// Агент правит проект из другого процесса. Окно раз в секунду сверяет
-    /// версию файла и подхватывает чужую правку, а не затирает её своей записью.
-    /// Правка окна, ждущая записи, не выбрасывается: запись со сверкой версии получает
-    /// конфликт, версия окна ложится копией, и только потом проект перечитывается.
+    /// Раз в секунду подхватывает правки агента. При конфликте сохраняет версию окна копией.
     private func watchDiskChanges() {
         saveCoordinator.onExternalChange = { [weak self] copyName in
             Task { await self?.reloadChangedProject(lostLocalEdit: true, copyName: copyName) }
@@ -1137,7 +1134,6 @@ final class EditorController: ExportPreparing {
                 try? await Task.sleep(for: .seconds(1))
                 guard let self else { return }
                 guard self.saveCoordinator.diskChangedElsewhere(for: self.project.id) else { continue }
-                // Ошибку записи человек ещё не видел — правку окна не трогаем.
                 if case .failed = self.saveCoordinator.status { continue }
                 if self.saveCoordinator.hasUnsavedChanges {
                     await self.saveCoordinator.saveNow(self.project)
@@ -1148,16 +1144,20 @@ final class EditorController: ExportPreparing {
         }
     }
 
-    /// Перечитывает проект с диска. Прежняя версия окна уходит в историю,
-    /// поэтому «Отменить» возвращает её. Содержимое и версия — из одного чтения.
+    /// Перечитывает содержимое и ревизию вместе; прежняя версия остаётся в Undo.
     func reloadChangedProject(lostLocalEdit: Bool, copyName: String? = nil) async {
         guard !isReloadingFromDisk else { return }
         isReloadingFromDisk = true
         defer { isReloadingFromDisk = false }
         saveCoordinator.cancelPending()
+        let editGeneration = saveCoordinator.editGeneration
         let fresh: Project
         do {
             let loaded = try await repository.loadWithRevision(id: project.id)
+            guard saveCoordinator.editGeneration == editGeneration else {
+                await saveCoordinator.saveNow(project)
+                return
+            }
             fresh = loaded.project
             saveCoordinator.adopt(loaded.revision)
         } catch {

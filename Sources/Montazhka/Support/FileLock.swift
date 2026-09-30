@@ -57,4 +57,25 @@ final class FileLock {
         defer { withExtendedLifetime(lock) {} }
         return try body()
     }
+
+    static func acquire(guarding target: URL) async throws -> FileLock {
+        while true {
+            try Task.checkCancellation()
+            do { return try FileLock(lockFile: target.appendingPathExtension("lock"), wait: false) } catch is Busy {
+                try await Task.sleep(for: .milliseconds(100))
+            }
+        }
+    }
+
+    static func acquireSlot(in directory: URL, count: Int) async throws -> FileLock {
+        while true {
+            try Task.checkCancellation()
+            for index in 0..<count {
+                do {
+                    return try FileLock(lockFile: directory.appendingPathComponent("worker-\(index).lock"), wait: false)
+                } catch is Busy { continue }
+            }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+    }
 }

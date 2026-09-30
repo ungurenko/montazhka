@@ -244,7 +244,17 @@ enum AgentCommand {
 
     /// Запрос фонового экспорта из аргументов MCP. `normalizeLoudness`/`burnSubtitles`
     /// не переданы — nil: как в настройках экспорта проекта.
-    static func mcpExportRequest(projectID: UUID, arguments: [String: Value]) -> AgentWorkerRequest {
+    static func mcpExportRequest(projectID: UUID, arguments: [String: Value]) throws -> AgentWorkerRequest {
+        for key in ["final", "confirmFinal", "overwrite", "normalizeLoudness", "burnSubtitles"] {
+            if let value = arguments[key], value.boolValue == nil {
+                throw AgentServiceError.invalidInput("\(key) должен быть boolean.")
+            }
+        }
+        for key in ["quality", "outputPath"] {
+            if let value = arguments[key], value.stringValue == nil {
+                throw AgentServiceError.invalidInput("\(key) должен быть строкой.")
+            }
+        }
         return .export(
             projectID: projectID, outputPath: arguments["outputPath"]?.stringValue,
             quality: arguments["quality"]?.stringValue ?? "compact",
@@ -253,6 +263,17 @@ enum AgentCommand {
             overwrite: arguments["overwrite"]?.boolValue ?? false,
             normalizeLoudness: arguments["normalizeLoudness"]?.boolValue,
             burnSubtitles: arguments["burnSubtitles"]?.boolValue)
+    }
+
+    static func mcpEditRequest(_ arguments: [String: Value], requiresProject: Bool) throws -> AgentEditRequest {
+        let request = try JSONDecoder().decode(AgentEditRequest.self, from: JSONEncoder().encode(arguments))
+        if requiresProject, request.projectID == nil {
+            throw AgentServiceError.invalidInput("Нужен корректный projectId.")
+        }
+        if !requiresProject, request.sourcePaths.isEmpty {
+            throw AgentServiceError.invalidInput("Нужен хотя бы один sourcePath.")
+        }
+        return request
     }
 
     private static let usage =
@@ -323,7 +344,7 @@ private struct AgentMCPServer {
                 }
                 return ReadResource.Result(contents: [.text(text, uri: request.uri, mimeType: "text/markdown")])
             } catch {
-                return ReadResource.Result(contents: [.text(error.localizedDescription, uri: request.uri)])
+                throw MCPError.invalidParams(error.localizedDescription)
             }
         }
         try await server.start(transport: StdioTransport())
@@ -339,7 +360,7 @@ private struct AgentMCPServer {
                 offset: arguments["offset"]?.intValue ?? 0, limit: arguments["limit"]?.intValue ?? 20)
         case "montazhka_edit_video", "montazhka_edit_project":
             do {
-                let edit = try Self.editRequest(
+                let edit = try AgentCommand.mcpEditRequest(
                     arguments, requiresProject: name == "montazhka_edit_project")
                 return try await AgentBackgroundJob.submit(.edit(edit))
             } catch {
@@ -363,7 +384,7 @@ private struct AgentMCPServer {
             }
             do {
                 return try await AgentBackgroundJob.submit(
-                    AgentCommand.mcpExportRequest(projectID: id, arguments: arguments))
+                    try AgentCommand.mcpExportRequest(projectID: id, arguments: arguments))
             } catch {
                 return .failure(command: "export", code: "JOB_START_FAILED", message: error.localizedDescription)
             }
@@ -437,51 +458,6 @@ private struct AgentMCPServer {
 
     private static func double(_ value: Value?) -> Double? {
         value?.doubleValue ?? value?.intValue.map(Double.init)
-    }
-
-    private static func editRequest(
-        _ arguments: [String: Value], requiresProject: Bool
-    ) throws -> AgentEditRequest {
-        let sources: [String]
-        if let value = arguments["sourcePaths"] {
-            guard let items = value.arrayValue, items.allSatisfy({ $0.stringValue != nil }) else {
-                throw AgentServiceError.invalidInput("sourcePaths должен содержать только пути к файлам.")
-            }
-            sources = items.compactMap(\.stringValue)
-        } else {
-            sources = []
-        }
-        let projectID = arguments["projectId"]?.stringValue.flatMap(UUID.init(uuidString:))
-        if requiresProject, projectID == nil {
-            throw AgentServiceError.invalidInput("Нужен корректный projectId.")
-        }
-        if !requiresProject, sources.isEmpty {
-            throw AgentServiceError.invalidInput("Нужен хотя бы один sourcePath.")
-        }
-        let profileName = arguments["profile"]?.stringValue ?? "clean-speech"
-        guard let profile = AgentEditProfile(rawValue: profileName) else {
-            throw AgentServiceError.invalidInput("Неизвестный профиль: \(profileName)")
-        }
-        let cuts = try (arguments["cuts"]?.arrayValue ?? []).map { value -> AgentSourceCut in
-            guard let item = value.objectValue, let path = item["sourcePath"]?.stringValue,
-                let start = double(item["start"]), let end = double(item["end"])
-            else {
-                throw AgentServiceError.invalidInput("Каждый рез должен содержать sourcePath, start и end.")
-            }
-            return AgentSourceCut(sourcePath: path, start: start, end: end)
-        }
-        let aiModeName = arguments["aiMode"]?.stringValue ?? "off"
-        guard let aiMode = AgentAIMode(rawValue: aiModeName) else {
-            throw AgentServiceError.invalidInput("Неизвестный режим ИИ: \(aiModeName)")
-        }
-        return AgentEditRequest(
-            sourcePaths: sources, projectID: projectID,
-            name: arguments["name"]?.stringValue, profile: profile, cuts: cuts,
-            removePauses: arguments["removePauses"]?.boolValue ?? true,
-            enhanceVoice: arguments["enhanceVoice"]?.boolValue ?? true,
-            musicPath: arguments["musicPath"]?.stringValue,
-            aiMode: aiMode,
-            confirmModelDownload: arguments["confirmModelDownload"]?.boolValue ?? false)
     }
 
     private static func mcpValue(_ value: AgentJSONValue) -> Value {

@@ -142,6 +142,56 @@ extension TranscriptCorrectionTests {
         return fix
     }
 
+    @Test("a repeated source range cannot erase its own correction")
+    func repeatedRangeIsRefused() async throws {
+        let fixture = try await fixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        var project = fixture.project
+        project.clips = [
+            Clip(source: fixture.media, start: 0, end: 0.6),
+            Clip(source: fixture.media, start: 0, end: 0.6),
+        ]
+        try await fixture.service.store.save(project)
+        var operation = fix(fixture, words: AgentWordRange(from: 1, to: 2), text: "X", remember: false)
+        operation.timeline = AgentWordCuts.fingerprint(project.clips)
+        let response = await fixture.service.applyEdits(projectID: project.id, operations: [operation])
+        #expect(!response.ok)
+        #expect(!FileManager.default.fileExists(atPath: await fixesURL(fixture).path))
+    }
+
+    @Test("a damaged cached transcript stays a read-only cache miss")
+    func invalidCacheDoesNotTranscribe() async throws {
+        let fixture = try await fixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let store = await fixture.service.makeTranscriptStore()
+        let url = await store.cacheURL(for: fixture.media)
+        try Data("broken JSON".utf8).write(to: url)
+        #expect(try await store.correctedCachedWords(for: [fixture.media], glossaryURL: url) == nil)
+        #expect(try Data(contentsOf: url) == Data("broken JSON".utf8))
+    }
+
+    @Test("a competing transcription rechecks the cache after taking ownership")
+    func cacheIsRecheckedAfterLock() async throws {
+        let fixture = try await fixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let first = await fixture.service.makeTranscriptStore()
+        let second = await fixture.service.makeTranscriptStore()
+        let url = await first.cacheURL(for: fixture.media)
+        let data = try Data(contentsOf: url)
+        try FileManager.default.removeItem(at: url)
+        var ownership: FileLock? = try FileLock(guarding: url)
+        let source = fixture.media
+        let waiting = Task { try await first.ensure(source: source) }
+        let competing = Task { try await second.ensure(source: source) }
+        // Publish a ready document while both stores are waiting on the same owner.
+        try await Task.sleep(for: .milliseconds(150))
+        try data.write(to: url, options: .atomic)
+        withExtendedLifetime(ownership) {}
+        ownership = nil
+        #expect(try await waiting.value.map(\.text) == ["вот", "мой", "вайб", "кодинг"])
+        #expect(try await competing.value.map(\.text) == ["вот", "мой", "вайб", "кодинг"])
+    }
+
     private func fixesURL(_ fixture: Fixture) async -> URL {
         TranscriptCorrections.url(
             forTranscript: await fixture.service.makeTranscriptStore().cacheURL(for: fixture.media))

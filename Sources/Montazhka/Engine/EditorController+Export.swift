@@ -56,7 +56,7 @@ extension EditorController {
             subtitleCues: speech.horizontalCues, subtitlesSkippedReason: speech.skippedReason,
             normalizeLoudness: exported.export.normalizeLoudness,
             projectFingerprint: ExportProvenance.fingerprint(for: exported), sizing: .quality,
-            protectedInputs: exported.exportInputFiles)
+            protectedInputs: exported.exportInputFiles, ownerProjectID: exported.id)
     }
 
     /// Слова ленты только из готовой расшифровки — без распознавания.
@@ -87,6 +87,6 @@ extension EditorController {
             subtitlesSkippedReason: words == nil ? ExportSpeech.noTranscriptReason : nil,
             normalizeLoudness: exported.export.normalizeLoudness,
             projectFingerprint: ExportProvenance.fingerprint(for: exported),
-            protectedInputs: exported.exportInputFiles)
+            protectedInputs: exported.exportInputFiles, ownerProjectID: exported.id)
     }
 }

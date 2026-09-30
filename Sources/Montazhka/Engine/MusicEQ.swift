@@ -92,6 +92,7 @@ enum MusicEQ {
         renderLoop: while true {
             if isCancelled() { throw CancellationError() }
             let status = try engine.renderOffline(4096, to: buffer)
+            if let error = feeder.error { throw error }
             switch status {
             case .success:
                 // Обрезаем хвостовые нули: пишем не больше, чем реально пришло из исходника.
@@ -147,7 +148,7 @@ enum MusicEQ {
 
 /// Кэш обработанной музыки: один CAF на исходный файл (по образцу VoiceEnhanceStore).
 /// Актор последовательно управляет общими рендерами; готовые файлы появляются
-/// атомарно (рендер в .work + moveItem), диск остаётся источником правды.
+/// атомарно из уникального временного файла; готовый кэш конкурента сохраняется.
 actor MusicEQStore {
     private struct InFlight {
         let id: UUID
@@ -177,15 +178,19 @@ actor MusicEQStore {
     private func renderTask(key: String, url: URL, path: String) -> InFlight {
         if let existing = inFlight[key] { return existing }
         let task = Task(priority: .userInitiated) {
-            let working = url.deletingPathExtension().appendingPathExtension("work.caf")
-            defer { try? FileManager.default.removeItem(at: working) }
+            try FileManager.default.createDirectory(
+                at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            var output = AtomicMediaOutput(destinationURL: url)
+            let working = output.temporaryURL
+            defer { output.discard() }
             try await MusicEQ.render(
                 sourcePath: path, to: working,
                 isCancelled: { Task.isCancelled })
             if Task.isCancelled { throw CancellationError() }
             // Готовый файл появляется атомарно — отменённый рендер не оставит битого кэша.
-            try? FileManager.default.removeItem(at: url)
-            try FileManager.default.moveItem(at: working, to: url)
+            do { try output.commit(overwrite: false) } catch {
+                guard FileManager.default.fileExists(atPath: url.path) else { throw error }
+            }
             return url
         }
         let operation = InFlight(id: UUID(), task: task)

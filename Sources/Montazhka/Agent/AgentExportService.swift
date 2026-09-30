@@ -27,7 +27,11 @@ extension AgentService {
                 outputPath.map(URL.init(fileURLWithPath:)) ?? draftPath
                 ?? Self.defaultOutputURL(source: first.url, final: final)
             // Файл черновика шортса перевыгружается после каждой правки — это не чужой файл.
-            let overwrite = overwrite || destination.standardized == draftPath?.standardized
+            let recordedOwner = await ExportProvenance.stamp(url: destination)?.ownerProjectID
+            let ownsDraft =
+                destination.standardized == draftPath?.standardized
+                && recordedOwner == project.id
+            let overwrite = overwrite || ownsDraft
             try ExportDestinationGuard.check(destination, inputs: project.exportInputFiles)
             if FileManager.default.fileExists(atPath: destination.path), !overwrite {
                 throw AgentServiceError.outputExists(destination.path)
@@ -49,7 +53,8 @@ extension AgentService {
             let (job, renderWarnings) = try await exportJob(
                 project, quality: exportQuality, normalize: normalize,
                 burnSubtitles: burnSubtitles ?? project.export.burnSubtitles, runID: run.id)
-            let report = try await FinalExport.run(job, to: destination, progress: progress, stage: stage)
+            let report = try await FinalExport.run(
+                job, to: destination, progress: progress, stage: stage, overwrite: overwrite)
             let actual = try await AVURLAsset(url: destination).load(.duration).seconds
             let matches = abs(actual - project.totalDuration) <= 0.25
             try await runs.update(id: run.id) {
@@ -100,6 +105,7 @@ extension AgentService {
                 quality: quality, normalizeLoudness: normalize, projectFingerprint: fingerprint,
                 subtitlesSkippedReason: words == nil ? ExportSpeech.noTranscriptReason : nil)
             job.protectedInputs = project.exportInputFiles
+            job.ownerProjectID = project.id
             return (job, plan.warnings.map(\.message))
         }
         let speech = try await ExportSpeech.load(
@@ -120,7 +126,7 @@ extension AgentService {
                 videoComposition: rendered.videoPlan?.frameComposition, overlay: rendered.videoPlan?.overlayImageAt),
             quality: quality, sizing: .quality(quality), subtitleCues: speech.horizontalCues,
             subtitlesSkippedReason: speech.skippedReason, normalizeLoudness: normalize,
-            projectFingerprint: fingerprint, protectedInputs: project.exportInputFiles)
+            projectFingerprint: fingerprint, protectedInputs: project.exportInputFiles, ownerProjectID: project.id)
         return (job, rendered.warnings.map(\.message))
     }
 

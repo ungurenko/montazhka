@@ -104,7 +104,7 @@ enum Transcoder {
         try Task.checkCancellation()
         var output = AtomicMediaOutput(destinationURL: url)
         defer { output.discard() }
-        try await exportDirect(
+        try await writeTemporary(
             input: input,
             settings: settings,
             to: output.temporaryURL,
@@ -116,7 +116,7 @@ enum Transcoder {
 
     /// Непосредственная запись всегда получает новый временный URL от
     /// `AtomicMediaOutput`; пользовательский файл здесь недоступен.
-    private static func exportDirect(
+    static func writeTemporary(
         input: ExportInput,
         settings: Settings,
         to url: URL,
@@ -225,6 +225,11 @@ enum Transcoder {
         let cancellation = MediaReaderPumpQueue(label: "montazhka.transcode") {
             cancelReader.cancelReading()
         }
+        nonisolated(unsafe) let observedWriter = writer
+        let watchdog = TranscodeWatchdog(cancellation: cancellation) {
+            observedWriter.status == .failed || cancelReader.status == .failed
+        }
+        defer { watchdog.stop() }
         let videoIO = VideoPumpIO(videoOutput: videoOutput, videoInput: videoInput)
         let audioIO = AudioPumpIO(audioOutput: audioOutput, audioInput: audioInput)
         // Надписи кладутся на кадры здесь же, одним проходом: сессия экспорта с Core Animation
@@ -238,6 +243,7 @@ enum Transcoder {
                 group.addTask {
                     await pump(
                         from: videoIO.videoOutput, to: videoIO.videoInput, cancellation: cancellation,
+                        watchdog: watchdog,
                         transform: transform
                     ) { time in
                         guard duration > 0 else { return }
@@ -246,7 +252,9 @@ enum Transcoder {
                 }
                 if let audioOutput = audioIO.audioOutput, let audioInput = audioIO.audioInput {
                     group.addTask {
-                        await pump(from: audioOutput, to: audioInput, cancellation: cancellation, onSample: nil)
+                        await pump(
+                            from: audioOutput, to: audioInput, cancellation: cancellation, watchdog: watchdog,
+                            onSample: nil)
                     }
                 }
             }
@@ -259,7 +267,11 @@ enum Transcoder {
             try? FileManager.default.removeItem(at: url)
             throw CancellationError()
         }
-        if reader.status == .failed {
+        if writer.status == .failed || watchdog.timedOut {
+            writer.cancelWriting()
+            throw TranscodeError.writerFailed(writer.error)
+        }
+        if reader.status == .failed || reader.status == .cancelled {
             writer.cancelWriting()
             try? FileManager.default.removeItem(at: url)
             throw TranscodeError.readerFailed(reader.error)
@@ -293,7 +305,7 @@ enum Transcoder {
     private static func pump(
         from outputParam: AVAssetReaderOutput,
         to inputParam: AVAssetWriterInput,
-        cancellation: MediaReaderPumpQueue,
+        cancellation: MediaReaderPumpQueue, watchdog: TranscodeWatchdog,
         transform: (@Sendable (CMSampleBuffer) -> CMSampleBuffer)? = nil,
         onSample: (@Sendable (CMTime) -> Void)?
     ) async {
@@ -325,7 +337,6 @@ enum Transcoder {
                             return finish()
                         }
                         guard let sample = output.copyNextSampleBuffer() else { return finish() }
-                        // Отмена могла прийти во время copyNextSampleBuffer.
                         if cancellation.isCancelled {
                             cancellation.stopOnQueue()
                             return finish()
@@ -337,28 +348,14 @@ enum Transcoder {
                                 onSample(time)
                             }
                         }
-                        if !input.append(transform?(sample) ?? sample) { return finish() }
+                        guard input.append(transform?(sample) ?? sample) else {
+                            cancellation.stopOnQueue()
+                            return finish()
+                        }
+                        watchdog.advanced()
                     }
                 }
             }
         }
-    }
-}
-
-extension Transcoder {
-    /// Запись со своей видеокомпозицией (черновик шортса): размер кадра задаёт
-    /// композиция, битрейт — качество.
-    static func export(
-        composed input: ExportInput, quality: ExportQuality, to url: URL,
-        metadata: [AVMetadataItem] = [],
-        progress: @escaping @Sendable (Double) -> Void
-    ) async throws {
-        let dimensions = input.videoComposition?.renderSize ?? .zero
-        try await export(
-            input: input,
-            settings: Settings(
-                dimensions: dimensions, videoBitrate: quality.videoBitrate(forDimensions: dimensions),
-                audioBitrate: quality.audioBitrate),
-            to: url, metadata: metadata, progress: progress)
     }
 }

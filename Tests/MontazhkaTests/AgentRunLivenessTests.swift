@@ -105,4 +105,48 @@ struct AgentRunLivenessTests {
         #expect(reloaded.summary == nil)
         #expect(reloaded.artifacts["result"] == "/tmp/result.json", "итоговые файлы дописываются")
     }
+    @Test("independent stores preserve all concurrent artifacts")
+    func concurrentUpdatesAreAtomic() async throws {
+        let root = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = AgentRunStore(baseDirectory: root)
+        let run = try await store.create(kind: .export, sourcePaths: [])
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            for index in 0..<30 {
+                group.addTask {
+                    let writer = AgentRunStore(baseDirectory: root)
+                    try await writer.update(id: run.id) { $0.artifacts[String(index)] = "result" }
+                }
+            }
+            try await group.waitForAll()
+        }
+        #expect(try await store.load(id: run.id).artifacts.count == 30)
+    }
+
+    @Test("a finished job cannot be claimed again")
+    func finishedJobCannotRestart() async throws {
+        let root = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = AgentRunStore(baseDirectory: root)
+        let run = try await store.create(kind: .export, sourcePaths: [])
+        try await store.update(id: run.id) { $0.status = .completed }
+        await #expect(throws: (any Error).self) { try await store.claim(id: run.id) }
+        #expect(try await store.load(id: run.id).executorLock == nil)
+    }
+
+    @Test("transcription submission reuses a live matching job and excludes completed jobs")
+    func matchingTranscriptionJobIsReused() async throws {
+        let root = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = AgentRunStore(baseDirectory: root)
+        let run = try await store.create(kind: .transcribe, sourcePaths: ["file"])
+        try await store.update(id: run.id) {
+            $0.transcriptionKey = "file-fingerprint"; $0.status = .running
+        }
+        #expect(try await store.activeTranscription(key: "file-fingerprint")?.id == run.id)
+        #expect(try await store.activeTranscription(key: "changed-file") == nil)
+        try await store.update(id: run.id) { $0.status = .completed }
+        #expect(try await store.activeTranscription(key: "file-fingerprint") == nil)
+    }
+
 }

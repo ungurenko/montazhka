@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 enum AgentWorkerRequest: Codable, Sendable {
@@ -20,6 +21,18 @@ enum AgentBackgroundJob {
 
     static func submit(_ request: AgentWorkerRequest) async throws -> AgentResponse {
         let store = AgentRunStore(baseDirectory: runsDirectory)
+        let transcriptionKey = try await transcriptionKey(for: request)
+        let submissionLock: FileLock?
+        if let transcriptionKey {
+            submissionLock = try await FileLock.acquire(
+                guarding: runsDirectory.appendingPathComponent("transcription-submit"))
+            if let run = try await store.activeTranscription(key: transcriptionKey) {
+                return submitted(run)
+            }
+        } else {
+            submissionLock = nil
+        }
+        defer { withExtendedLifetime(submissionLock) {} }
         let kind: AgentRunKind
         let sources: [String]
         switch request {
@@ -44,6 +57,7 @@ enum AgentBackgroundJob {
         process.standardOutput = log; process.standardError = log
         try await store.update(id: run.id) {
             $0.status = .running; $0.stage = "Фоновый процесс запущен"; $0.artifacts["log"] = logURL.path
+            if let transcriptionKey { $0.transcriptionKey = transcriptionKey }
         }
         do {
             try process.run()
@@ -54,7 +68,11 @@ enum AgentBackgroundJob {
             }
             throw error
         }
-        return .success(
+        return submitted(run)
+    }
+
+    private static func submitted(_ run: AgentRun) -> AgentResponse {
+        .success(
             command: "submit",
             data: [
                 "jobId": .string(run.id.uuidString), "status": .string("running"),
@@ -62,11 +80,28 @@ enum AgentBackgroundJob {
             ])
     }
 
+    private static func transcriptionKey(for request: AgentWorkerRequest) async throws -> String? {
+        let sources: [String]
+        switch request {
+        case .transcribeFile(let path): sources = [path]
+        case .transcribe(let id):
+            let project = try await ProjectStore().load(id: id)
+            sources = Array(Set(project.clips.map(\.sourcePath))).sorted()
+        default: return nil
+        }
+        let keys = sources.map { TranscriptStore.cacheKey(for: $0) }
+        let data = try JSONEncoder().encode(keys)
+        return SHA256.hash(data: data).hex
+    }
+
     static func work(jobID: UUID, requestURL: URL) async -> AgentResponse {
         let store = AgentRunStore(baseDirectory: runsDirectory)
+        do { try await store.claim(id: jobID) } catch {
+            return .failure(command: "worker", code: "WORKER_CLAIM_FAILED", message: error.localizedDescription)
+        }
         do {
             let request = try JSONDecoder().decode(AgentWorkerRequest.self, from: Data(contentsOf: requestURL))
-            let service = AgentService()
+            let service = AgentService(runs: store)
             let result: AgentResponse
             switch request {
             case .edit(let edit): result = await service.edit(edit, runMode: .existing(jobID))

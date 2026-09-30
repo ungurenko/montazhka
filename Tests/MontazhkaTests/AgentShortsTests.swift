@@ -173,6 +173,14 @@ struct AgentShortsTests {
         let copy = try await fixture.service.store.load(id: copyID)
         #expect(copy.shorts != nil)
         #expect(copy.shorts?.exportPath != original)
+        let second = await fixture.service.edit(
+            AgentEditRequest(sourcePaths: [], projectID: draft.id, removePauses: false, enhanceVoice: false))
+        guard case .string(let secondID)? = second.data?["projectId"], let id = UUID(uuidString: secondID) else {
+            Issue.record("вторая копия не создана")
+            return
+        }
+        let secondCopy = try await fixture.service.store.load(id: id)
+        #expect(secondCopy.shorts?.exportPath != copy.shorts?.exportPath)
     }
 
     @Test("inspect shows the draft's styling to the agent")

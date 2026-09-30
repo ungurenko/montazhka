@@ -122,6 +122,7 @@ struct PreparedExport {
     var sizing: PreparedSizing = .composition
     /// `Project.exportInputFiles`: поверх них файл не записывается.
     var protectedInputs: [URL] = []
+    var ownerProjectID: UUID? = nil
 }
 
 /// Что происходит до записи файла — подпись в окне.
@@ -195,7 +196,7 @@ struct TranscodingVideoExporter: VideoExporting {
             subtitlesSkippedReason: prepared.subtitlesSkippedReason,
             normalizeLoudness: prepared.normalizeLoudness,
             projectFingerprint: prepared.projectFingerprint,
-            protectedInputs: prepared.protectedInputs)
+            protectedInputs: prepared.protectedInputs, ownerProjectID: prepared.ownerProjectID)
         return try await FinalExport.run(job, to: url, progress: progress, stage: stage)
     }
 }

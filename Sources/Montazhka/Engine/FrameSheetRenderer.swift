@@ -31,7 +31,8 @@ enum FrameSheetRenderer {
     /// AVAssetImageGenerator с видеокомпозицией отдаёт на части роликов с iPhone
     /// (HEVC, 60 к/с) чёрные кадры, а чтение показывает ровно то, что попадёт в MP4.
     private static func readFrame(
-        asset: AVAsset, videoComposition: AVVideoComposition?, at time: Double
+        asset: AVAsset, videoComposition: AVVideoComposition?, at time: Double,
+        maximumSize: CGSize, context: CIContext
     ) async -> CGImage? {
         guard let reader = try? AVAssetReader(asset: asset),
             let tracks = try? await asset.loadTracks(withMediaType: .video), !tracks.isEmpty
@@ -49,7 +50,9 @@ enum FrameSheetRenderer {
             return nil
         }
         let image = CIImage(cvPixelBuffer: buffer)
-        return CIContext().createCGImage(image, from: image.extent)
+        let scale = min(1, maximumSize.width / image.extent.width, maximumSize.height / image.extent.height)
+        let thumbnail = image.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+        return context.createCGImage(thumbnail, from: thumbnail.extent)
     }
 
     /// Кадр с надписями поверх: надписи рисуются в размер кадра.
@@ -82,12 +85,15 @@ enum FrameSheetRenderer {
         let cellWidth = (sheetWidth / Double(columns)).rounded(.down)
         generator.maximumSize = CGSize(width: cellWidth * 2, height: cellWidth * 2)
 
+        let imageContext = CIContext()
         var images: [CGImage?] = []
         for time in times {
             let image =
                 videoComposition == nil
                 ? try? await generator.image(at: CMTime(seconds: max(0, time), preferredTimescale: 600)).image
-                : await readFrame(asset: asset, videoComposition: videoComposition, at: time)
+                : await readFrame(
+                    asset: asset, videoComposition: videoComposition, at: time,
+                    maximumSize: generator.maximumSize, context: imageContext)
             images.append(image.map { frame in overlayAt?(time).flatMap { composite(frame, $0) } ?? frame })
         }
         guard let sample = images.compactMap({ $0 }).first else { throw FrameSheetError.noVideo }

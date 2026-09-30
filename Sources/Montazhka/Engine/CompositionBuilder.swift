@@ -220,7 +220,7 @@ enum CompositionBuilder {
             var audioInserted = false
             if let enhanced = source.enhancedAudio {
                 let clamped = range.intersection(enhanced.range)
-                if clamped.duration.seconds > 0,
+                if clamped == range,
                     (try? audioTrack.insertTimeRange(clamped, of: enhanced.track, at: cursor)) != nil
                 {
                     audioInserted = true

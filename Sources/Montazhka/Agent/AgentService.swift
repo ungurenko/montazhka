@@ -52,21 +52,23 @@ struct AgentEditRequest: Codable, Sendable {
 
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
-        sourcePaths = try values.decodeIfPresent([String].self, forKey: .sourcePaths) ?? []
+        sourcePaths = values.contains(.sourcePaths) ? try values.decode([String].self, forKey: .sourcePaths) : []
         // В MCP поле называется projectId — принимаем и его, чтобы JSON для CLI был тем же.
         projectID =
             try values.decodeIfPresent(UUID.self, forKey: .projectID)
             ?? values.decodeIfPresent(UUID.self, forKey: .projectId)
         name = try values.decodeIfPresent(String.self, forKey: .name)
-        profile = try values.decodeIfPresent(AgentEditProfile.self, forKey: .profile) ?? .cleanSpeech
-        cuts = try values.decodeIfPresent([AgentSourceCut].self, forKey: .cuts) ?? []
-        removePauses = try values.decodeIfPresent(Bool.self, forKey: .removePauses) ?? true
-        enhanceVoice = try values.decodeIfPresent(Bool.self, forKey: .enhanceVoice) ?? true
+        profile = values.contains(.profile) ? try values.decode(AgentEditProfile.self, forKey: .profile) : .cleanSpeech
+        cuts = values.contains(.cuts) ? try values.decode([AgentSourceCut].self, forKey: .cuts) : []
+        removePauses = values.contains(.removePauses) ? try values.decode(Bool.self, forKey: .removePauses) : true
+        enhanceVoice = values.contains(.enhanceVoice) ? try values.decode(Bool.self, forKey: .enhanceVoice) : true
         musicPath = try values.decodeIfPresent(String.self, forKey: .musicPath)
         aiMode =
-            try values.decodeIfPresent(AgentAIMode.self, forKey: .aiMode)
-            ?? ((try values.decodeIfPresent(Bool.self, forKey: .smartEdit)) == true ? .builtIn : .off)
-        confirmModelDownload = try values.decodeIfPresent(Bool.self, forKey: .confirmModelDownload) ?? false
+            values.contains(.aiMode)
+            ? try values.decode(AgentAIMode.self, forKey: .aiMode)
+            : ((try values.decodeIfPresent(Bool.self, forKey: .smartEdit)) == true ? .builtIn : .off)
+        confirmModelDownload =
+            values.contains(.confirmModelDownload) ? try values.decode(Bool.self, forKey: .confirmModelDownload) : false
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -210,7 +212,7 @@ actor AgentService {
     }
 
     init(
-        baseDirectory: URL? = nil,
+        baseDirectory: URL? = nil, runs suppliedRuns: AgentRunStore? = nil,
         startJob: @escaping AgentJobStarter = { try await AgentBackgroundJob.submit($0) }
     ) {
         store = ProjectStore(baseDirectory: baseDirectory)
@@ -218,7 +220,7 @@ actor AgentService {
             baseDirectory
             ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Montazhka", isDirectory: true)
-        runs = AgentRunStore(baseDirectory: base.appendingPathComponent("AgentRuns", isDirectory: true))
+        runs = suppliedRuns ?? AgentRunStore(baseDirectory: base.appendingPathComponent("AgentRuns", isDirectory: true))
         waveforms = WaveformStore(cacheDir: store.waveformsDir)
         revisions = AgentRevisionStore(baseDirectory: base.appendingPathComponent("AgentRevisions", isDirectory: true))
         notes = AgentNotesStore(baseDirectory: base.appendingPathComponent("AgentNotes", isDirectory: true))
@@ -466,6 +468,7 @@ actor AgentService {
             run = try await runs.load(id: id)
             guard run.kind == kind else { throw AgentServiceError.runKindMismatch }
         }
+        try await runs.claim(id: run.id)
         try await runs.update(id: run.id) {
             $0.status = .running
             $0.stage = stage
@@ -473,8 +476,6 @@ actor AgentService {
             $0.projectID = projectID
             $0.error = nil
         }
-        // Этот процесс выполняет задачу: пока он жив, задача не считается прерванной.
-        try await runs.claim(id: run.id)
         return try await runs.load(id: run.id)
     }
 

@@ -40,14 +40,21 @@ enum ExportProvenance {
     }
 
     /// Отпечаток .srt, записанного рядом, — после отпечатка проекта.
-    private static let subtitlesMarker = " srt:"
 
     /// `subtitles` — `subtitlesDigest(_:)` того .srt, что ляжет рядом с файлом.
-    static func metadataItems(fingerprint: String?, subtitles: String? = nil) -> [AVMetadataItem] {
-        guard fingerprint != nil || subtitles != nil else { return [] }
+    static func metadataItems(
+        fingerprint: String?, subtitles: String? = nil, previousSubtitles: String? = nil, ownerProjectID: UUID? = nil
+    ) -> [AVMetadataItem] {
+        guard fingerprint != nil || subtitles != nil || previousSubtitles != nil || ownerProjectID != nil else {
+            return []
+        }
         let item = AVMutableMetadataItem()
         item.identifier = .commonIdentifierDescription
-        item.value = "\(prefix)\(fingerprint ?? "")\(subtitles.map { subtitlesMarker + $0 } ?? "")" as NSString
+        var fields = ["\(prefix)\(fingerprint ?? "")"]
+        if let subtitles { fields.append("srt:\(subtitles)") }
+        if let previousSubtitles { fields.append("previous-srt:\(previousSubtitles)") }
+        if let ownerProjectID { fields.append("owner:\(ownerProjectID.uuidString)") }
+        item.value = fields.joined(separator: " ") as NSString
         item.extendedLanguageTag = "und"
         return [item]
     }
@@ -63,9 +70,20 @@ enum ExportProvenance {
         guard let items = try? await asset.load(.metadata) else { return nil }
         for item in items {
             guard let value = try? await item.load(.stringValue), value.hasPrefix(prefix) else { continue }
-            let parts = value.dropFirst(prefix.count).components(separatedBy: subtitlesMarker)
-            let project = parts[0].isEmpty ? nil : parts[0]
-            return ExportStamp(project: project, subtitles: parts.count > 1 ? parts[1] : nil)
+            var stamp = ExportStamp(project: nil, subtitles: nil)
+            for field in value.split(separator: " ") {
+                if field.hasPrefix(prefix) {
+                    let fingerprint = String(field.dropFirst(prefix.count))
+                    stamp.project = fingerprint.isEmpty ? nil : fingerprint
+                } else if field.hasPrefix("srt:") {
+                    stamp.subtitles = String(field.dropFirst(4))
+                } else if field.hasPrefix("previous-srt:") {
+                    stamp.previousSubtitles = String(field.dropFirst(13))
+                } else if field.hasPrefix("owner:") {
+                    stamp.ownerProjectID = UUID(uuidString: String(field.dropFirst(6)))
+                }
+            }
+            return stamp
         }
         return nil
     }
@@ -82,4 +100,6 @@ struct ExportStamp: Equatable, Sendable {
     var project: String?
     /// Отпечаток .srt, который экспорт положил рядом; nil — субтитров не было.
     var subtitles: String?
+    var previousSubtitles: String? = nil
+    var ownerProjectID: UUID? = nil
 }

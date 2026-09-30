@@ -34,14 +34,17 @@ struct AgentRun: Codable, Equatable, Identifiable, Sendable {
     var error: AgentErrorPayload?
     /// Замок процесса, который выполняет задачу; nil — исполнитель ещё не взялся (или старая запись).
     var executorLock: String?
+    var transcriptionKey: String? = nil
 }
 
 enum AgentRunStoreError: LocalizedError {
     case notFound(UUID)
+    case finished(UUID)
 
     var errorDescription: String? {
         switch self {
         case .notFound(let id): "Задача \(id.uuidString) не найдена."
+        case .finished(let id): "Задача \(id.uuidString) уже завершена."
         }
     }
 }
@@ -84,22 +87,24 @@ actor AgentRunStore {
     }
 
     func update(id: UUID, _ change: (inout AgentRun) -> Void) throws {
-        let before = try load(id: id)
-        var run = before
-        change(&run)
-        // Итог законченной задачи окончателен: поздние события прогресса и поздняя сверка
-        // (в том числе из другого процесса) не меняют ни статус, ни этап, ни описание.
-        // Дописать можно только итоговые файлы.
-        if before.status.isFinished {
-            run.status = before.status
-            run.progress = before.progress
-            run.stage = before.stage
-            run.summary = before.summary
-            run.error = before.error
+        try FileLock.withLock(guarding: fileURL(id)) {
+            let before = try load(id: id)
+            var run = before
+            change(&run)
+            // Итог законченной задачи окончателен: поздние события прогресса и поздняя сверка
+            // (в том числе из другого процесса) не меняют ни статус, ни этап, ни описание.
+            // Дописать можно только итоговые файлы.
+            if before.status.isFinished {
+                run.status = before.status
+                run.progress = before.progress
+                run.stage = before.stage
+                run.summary = before.summary
+                run.error = before.error
+            }
+            run.updatedAt = Date()
+            try save(run)
+            if run.status.isFinished { claims[id] = nil }
         }
-        run.updatedAt = Date()
-        try save(run)
-        if run.status.isFinished { claims[id] = nil }
     }
 
     /// Этот процесс выполняет задачу: он держит её замок, пока задача не закончится или
@@ -107,8 +112,14 @@ actor AgentRunStore {
     func claim(id: UUID) throws {
         guard claims[id] == nil else { return }
         let url = try artifactDirectory(id: id).appendingPathComponent("worker.lock")
-        claims[id] = try FileLock(lockFile: url, wait: false)
-        try update(id: id) { $0.executorLock = url.path }
+        let claim = try FileLock(lockFile: url, wait: false)
+        try FileLock.withLock(guarding: fileURL(id)) {
+            var run = try load(id: id)
+            guard !run.status.isFinished else { throw AgentRunStoreError.finished(id) }
+            run.executorLock = url.path
+            try save(run)
+            claims[id] = claim
+        }
     }
 
     /// Задача, чей исполнитель умер, получает честный конечный статус. Живой исполнитель
@@ -127,6 +138,11 @@ actor AgentRunStore {
         try update(id: id) {
             // Исполнитель мог успеть закончить между чтением и этой записью.
             guard $0.status == .running || $0.status == .pending else { return }
+            if let lock = $0.executorLock {
+                guard !FileLock.isHeld(lockFile: URL(fileURLWithPath: lock)) else { return }
+            } else {
+                guard Date().timeIntervalSince($0.updatedAt) > Self.workerStartGrace else { return }
+            }
             $0.status = .failed
             $0.stage = "Прервано"
             $0.summary =
@@ -141,6 +157,18 @@ actor AgentRunStore {
     func reconcileAll() {
         let names = (try? FileManager.default.contentsOfDirectory(atPath: baseDirectory.path)) ?? []
         for id in names.compactMap(UUID.init(uuidString:)) { _ = try? reconcile(id: id) }
+    }
+
+    func activeTranscription(key: String) throws -> AgentRun? {
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: baseDirectory.path)) ?? []
+        for id in names.compactMap(UUID.init(uuidString:)) {
+            guard let run = try? reconcile(id: id), run.kind == .transcribe,
+                !run.status.isFinished, run.status != .waitingForApproval,
+                run.transcriptionKey == key
+            else { continue }
+            return run
+        }
+        return nil
     }
 
     func artifactDirectory(id: UUID) throws -> URL {

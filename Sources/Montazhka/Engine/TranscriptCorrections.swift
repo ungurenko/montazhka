@@ -167,15 +167,13 @@ extension TranscriptStore {
     /// исправления. nil — хотя бы один исходник ещё не расшифрован (сама
     /// расшифровка здесь не запускается: она идёт минутами).
     func correctedCachedWords(for sources: [MediaReference], glossaryURL: URL) async throws -> [TranscriptWord]? {
-        for source in sources where !FileManager.default.fileExists(atPath: cacheURL(for: source).path) {
-            return nil
-        }
         let glossary = Glossary.load(from: glossaryURL)
         var words: [TranscriptWord] = []
         for source in sources {
+            guard let cached = validatedCachedWords(source: source) else { return nil }
             let fixes = TranscriptCorrections.load(
                 from: TranscriptCorrections.url(forTranscript: cacheURL(for: source)))
-            words += TranscriptCorrections.apply(fixes, to: glossary.apply(to: try await ensure(source: source)))
+            words += TranscriptCorrections.apply(fixes, to: glossary.apply(to: cached))
         }
         return words
     }

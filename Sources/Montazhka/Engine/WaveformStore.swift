@@ -43,6 +43,7 @@ final class WaveformStore: @unchecked Sendable {
         if let ready = peaks(for: path) { return ready }
         let cacheURL = cacheFileURL(for: path)
         let result = await work.value(key: cacheURL.path, path: path, cacheURL: cacheURL)
+        guard !Task.isCancelled else { return nil }
         if let result {
             memory.setObject(
                 WaveformPeaksBox(result),
@@ -68,7 +69,7 @@ final class WaveformStore: @unchecked Sendable {
         if let data = try? Data(contentsOf: cacheURL), !data.isEmpty {
             return data.withUnsafeBytes { Array($0.bindMemory(to: Float.self)) }
         }
-        guard let peaks = await extract(path: path) else { return nil }
+        guard !Task.isCancelled, let peaks = await extract(path: path), !Task.isCancelled else { return nil }
         peaks.withUnsafeBytes { try? Data($0).write(to: cacheURL, options: .atomic) }
         return peaks
     }
@@ -96,12 +97,14 @@ final class WaveformStore: @unchecked Sendable {
         reader.add(output)
         guard reader.startReading() else { return nil }
 
+        defer { reader.cancelReading() }
         let windowSize = 160  // 10 мс при 16 кГц
         var peaks: [Float] = []
         var sumSquares: Double = 0
         var count = 0
 
         while reader.status == .reading {
+            guard !Task.isCancelled else { return nil }
             guard let sample = output.copyNextSampleBuffer() else { break }
             guard let block = CMSampleBufferGetDataBuffer(sample) else { continue }
             let length = CMBlockBufferGetDataLength(block)
@@ -126,7 +129,7 @@ final class WaveformStore: @unchecked Sendable {
         if count > 0 {
             peaks.append(Float((sumSquares / Double(count)).squareRoot()))
         }
-        return reader.status == .completed || !peaks.isEmpty ? peaks : nil
+        return reader.status == .completed && !Task.isCancelled ? peaks : nil
     }
 }
 
@@ -137,14 +140,17 @@ private final class WaveformPeaksBox: NSObject {
 
 private actor WaveformWorkCoordinator {
     private struct Entry {
-        let id: UUID
-        let task: Task<[Float]?, Never>
+        let id = UUID()
+        let path: String
+        let cacheURL: URL
+        var consumers: [UUID: CheckedContinuation<[Float]?, Never>]
+        var task: Task<Void, Never>?
     }
 
     private let maxConcurrent: Int
     private let loader: WaveformStore.Loader
     private var active = 0
-    private var waiters: [CheckedContinuation<Void, Never>] = []
+    private var pending: [String] = []
     private var inFlight: [String: Entry] = [:]
 
     init(maxConcurrent: Int, loader: @escaping WaveformStore.Loader) {
@@ -153,34 +159,52 @@ private actor WaveformWorkCoordinator {
     }
 
     func value(key: String, path: String, cacheURL: URL) async -> [Float]? {
-        if let existing = inFlight[key] { return await existing.task.value }
-        let id = UUID()
-        let task = Task<[Float]?, Never> { [weak self, loader] in
-            guard let self else { return nil }
-            await self.acquire()
-            let result = await loader(path, cacheURL)
-            await self.release()
-            return result
+        let consumer = UUID()
+        return await withTaskCancellationHandler {
+            guard !Task.isCancelled else { return nil }
+            return await withCheckedContinuation { continuation in
+                if inFlight[key] == nil {
+                    inFlight[key] = Entry(path: path, cacheURL: cacheURL, consumers: [:])
+                    pending.append(key)
+                }
+                inFlight[key]?.consumers[consumer] = continuation
+                startPending()
+            }
+        } onCancel: {
+            Task { await self.cancel(key: key, consumer: consumer) }
         }
-        inFlight[key] = Entry(id: id, task: task)
-        let result = await task.value
-        if inFlight[key]?.id == id { inFlight[key] = nil }
-        return result
     }
 
-    private func acquire() async {
-        if active < maxConcurrent {
-            active += 1
-            return
-        }
-        await withCheckedContinuation { continuation in waiters.append(continuation) }
-    }
-
-    private func release() {
-        if waiters.isEmpty {
-            active -= 1
+    private func cancel(key: String, consumer: UUID) {
+        guard var entry = inFlight[key], let waiter = entry.consumers.removeValue(forKey: consumer) else { return }
+        waiter.resume(returning: nil)
+        if entry.consumers.isEmpty {
+            entry.task?.cancel()
+            inFlight[key] = nil
+            pending.removeAll { $0 == key }
         } else {
-            waiters.removeFirst().resume()
+            inFlight[key] = entry
         }
+    }
+
+    private func startPending() {
+        while active < maxConcurrent, !pending.isEmpty {
+            let key = pending.removeFirst()
+            guard let entry = inFlight[key] else { continue }
+            active += 1
+            inFlight[key]?.task = Task { [loader] in
+                let result = await loader(entry.path, entry.cacheURL)
+                self.finish(key: key, id: entry.id, result: Task.isCancelled ? nil : result)
+            }
+        }
+    }
+
+    private func finish(key: String, id: UUID, result: [Float]?) {
+        active -= 1
+        if let entry = inFlight[key], entry.id == id {
+            inFlight[key] = nil
+            for consumer in entry.consumers.values { consumer.resume(returning: result) }
+        }
+        startPending()
     }
 }

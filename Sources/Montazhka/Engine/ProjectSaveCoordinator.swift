@@ -46,6 +46,8 @@ final class ProjectSaveCoordinator {
         self.repository = repository
     }
 
+    var editGeneration: Int { generation.current + lineage }
+
     /// Правка ждёт отложенной записи.
     var hasPendingSave: Bool { pendingTask != nil }
 
@@ -77,11 +79,12 @@ final class ProjectSaveCoordinator {
         pendingTask?.cancel()
         let current = generation.advance()
         status = .saving
+        let base = lineage
         pendingTask = Task { [weak self] in
             do {
                 try await Task.sleep(for: .milliseconds(500))
                 guard let self, !Task.isCancelled else { return }
-                await self.persist(project, generation: current)
+                await self.persist(project, generation: current, base: base)
             } catch is CancellationError {
                 return
             } catch {
@@ -95,7 +98,7 @@ final class ProjectSaveCoordinator {
         pendingTask = nil
         let current = generation.advance()
         status = .saving
-        await persist(project, generation: current)
+        await persist(project, generation: current, base: lineage)
     }
 
     /// Запись перед закрытием: ошибка не прячется в статус, а выбрасывается — закрывать
@@ -105,7 +108,7 @@ final class ProjectSaveCoordinator {
         pendingTask = nil
         let current = generation.advance()
         status = .saving
-        switch await enqueueWrite(project, generation: current, notifyConflict: false) {
+        switch await enqueueWrite(project, generation: current, notifyConflict: false, base: lineage) {
         case .saved:
             return .saved
         case .keptCopy(let name?):
@@ -168,14 +171,15 @@ final class ProjectSaveCoordinator {
         return copy
     }
 
-    private func persist(_ project: Project, generation current: Int) async {
+    private func persist(_ project: Project, generation current: Int, base: Int) async {
         if generation.isCurrent(current) { pendingTask = nil }
-        _ = await enqueueWrite(project, generation: current, notifyConflict: true)
+        _ = await enqueueWrite(project, generation: current, notifyConflict: true, base: base)
     }
 
-    private func enqueueWrite(_ project: Project, generation current: Int, notifyConflict: Bool) async -> WriteResult {
+    private func enqueueWrite(_ project: Project, generation current: Int, notifyConflict: Bool, base: Int) async
+        -> WriteResult
+    {
         let previous = lastWrite
-        let base = lineage
         let write = Task { [weak self] () -> WriteResult in
             await previous?.value
             guard let self else { return .cancelled }

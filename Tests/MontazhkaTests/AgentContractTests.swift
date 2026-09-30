@@ -1,4 +1,5 @@
 import Foundation
+import MCP
 import Testing
 
 @testable import MontazhkaKit
@@ -103,7 +104,7 @@ struct AgentContractTests {
     @Test("MCP export arguments and defaults reach the worker unchanged")
     func exportOptionsFromMCP() throws {
         let id = UUID()
-        let chosen = AgentCommand.mcpExportRequest(
+        let chosen = try AgentCommand.mcpExportRequest(
             projectID: id,
             arguments: [
                 "outputPath": "/tmp/export.mp4", "quality": "high", "final": true,
@@ -124,7 +125,7 @@ struct AgentContractTests {
         guard
             case .export(
                 _, let defaultOutput, let defaultQuality, let defaultFinal, let defaultConfirm,
-                let defaultOverwrite, let unset, let unsetBurn) = AgentCommand.mcpExportRequest(
+                let defaultOverwrite, let unset, let unsetBurn) = try AgentCommand.mcpExportRequest(
                     projectID: id, arguments: [:])
         else {
             Issue.record("не экспорт")
@@ -218,6 +219,27 @@ struct AgentContractTests {
                 AgentEditRequest.self, from: Data(#"{"\#(key)":"\#(id.uuidString)"}"#.utf8))
             #expect(request.projectID == id)
         }
+    }
+
+    @Test("MCP edit fields reject wrong types before launching a worker")
+    func mcpEditTypesAreStrict() throws {
+        let base: [String: Value] = ["sourcePaths": .array([.string("/tmp/input.mov")])]
+        for (key, value) in [
+            ("removePauses", Value.string("false")), ("enhanceVoice", .int(0)),
+            ("confirmModelDownload", .null), ("cuts", .object([:])), ("cuts", .null),
+        ] {
+            var arguments = base
+            arguments[key] = value
+            #expect(throws: (any Error).self) {
+                _ = try AgentCommand.mcpEditRequest(arguments, requiresProject: false)
+            }
+        }
+        #expect(throws: (any Error).self) {
+            _ = try AgentCommand.mcpExportRequest(projectID: UUID(), arguments: ["overwrite": .string("false")])
+        }
+        var valid = base
+        valid["removePauses"] = .bool(false)
+        #expect(try !AgentCommand.mcpEditRequest(valid, requiresProject: false).removePauses)
     }
 
     @Test("Partial edit requests keep safe defaults")

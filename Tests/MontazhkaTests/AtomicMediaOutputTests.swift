@@ -118,6 +118,37 @@ struct AtomicMediaOutputTests {
         #expect(try Data(contentsOf: destination) == Data("old".utf8))
     }
 
+    @Test
+    func noOverwriteCommitKeepsConcurrentWinners() throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let destination = directory.appendingPathComponent("video.mp4")
+        var first = AtomicMediaOutput(destinationURL: destination)
+        var second = AtomicMediaOutput(destinationURL: destination)
+        defer { first.discard(); second.discard() }
+        try Data("first".utf8).write(to: first.temporaryURL)
+        try Data("second".utf8).write(to: second.temporaryURL)
+        try first.commit(overwrite: false)
+        #expect(throws: (any Error).self) { try second.commit(overwrite: false) }
+        #expect(try Data(contentsOf: destination) == Data("first".utf8))
+    }
+
+    @Test
+    func nestedOutputSupportsLongDestinationName() throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let destination = directory.appendingPathComponent(String(repeating: "a", count: 180) + ".mp4")
+        var outer = AtomicMediaOutput(destinationURL: destination)
+        var inner = AtomicMediaOutput(destinationURL: outer.temporaryURL)
+        defer { inner.discard(); outer.discard() }
+        try Data("complete".utf8).write(to: inner.temporaryURL)
+        try inner.commit()
+        try outer.commit()
+        #expect(try Data(contentsOf: destination) == Data("complete".utf8))
+    }
+
     private func temporaryDirectory() -> URL {
         FileManager.default.temporaryDirectory
             .appendingPathComponent("montazhka-atomic-output-\(UUID().uuidString)", isDirectory: true)

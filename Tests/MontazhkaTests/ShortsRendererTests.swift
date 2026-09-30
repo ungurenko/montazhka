@@ -126,11 +126,13 @@ struct ShortsWindowExportTests {
             project: project, words: [], faces: FaceTrackStore(cacheDir: root), quality: .compact)
         let prepared = PreparedExport(
             composition: plan.composition, audioMix: plan.audioMix, warning: nil,
-            videoComposition: plan.frameComposition, overlay: plan.overlayRenderer.map { renderer in renderer.image })
+            videoComposition: plan.frameComposition, overlay: plan.overlayRenderer.map { renderer in renderer.image },
+            ownerProjectID: project.id)
         let output = root.appendingPathComponent("out.mp4")
         _ = try await TranscodingVideoExporter().export(prepared, quality: .compact, to: output, progress: { _ in })
         let track = try #require(try await AVURLAsset(url: output).loadTracks(withMediaType: .video).first)
         let size = try await track.load(.naturalSize)
         #expect(size.height > size.width)
+        #expect(await ExportProvenance.stamp(url: output)?.ownerProjectID == project.id)
     }
 }
