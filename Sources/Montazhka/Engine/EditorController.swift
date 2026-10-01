@@ -811,9 +811,7 @@ final class EditorController: ExportPreparing {
     /// До готовности играет прежний звук.
     private func refreshEnhancedAudio() {
         let settings = project.voiceEnhance
-        let sources = Array(
-            Set(uniqueMediaSources(in: project.clips).compactMap { mediaAccess.url(for: $0)?.path })
-        )
+        let sources = uniqueMediaSources(in: project.clips)
 
         voiceEnhancement.refresh(settings: settings, sources: sources) { [weak self] in
             guard let self else { return }

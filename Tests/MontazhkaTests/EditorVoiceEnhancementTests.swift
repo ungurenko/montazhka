@@ -7,8 +7,8 @@ import Testing
 @MainActor
 @Suite
 struct EditorVoiceEnhancementTests {
-    @Test("a bookmark resolving a symlink keeps the existing initial preview fallback")
-    func bookmarkAliasKeepsExistingFallback() async throws {
+    @Test("a bookmark resolving a symlink reuses ready audio in preview and export")
+    func bookmarkAliasReusesReadyAudio() async throws {
         try await EditorBackgroundWorkFixture.run { fixture in
             let video = try await fixture.video()
             let alias = fixture.root.appendingPathComponent("alias", isDirectory: true)
@@ -25,11 +25,11 @@ struct EditorVoiceEnhancementTests {
 
             let preview = await controller.renderComposition(project, mode: .preview, speechRanges: nil)
             let previewURLs = try await EditorBackgroundWorkFixture.audioSources(in: preview.composition)
-            #expect(!previewURLs.isEmpty && previewURLs.allSatisfy { $0.pathExtension == "mov" })
+            #expect(!previewURLs.isEmpty && previewURLs.allSatisfy { $0.pathExtension == "caf" })
             let exported = await controller.compositionForExport(project, speechRanges: nil)
             let exportURLs = try await EditorBackgroundWorkFixture.audioSources(in: exported.composition)
-            #expect(!exportURLs.isEmpty && exportURLs.allSatisfy { $0.pathExtension == "caf" })
-            #expect(await gate.started.count == 2)
+            #expect(exportURLs == previewURLs)
+            #expect(await gate.started.count == 1)
         }
     }
 

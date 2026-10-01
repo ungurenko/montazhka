@@ -39,9 +39,16 @@ final class MontazhkaUITests: XCTestCase {
         let name = app.textFields["editor.projectName"]
         XCTAssertTrue(name.waitForExistence(timeout: 5))
         name.click()
-        name.typeKey("a", modifierFlags: .command)
-        name.typeText("Тестовый монтаж")
-        name.typeKey(.return, modifierFlags: [])
+        // XCUITest's synthesized Command-A can lose the selection on macOS.
+        // Invoke the same native action through the Edit menu before typing.
+        let edit = app.menuBars.menuBarItems.element(
+            matching: NSPredicate(format: "title IN %@", ["Правка", "Edit"]))
+        edit.click()
+        let selectAll = app.menuItems["selectAll:"]
+        XCTAssertTrue(selectAll.waitForExistence(timeout: 3))
+        selectAll.click()
+        app.typeText("Тестовый монтаж")
+        app.typeKey(.return, modifierFlags: [])
         XCTAssertEqual(name.value as? String, "Тестовый монтаж")
 
         XCTAssertTrue(app.buttons["editor.addVideo"].isEnabled)
@@ -112,8 +119,13 @@ final class MontazhkaUITests: XCTestCase {
         appearance.click()
         let subtitles = app.switches["shorts.subtitles"]
         XCTAssertTrue(subtitles.waitForExistence(timeout: 5))
+        // The fixture starts with subtitles enabled. Exercise both transitions.
+        let presets = app.buttons["Образ субтитров: Классика"]
+        XCTAssertTrue(presets.waitForExistence(timeout: 5))
         subtitles.click()
-        XCTAssertTrue(app.descendants(matching: .any)["shorts.subtitlePresets"].waitForExistence(timeout: 5))
+        XCTAssertFalse(presets.exists)
+        subtitles.click()
+        XCTAssertTrue(presets.waitForExistence(timeout: 5))
         // Тонкая настройка спрятана за «Настроить» — раскрываем её так же,
         // как «Оформление»: нажатием на кнопку по её accessibilityLabel.
         let settings = app.buttons["Настроить"]

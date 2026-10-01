@@ -17,7 +17,7 @@ final class EditorVoiceEnhancementCoordinator {
     }
 
     func refresh(
-        settings: VoiceEnhanceSettings, sources: [String],
+        settings: VoiceEnhanceSettings, sources: [MediaReference],
         rebuildPreview: @escaping @MainActor () -> Void
     ) {
         let current = generation.advance()
@@ -35,13 +35,20 @@ final class EditorVoiceEnhancementCoordinator {
             renderTask = Task { [store] in await store.cancelAll() }
             return
         }
-        status = .rendering(done: 0, total: sources.count)
+        status = .rendering(done: 0, total: Set(sources.map(\.lastKnownPath)).count)
 
         renderTask = Task { [weak self] in
             guard let self else { return }
             await self.store.cancelAll()
             guard !Task.isCancelled, self.generation.isCurrent(current) else { return }
-            guard let ready = await self.render(sources: sources, settings: settings, generation: current) else {
+            // Match the bookmark-resolved paths used by composition and export.
+            // Resolution performs disk I/O, so it stays off the UI actor.
+            let paths = await Task.detached(priority: .userInitiated) {
+                Array(Set(sources.map { $0.resolvedURL?.path ?? $0.lastKnownPath }))
+            }.value
+            guard !Task.isCancelled, self.generation.isCurrent(current) else { return }
+            self.status = .rendering(done: 0, total: paths.count)
+            guard let ready = await self.render(sources: paths, settings: settings, generation: current) else {
                 return
             }
             guard !Task.isCancelled, self.generation.isCurrent(current) else { return }
