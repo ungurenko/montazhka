@@ -39,13 +39,6 @@ enum ClipImportState: Equatable {
     case failed(UserFacingError)
 }
 
-private struct ClipLoadResult: Sendable {
-    let index: Int
-    let url: URL
-    let duration: Double?
-    let error: String?
-}
-
 enum OpenRouterKeyStatus: Equatable, Sendable {
     case missing
     case checking
@@ -81,7 +74,7 @@ final class EditorController: ExportPreparing {
     var hasPauseResult: Bool { waveformAnalysis.hasResult }
     var waveformVersion: Int { waveformAnalysis.version }
     var activeInspector: EditorInspectorSection?
-    private(set) var voiceStatus: VoiceEnhanceStatus = .idle
+    var voiceStatus: VoiceEnhanceStatus { voiceEnhancement.status }
     private(set) var musicProcessing = false
     var canUndo = false
     var canRedo = false
@@ -111,6 +104,7 @@ final class EditorController: ExportPreparing {
     private let mediaAvailability = MediaAvailabilityMonitor()
     private let mediaAccess = MediaAccessCoordinator()
     let voiceStore: VoiceEnhanceStore
+    private let voiceEnhancement: EditorVoiceEnhancementCoordinator
     let musicEQStore: MusicEQStore
     let repository: any ProjectRepository
     private let saveCoordinator: ProjectSaveCoordinator
@@ -129,10 +123,8 @@ final class EditorController: ExportPreparing {
     @ObservationIgnored private var coalescedEditKind: String?
     @ObservationIgnored private var coalescedEditReset: Task<Void, Never>?
     @ObservationIgnored private var rebuildGeneration = Generation()
-    @ObservationIgnored private var enhancedAudioURLs: [String: URL] = [:]
+    private var enhancedAudioURLs: [String: URL] { voiceEnhancement.readyAudio }
     @ObservationIgnored private var enhanceDebounce: Task<Void, Never>?
-    @ObservationIgnored private var enhanceRenderTask: Task<Void, Never>?
-    @ObservationIgnored private var enhanceGeneration = Generation()
     @ObservationIgnored private var musicDebounce: Task<Void, Never>?
     @ObservationIgnored private var seekTask: Task<Void, Never>?
     @ObservationIgnored private var latestSeekTarget: Double?
@@ -144,6 +136,7 @@ final class EditorController: ExportPreparing {
     @ObservationIgnored private var clipImportTask: Task<Void, Never>?
     @ObservationIgnored private var diskWatchTask: Task<Void, Never>?
     @ObservationIgnored private var isReloadingFromDisk = false
+    @ObservationIgnored private let readClip: EditorClipLoader.Read
 
     var duration: Double { project.totalDuration }
     var timelineSelection: TimelineSelection? {
@@ -169,7 +162,7 @@ final class EditorController: ExportPreparing {
 
     /// `revision` — версия файла из того же чтения, что и `project`; nil — прочитать
     /// версию сейчас (проект только что создан тестом или ещё не записан).
-    init(
+    convenience init(
         project: Project,
         revision: ProjectRevision? = nil,
         store: any ProjectRepository,
@@ -177,6 +170,24 @@ final class EditorController: ExportPreparing {
         preferences: any PreferenceStoring = UserDefaultsPreferenceStore.standard,
         activity: ActivityCenter = .shared
     ) {
+        self.init(
+            project: project, revision: revision, store: store,
+            openRouterKeyStore: openRouterKeyStore, preferences: preferences, activity: activity,
+            readClip: EditorClipLoader.read, voiceRender: VoiceEnhancer.render)
+    }
+
+    /// Внутренние точки подмены чтения клипа и обработки голоса для проверок отмены.
+    init(
+        project: Project,
+        revision: ProjectRevision? = nil,
+        store: any ProjectRepository,
+        openRouterKeyStore: any OpenRouterKeyStoring = OpenRouterKeyStore(),
+        preferences: any PreferenceStoring = UserDefaultsPreferenceStore.standard,
+        activity: ActivityCenter = .shared,
+        readClip: @escaping EditorClipLoader.Read,
+        voiceRender: @escaping VoiceEnhanceStore.Render
+    ) {
+        self.readClip = readClip
         self.activity = activity
         self.project = project
         self.projectEditor = ProjectEditor(project: project)
@@ -189,12 +200,13 @@ final class EditorController: ExportPreparing {
             reasoningPreferenceKey: EditorController.smartEditReasoningKey,
             openRouter: openRouterClient,
             keyStore: openRouterKeyStore)
-        let voiceStore = VoiceEnhanceStore(cacheDir: store.directories.enhancedAudio)
+        let voiceStore = VoiceEnhanceStore(cacheDir: store.directories.enhancedAudio, render: voiceRender)
         let musicEQStore = MusicEQStore(cacheDir: store.directories.musicEQ)
         let waveformStore = WaveformStore(cacheDir: store.directories.waveforms)
         self.waveforms = waveformStore
         self.waveformAnalysis = WaveformAnalysisCoordinator(store: waveformStore)
         self.voiceStore = voiceStore
+        self.voiceEnhancement = EditorVoiceEnhancementCoordinator(store: voiceStore)
         self.musicEQStore = musicEQStore
         self.mediaPipeline = MediaPipeline(voiceStore: voiceStore, musicEQStore: musicEQStore)
         let transcriptStore = TranscriptStore(
@@ -277,9 +289,8 @@ final class EditorController: ExportPreparing {
         diskWatchTask?.cancel()
         seekTask?.cancel()
         enhanceDebounce?.cancel()
-        enhanceRenderTask?.cancel()
+        voiceEnhancement.cancel()
         _ = rebuildGeneration.advance()
-        _ = enhanceGeneration.advance()
         aiConnection.shutdown()
         await voiceStore.cancelAll()
         cancelSmartEdit()
@@ -566,8 +577,7 @@ final class EditorController: ExportPreparing {
         if project.voiceEnhance.enabled {
             refreshEnhancedAudio()
         } else {
-            enhancedAudioURLs = [:]
-            voiceStatus = .idle
+            voiceEnhancement.resetReadyAudio()
             rebuildAndSeek(to: min(currentTime, duration))
         }
     }
@@ -578,39 +588,7 @@ final class EditorController: ExportPreparing {
         clipImportState = .importing
         clipImportTask = Task { [weak self] in
             guard let self else { return }
-            // Длительности читаем параллельно; порядок восстанавливаем по индексу.
-            let loaded = await withTaskGroup(of: ClipLoadResult.self) { group in
-                for (i, url) in urls.enumerated() {
-                    group.addTask {
-                        guard !Task.isCancelled else {
-                            return ClipLoadResult(index: i, url: url, duration: nil, error: nil)
-                        }
-                        do {
-                            let asset = AVURLAsset(url: url)
-                            let duration = try await asset.load(.duration).seconds
-                            guard duration.isFinite, duration > 0.1 else {
-                                return ClipLoadResult(
-                                    index: i, url: url, duration: nil,
-                                    error: "не удалось определить длительность")
-                            }
-                            let tracks = try await asset.loadTracks(withMediaType: .video)
-                            guard !tracks.isEmpty else {
-                                return ClipLoadResult(
-                                    index: i, url: url, duration: nil,
-                                    error: "в файле нет видеодорожки")
-                            }
-                            return ClipLoadResult(index: i, url: url, duration: duration, error: nil)
-                        } catch {
-                            return ClipLoadResult(
-                                index: i, url: url, duration: nil,
-                                error: UserFacingError.make(error, context: .clipImport).what)
-                        }
-                    }
-                }
-                var acc: [ClipLoadResult] = []
-                for await result in group { acc.append(result) }
-                return acc.sorted { $0.index < $1.index }
-            }
+            let loaded = await EditorClipLoader.load(urls: urls, read: self.readClip)
             guard !Task.isCancelled else { return }
             let newClips = loaded.compactMap { result in
                 result.duration.map { Clip(sourceURL: result.url, start: 0, end: $0) }
@@ -832,75 +810,15 @@ final class EditorController: ExportPreparing {
     /// Пересчитывает улучшенный звук для всех исходников и подменяет его в предпросмотре.
     /// До готовности играет прежний звук.
     private func refreshEnhancedAudio() {
-        let generation = enhanceGeneration.advance()
-        enhanceRenderTask?.cancel()
         let settings = project.voiceEnhance
         let sources = Array(
             Set(uniqueMediaSources(in: project.clips).compactMap { mediaAccess.url(for: $0)?.path })
         )
 
-        guard settings.enabled else {
-            enhancedAudioURLs = [:]
-            voiceStatus = .idle
-            rebuildAndSeek(to: currentTime)
-            enhanceRenderTask = Task { [voiceStore] in await voiceStore.cancelAll() }
-            return
-        }
-
-        guard !sources.isEmpty else {
-            voiceStatus = .idle
-            enhanceRenderTask = Task { [voiceStore] in await voiceStore.cancelAll() }
-            return
-        }
-        voiceStatus = .rendering(done: 0, total: sources.count)
-
-        enhanceRenderTask = Task { [weak self] in
+        voiceEnhancement.refresh(settings: settings, sources: sources) { [weak self] in
             guard let self else { return }
-            await self.voiceStore.cancelAll()
-            guard !Task.isCancelled, self.enhanceGeneration.isCurrent(generation) else { return }
-            guard
-                let ready = await self.renderEnhancedAudio(
-                    sources: sources,
-                    settings: settings,
-                    generation: generation)
-            else { return }
-            guard !Task.isCancelled, self.enhanceGeneration.isCurrent(generation) else { return }
-            self.enhancedAudioURLs = ready
-            self.voiceStatus = .idle
             self.rebuildAndSeek(to: self.currentTime)
-            self.enhanceRenderTask = nil
         }
-    }
-
-    /// Прогоняет все исходники через обработку голоса, обновляя счётчик прогресса.
-    /// Возвращает nil, если пересчёт устарел, отменён или завершился ошибкой.
-    private func renderEnhancedAudio(
-        sources: [String],
-        settings: VoiceEnhanceSettings,
-        generation: Int
-    ) async -> [String: URL]? {
-        var ready: [String: URL] = [:]
-        for (index, path) in sources.enumerated() {
-            do {
-                ready[path] = try await voiceStore.ensure(source: path, settings: settings)
-            } catch is CancellationError {
-                return nil  // уже идёт новый пересчёт
-            } catch VoiceEnhanceError.noAudioTrack {
-                // без звуковой дорожки — оставляем оригинал
-            } catch {
-                guard enhanceGeneration.isCurrent(generation) else { return nil }
-                voiceStatus = .failed(
-                    UserFacingError(
-                        "Не получилось обработать звук.",
-                        hint: "Просмотр и экспорт пойдут с исходным звуком."))
-                enhancedAudioURLs = [:]
-                return nil
-            }
-            guard enhanceGeneration.isCurrent(generation) else { return nil }
-            voiceStatus = .rendering(done: index + 1, total: sources.count)
-        }
-        guard enhanceGeneration.isCurrent(generation) else { return nil }
-        return ready
     }
 
     // MARK: - Поиск пауз
