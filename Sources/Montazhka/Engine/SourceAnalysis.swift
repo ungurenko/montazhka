@@ -18,10 +18,39 @@ enum SourceAnalysis {
     struct Report: Codable, Sendable {
         let version: Int
         let vadModel: String?
+        /// Шаг модели VAD, с: границы `speech` лежат на этой сетке исходника.
+        let vadFrame: Double?
         let speech: [[Double]]
         let ocrFindings: [Finding]
         let ocrSampleTimes: [Double]
         let privacyStatus: String
+    }
+
+    /// Отрезки речи для защиты пауз: подряд идущие куски модели (по 256 мс) с речью, без запаса и без
+    /// принудительной нарезки. `segmentSpeech` FluidAudio по умолчанию готовит куски для расшифровки:
+    /// тишина короче 0,75 с остаётся внутри речи, блоки режутся по 14 с — паузы так не видны.
+    static let vadModel = "silero-vad-v6.2.1/FluidAudio-0.15.5/pause-chunks-v1"
+    static let vadFrame = Double(VadManager.chunkSize) / Double(VadManager.sampleRate)
+
+    /// Речь начинается с куска, где вероятность ≥ enter, и заканчивается перед первым куском < exit
+    /// (гистерезис Silero). Один тихий кусок уже разрывает речь.
+    static func speechRuns(probabilities: [Float], enter: Float, exit: Float, duration: Double) -> [[Double]] {
+        func time(_ index: Int) -> Double { Double(index * VadManager.chunkSize) / Double(VadManager.sampleRate) }
+        var runs: [[Double]] = []
+        var start: Int?
+        for (index, probability) in probabilities.enumerated() {
+            if start == nil, probability >= enter {
+                start = index
+            } else if let first = start, probability < exit {
+                runs.append([time(first), time(index)])
+                start = nil
+            }
+        }
+        if let first = start { runs.append([time(first), time(probabilities.count)]) }
+        return runs.compactMap { run in
+            let end = min(run[1], duration)
+            return end > run[0] ? [run[0], end] : nil
+        }
     }
 
     static func privacyKind(_ text: String) -> String? {
@@ -49,6 +78,8 @@ enum SourceAnalysis {
             let models = base.appendingPathComponent("Models")
             let candidates = [
                 models.appendingPathComponent(ModelNames.VAD.sileroVadFile),
+                // Сюда кладёт модель сам FluidAudio (`--confirm-model-download`).
+                models.appendingPathComponent(Repo.vad.folderName).appendingPathComponent(ModelNames.VAD.sileroVadFile),
                 models.appendingPathComponent("silero-vad-coreml").appendingPathComponent(ModelNames.VAD.sileroVadFile),
             ]
             let manager: VadManager
@@ -71,8 +102,11 @@ enum SourceAnalysis {
             }
             try await export.export(to: audio, as: .m4a)
             let samples = try AudioConverter().resampleAudioFile(audio)
-            let segments = try await manager.segmentSpeech(samples)
-            speech = segments.map { [$0.startTime, $0.endTime] }
+            let enter = await manager.config.defaultThreshold
+            speech = speechRuns(
+                probabilities: try await manager.process(samples).map(\.probability),
+                enter: enter, exit: enter - 0.15,
+                duration: Double(samples.count) / Double(VadManager.sampleRate))
         }
         var findings: [Finding] = []
         var sampled: [Double] = []
@@ -103,7 +137,7 @@ enum SourceAnalysis {
             }
         }
         let report = Report(
-            version: 1, vadModel: vad ? "silero-vad-v6.2.1/FluidAudio-0.15.5/default" : nil,
+            version: 1, vadModel: vad ? vadModel : nil, vadFrame: vad ? vadFrame : nil,
             speech: speech, ocrFindings: findings, ocrSampleTimes: sampled,
             privacyStatus: ocr ? "sampled-requires-review" : "not-checked")
         try FileManager.default.createDirectory(

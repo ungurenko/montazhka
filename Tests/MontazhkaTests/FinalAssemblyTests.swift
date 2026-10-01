@@ -137,4 +137,19 @@ struct PipelineSafetyTests {
         #expect(SourceAnalysis.privacyKind("token=SYNTHETIC_TEST_VALUE") == "credential")
         #expect(SourceAnalysis.privacyKind("обычный текст урока") == nil)
     }
+
+    @Test("VAD speech runs break on one quiet chunk and are never forced into ASR blocks")
+    func pauseLevelSpeechRuns() {
+        // 0,256 с на кусок: речь 0–0,512, один тихий кусок, речь с гистерезисом (0,75 ≥ exit) до конца.
+        let probabilities: [Float] = [0.9, 0.95, 0.1, 0.9, 0.75, 0.9]
+        #expect(
+            SourceAnalysis.speechRuns(probabilities: probabilities, enter: 0.85, exit: 0.7, duration: 1.5)
+                == [[0, 0.512], [0.768, 1.5]])
+        // Ниже порога входа речь не начинается; 0,75 после тишины — ещё не речь.
+        #expect(SourceAnalysis.speechRuns(probabilities: [0.75, 0.8], enter: 0.85, exit: 0.7, duration: 1) == [])
+        // Минута сплошной речи остаётся одним отрезком: никаких блоков по 14 с.
+        let minute = [Float](repeating: 0.99, count: 235)
+        #expect(
+            SourceAnalysis.speechRuns(probabilities: minute, enter: 0.85, exit: 0.7, duration: 60) == [[0, 60]])
+    }
 }

@@ -298,7 +298,7 @@ Parakeet Core ML-модель в известной папке использу�
 
 ## Source analysis and final assembly
 
-`montazhka agent analyze-source --file <source> --output <report.json> --vad --ocr` writes local Silero speech intervals and sampled Apple Vision privacy candidates. The first VAD installation needs `--confirm-model-download`. OCR reports only categories, confidence, times and normalized boxes (bottom-left origin); recognized credentials are never serialized. Sampled OCR does not prove privacy. VAD boundaries are guards, not cut points.
+`montazhka agent analyze-source --file <source> --output <report.json> --vad --ocr` writes local Silero speech intervals and sampled Apple Vision privacy candidates. The first VAD installation needs `--confirm-model-download`. OCR reports only categories, confidence, times and normalized boxes (bottom-left origin); recognized credentials are never serialized. Sampled OCR does not prove privacy. VAD boundaries are guards, not cut points. `speech` holds runs of Silero chunks (`vadFrame` = 0.256 s, source-aligned, no padding) with Silero hysteresis; a single quiet chunk ends a run, so pauses longer than two chunks show up as gaps. `vadModel` `…/pause-chunks-v1` marks this pause-level output; the earlier `…/default` was FluidAudio ASR chunking (0.75 s minimum silence, 14 s blocks) and must not veto pauses.
 
 `doctor.features` exposes `source-analysis-v1`, `cover-overlay`, `freeze-tail`, `expected-timeline`; `runtimeIdentity` lets a pipeline invalidate artifacts after updating the executable. `inspect` includes `timeline`, `exportFingerprint`, stable clip `id` and `sourceId`.
 
