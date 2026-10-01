@@ -31,7 +31,9 @@ struct StatusBanner: View {
         }
     }
 
-    struct Action {
+    struct Action: Identifiable {
+        /// Роль действия сохраняется при смене подписи и перестановке кнопок.
+        let id: String
         let title: String
         var accessibilityIdentifier: String?
         let perform: () -> Void
@@ -75,7 +77,7 @@ struct StatusBanner: View {
 
                 if !actions.isEmpty {
                     HStack(spacing: Theme.Spacing.small) {
-                        ForEach(Array(actions.enumerated()), id: \.offset) { _, action in
+                        ForEach(actions) { action in
                             Button(action.title, action: action.perform)
                                 .buttonStyle(.mzQuiet(compact: true))
                                 .accessibilityIdentifier(action.accessibilityIdentifier ?? "")

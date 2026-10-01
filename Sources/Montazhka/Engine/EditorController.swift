@@ -137,6 +137,10 @@ final class EditorController: ExportPreparing {
     @ObservationIgnored private var diskWatchTask: Task<Void, Never>?
     @ObservationIgnored private var isReloadingFromDisk = false
     @ObservationIgnored private let readClip: EditorClipLoader.Read
+    @ObservationIgnored private var trimGeneration = Generation()
+    @ObservationIgnored private var trimTasks: [UUID: Task<Void, Never>] = [:]
+    @ObservationIgnored private var isStopped = false
+    let isPreview: Bool
 
     var duration: Double { project.totalDuration }
     var timelineSelection: TimelineSelection? {
@@ -146,6 +150,7 @@ final class EditorController: ExportPreparing {
 
     /// Размер кадра первого клипа с учётом поворота — для оценки размера файла в экспорте.
     func sourceDisplaySize() async -> CGSize? {
+        guard !isPreview else { return nil }
         guard let clip = project.clips.first else { return nil }
         guard let sourceURL = mediaAccess.url(for: clip.source) else { return nil }
         if let cached = displaySizeCache[sourceURL.path] { return cached }
@@ -168,11 +173,14 @@ final class EditorController: ExportPreparing {
         store: any ProjectRepository,
         openRouterKeyStore: any OpenRouterKeyStoring = OpenRouterKeyStore(),
         preferences: any PreferenceStoring = UserDefaultsPreferenceStore.standard,
-        activity: ActivityCenter = .shared
+        activity: ActivityCenter = .shared,
+        isPreview: Bool = false,
+        aiConnection: AIConnectionController? = nil
     ) {
         self.init(
             project: project, revision: revision, store: store,
             openRouterKeyStore: openRouterKeyStore, preferences: preferences, activity: activity,
+            isPreview: isPreview, aiConnection: aiConnection,
             readClip: EditorClipLoader.read, voiceRender: VoiceEnhancer.render)
     }
 
@@ -184,10 +192,13 @@ final class EditorController: ExportPreparing {
         openRouterKeyStore: any OpenRouterKeyStoring = OpenRouterKeyStore(),
         preferences: any PreferenceStoring = UserDefaultsPreferenceStore.standard,
         activity: ActivityCenter = .shared,
+        isPreview: Bool = false,
+        aiConnection: AIConnectionController? = nil,
         readClip: @escaping EditorClipLoader.Read,
         voiceRender: @escaping VoiceEnhanceStore.Render
     ) {
         self.readClip = readClip
+        self.isPreview = isPreview
         self.activity = activity
         self.project = project
         self.projectEditor = ProjectEditor(project: project)
@@ -195,11 +206,13 @@ final class EditorController: ExportPreparing {
         self.preferences = preferences
         self.saveCoordinator = ProjectSaveCoordinator(repository: store)
         let openRouterClient = OpenRouterClient()
-        self.aiConnection = AIConnectionController(
-            preferences: preferences,
-            reasoningPreferenceKey: EditorController.smartEditReasoningKey,
-            openRouter: openRouterClient,
-            keyStore: openRouterKeyStore)
+        self.aiConnection =
+            aiConnection
+            ?? AIConnectionController(
+                preferences: preferences,
+                reasoningPreferenceKey: EditorController.smartEditReasoningKey,
+                openRouter: openRouterClient,
+                keyStore: openRouterKeyStore)
         let voiceStore = VoiceEnhanceStore(cacheDir: store.directories.enhancedAudio, render: voiceRender)
         let musicEQStore = MusicEQStore(cacheDir: store.directories.musicEQ)
         let waveformStore = WaveformStore(cacheDir: store.directories.waveforms)
@@ -220,6 +233,7 @@ final class EditorController: ExportPreparing {
             waveforms: self.waveforms
         )
         player.actionAtItemEnd = .pause
+        guard !isPreview else { return }
         mediaAccess.synchronize(uniqueMediaSources(in: project.clips))
 
         checkMissingFiles()
@@ -279,6 +293,10 @@ final class EditorController: ExportPreparing {
 
     /// Останавливает плеер, фоновые работы и наблюдателей. Проект не записывает.
     func stop() async {
+        isStopped = true
+        _ = trimGeneration.advance()
+        for task in trimTasks.values { task.cancel() }
+        trimTasks = [:]
         player.pause()
         player.replaceCurrentItem(with: nil)
         isPlaying = false
@@ -352,6 +370,7 @@ final class EditorController: ExportPreparing {
     }
 
     private func warmUpWaveforms() {
+        guard !isPreview else { return }
         let sources = uniqueMediaSources(in: project.clips)
         waveformAnalysis.warmUp(paths: sources.compactMap { mediaAccess.url(for: $0)?.path })
     }
@@ -385,6 +404,7 @@ final class EditorController: ExportPreparing {
     }
 
     func rebuildAndSeek(to time: Double?) {
+        guard !isPreview else { return }
         previewTask?.cancel()
         let generation = rebuildGeneration.advance()
         let wasPlaying = player.rate != 0
@@ -529,7 +549,7 @@ final class EditorController: ExportPreparing {
         projectEditor.apply(edit, recordHistory: false)
         project = projectEditor.project
         let currentSources = Set(uniqueMediaSources(in: project.clips))
-        if currentSources != previousSources {
+        if !isPreview, currentSources != previousSources {
             mediaAccess.synchronize(Array(currentSources))
             checkMissingFiles()
             warmUpWaveforms()
@@ -566,9 +586,12 @@ final class EditorController: ExportPreparing {
 
     /// Показывает другую версию проекта целиком: ленту, звук, предпросмотр.
     private func showProject(_ snapshot: Project) {
+        _ = trimGeneration.advance()
         project = snapshot
-        mediaAccess.synchronize(uniqueMediaSources(in: project.clips))
-        checkMissingFiles()
+        if !isPreview {
+            mediaAccess.synchronize(uniqueMediaSources(in: project.clips))
+            checkMissingFiles()
+        }
         warmUpWaveforms()
         candidates = []
         cancelSmartEdit()
@@ -583,6 +606,7 @@ final class EditorController: ExportPreparing {
     }
 
     func addClips(urls: [URL]) {
+        guard !isPreview else { return }
         guard !urls.isEmpty else { return }
         clipImportTask?.cancel()
         clipImportState = .importing
@@ -622,6 +646,29 @@ final class EditorController: ExportPreparing {
         applyProjectEdit(.replaceClips(newClips))
         selectedClipID = nil
         afterEdit(seekTo: splitTime)
+    }
+
+    func trimOneFrame(clipID: UUID, edge: TimelineTrimEdge) {
+        guard !isPreview, !isStopped, let clip = project.clips.first(where: { $0.id == clipID }),
+            let url = mediaAccess.url(for: clip.source)
+        else { return }
+        let generation = trimGeneration.current
+        let taskID = UUID()
+        trimTasks[taskID] = Task { [weak self] in
+            guard let self else { return }
+            defer { self.trimTasks[taskID] = nil }
+            let track = try? await AVURLAsset(url: url).loadTracks(withMediaType: .video).first
+            let rate = try? await track?.load(.nominalFrameRate)
+            guard !Task.isCancelled, self.trimGeneration.isCurrent(generation),
+                let current = self.project.clips.first(where: { $0.id == clipID }), current.source == clip.source
+            else { return }
+            let step = ProjectVideoComposition.frameDuration(nominalFrameRate: rate ?? 30).seconds
+            let sourceTime =
+                edge == .start
+                ? min(current.end - 0.1, current.start + step)
+                : max(current.start + 0.1, current.end - step)
+            self.commitTrim(clipID: clipID, edge: edge, sourceTime: sourceTime)
+        }
     }
 
     func commitTrim(clipID: UUID, edge: TimelineTrimEdge, sourceTime: Double) {
@@ -668,25 +715,14 @@ final class EditorController: ExportPreparing {
         afterEdit(seekTo: timelineStart(of: target))
     }
 
-    /// Перестановка во время перетаскивания: только порядок, без пересборки плеера.
-    func liveReorder(draggedID: UUID, over targetID: UUID) {
-        guard draggedID != targetID,
-            let from = project.clips.firstIndex(where: { $0.id == draggedID }),
-            let to = project.clips.firstIndex(where: { $0.id == targetID })
-        else { return }
-        if !smartEditCandidates.isEmpty || smartEditTask != nil { cancelSmartEdit() }
-        var clips = project.clips
-        clips.move(fromOffsets: IndexSet(integer: from), toOffset: to > from ? to + 1 : to)
-        withAnimation(.easeInOut(duration: 0.15)) {
-            applyProjectEdit(.replaceClips(clips))
-        }
-    }
-
     /// Фиксация перетаскивания: записываем шаг отмены и пересобираем предпросмотр.
-    func commitReorder(originalOrder: [Clip]) {
-        guard originalOrder.map(\.id) != project.clips.map(\.id) else { return }
-        let newOrder = project.clips
-        applyProjectEdit(.replaceClips(originalOrder))
+    func commitReorder(_ newOrder: [Clip], expectedClips: [Clip]) {
+        guard project.clips == expectedClips, newOrder != expectedClips,
+            newOrder.count == expectedClips.count,
+            Set(newOrder.map(\.id)).count == newOrder.count,
+            Set(newOrder.map(\.id)) == Set(expectedClips.map(\.id)),
+            newOrder.allSatisfy({ expectedClips.contains($0) })
+        else { return }
         beginEdit()
         applyProjectEdit(.replaceClips(newOrder))
         afterEdit(seekTo: currentTime)
@@ -810,6 +846,7 @@ final class EditorController: ExportPreparing {
     /// Пересчитывает улучшенный звук для всех исходников и подменяет его в предпросмотре.
     /// До готовности играет прежний звук.
     private func refreshEnhancedAudio() {
+        guard !isPreview else { return }
         let settings = project.voiceEnhance
         let sources = uniqueMediaSources(in: project.clips)
 
@@ -822,6 +859,7 @@ final class EditorController: ExportPreparing {
     // MARK: - Поиск пауз
 
     func detectPauses() {
+        guard !isPreview else { return }
         guard !project.clips.isEmpty else { return }
         waveformAnalysis.detect(clips: project.clips, settings: project.detection)
     }
@@ -852,6 +890,7 @@ final class EditorController: ExportPreparing {
     func cancelWorkNeedingOpenRouterKey() { cancelSmartEdit() }
 
     func analyzeSmartEdits() {
+        guard !isPreview else { return }
         guard !project.clips.isEmpty else { return }
         smartEditTask?.cancel()
         let generation = smartEditGeneration.advance()
@@ -1042,6 +1081,7 @@ final class EditorController: ExportPreparing {
 
     /// Раз в секунду подхватывает правки агента. При конфликте сохраняет версию окна копией.
     private func watchDiskChanges() {
+        guard !isPreview else { return }
         saveCoordinator.onExternalChange = { [weak self] copyName in
             Task { await self?.reloadChangedProject(lostLocalEdit: true, copyName: copyName) }
         }
@@ -1101,6 +1141,7 @@ final class EditorController: ExportPreparing {
     // MARK: - Сохранение
 
     func scheduleSave() {
+        guard !isPreview else { return }
         saveCoordinator.schedule(project)
     }
 

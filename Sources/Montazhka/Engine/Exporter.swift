@@ -213,6 +213,8 @@ final class ExportModel {
     }
 
     private(set) var state: State = .idle
+    /// Готовится один раз при завершении экспорта, включая идентичность замечаний.
+    private(set) var resultText: ExportResultText?
     /// Общая доля записи 0…1 по всем проходам: громкость, запись, проверка.
     private(set) var progress: Double = 0
     private(set) var audioWarning: String?
@@ -238,6 +240,11 @@ final class ExportModel {
     /// Единственная точка смены состояния: центр активности узнаёт о ходе
     /// экспорта отсюда, поэтому прогресс виден в Доке даже со свёрнутым окном.
     private func setState(_ new: State, progress: Double? = nil) {
+        if case .done(_, let report) = new {
+            resultText = ExportResultText(report: report)
+        } else {
+            resultText = nil
+        }
         state = new
         if let progress { self.progress = progress }
         switch new {
@@ -367,6 +374,7 @@ final class ExportModel {
     func retry() {
         guard operationTask == nil else { return }
         state = .idle
+        resultText = nil
         progress = 0
         audioWarning = nil
     }

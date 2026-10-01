@@ -52,6 +52,7 @@ struct SmartEditPanel: View {
             if !controller.smartEditCandidates.isEmpty { applyBar }
         }
         .task {
+            guard !controller.isPreview else { return }
             controller.aiConnection.refreshAgents()
             controller.aiConnection.refreshReasoningOptions()
         }
@@ -265,6 +266,7 @@ struct SmartEditPanel: View {
                     error: error,
                     actions: [
                         StatusBanner.Action(
+                            id: "smartEdit.retry",
                             title: "Повторить анализ",
                             perform: { controller.analyzeSmartEdits() })
                     ])

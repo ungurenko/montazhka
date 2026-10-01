@@ -5,7 +5,19 @@ import UniformTypeIdentifiers
 /// Панель фоновой музыки: тумблер, список встроенных мелодий, свой файл, громкость.
 struct MusicPanel: View {
     var controller: EditorController
-    @State private var settings = MusicSettings()
+    private var settings: MusicSettings { controller.project.music }
+
+    func setting<Value>(_ keyPath: WritableKeyPath<MusicSettings, Value>) -> Binding<Value> {
+        Binding(
+            get: { controller.project.music[keyPath: keyPath] },
+            set: { value in updateSettings { $0[keyPath: keyPath] = value } })
+    }
+
+    private func updateSettings(_ change: (inout MusicSettings) -> Void) {
+        var latest = controller.project.music
+        change(&latest)
+        controller.updateMusicSettings(latest)
+    }
 
     var body: some View {
         InspectorPanel(
@@ -29,17 +41,11 @@ struct MusicPanel: View {
                 .padding(.bottom, 16)
             }
         }
-        .onAppear { settings = controller.project.music }
-        .onChange(of: settings) { _, new in
-            controller.updateMusicSettings(new)
-            // Контроллер мог дополнить выбор (приглушение при включении музыки).
-            if controller.project.music != new { settings = controller.project.music }
-        }
     }
 
     private var toggleBlock: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.small) {
-            Toggle("Добавить музыку", isOn: $settings.enabled)
+            Toggle("Добавить музыку", isOn: setting(\.enabled))
                 .toggleStyle(.switch)
                 .tint(Theme.accent)
                 .typeStyle(.bodyEmphasis)
@@ -69,8 +75,10 @@ struct MusicPanel: View {
                     title: track.title,
                     selected: settings.customPath == nil && settings.trackID == track.id
                 ) {
-                    settings.customPath = nil
-                    settings.trackID = track.id
+                    updateSettings {
+                        $0.customPath = nil
+                        $0.trackID = track.id
+                    }
                 }
             }
 
@@ -78,7 +86,7 @@ struct MusicPanel: View {
                 HStack(spacing: 8) {
                     TrackRow(title: URL(fileURLWithPath: path).lastPathComponent, selected: true) {}
                     Button {
-                        settings.customPath = nil
+                        updateSettings { $0.customPath = nil }
                     } label: {
                         Image(systemName: "xmark.circle.fill")
                             .font(.system(size: 14))
@@ -91,7 +99,7 @@ struct MusicPanel: View {
 
             Button {
                 if let url = pickAudioFile() {
-                    settings.customMedia = MediaReference(url: url)
+                    updateSettings { $0.customMedia = MediaReference(url: url) }
                 }
             } label: {
                 Label("Выбрать свой файл…", systemImage: "folder")
@@ -105,7 +113,7 @@ struct MusicPanel: View {
         SettingSlider(
             title: "Громкость музыки",
             explain: "Голос всегда на полной громкости",
-            value: $settings.volume,
+            value: setting(\.volume),
             range: 0...100, step: 1,
             display: { "\(Int($0)) %" }
         )
@@ -113,7 +121,7 @@ struct MusicPanel: View {
 
     private var duckingBlock: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.small) {
-            Toggle("Приглушать музыку под голосом", isOn: $settings.ducking)
+            Toggle("Приглушать музыку под голосом", isOn: setting(\.ducking))
                 .toggleStyle(.checkbox)
                 .typeStyle(.bodyEmphasis)
                 .foregroundStyle(Theme.textPrimary)
@@ -126,7 +134,7 @@ struct MusicPanel: View {
 
     private var eqBlock: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.small) {
-            Toggle("Не мешать голосу", isOn: $settings.eqEnabled)
+            Toggle("Не мешать голосу", isOn: setting(\.eqEnabled))
                 .toggleStyle(.checkbox)
                 .typeStyle(.bodyEmphasis)
                 .foregroundStyle(Theme.textPrimary)

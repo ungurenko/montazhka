@@ -3,6 +3,9 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# The ignored Xcode project must reflect the current canonical target names.
+.tools/xcodegen generate
+
 temporary_dir="$(mktemp -d "${TMPDIR:-/tmp}/montazhka-ui-tests.XXXXXX")"
 cleanup() {
   case "$temporary_dir" in

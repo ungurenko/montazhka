@@ -78,9 +78,10 @@ struct SelectableRow<Accessory: View>: View {
                 .font(.system(size: IconScale.inline + 4))
                 .foregroundStyle(isSelected ? tint : Theme.textSecondary.opacity(0.5))
         case .checkbox(let binding):
-            Toggle("", isOn: binding)
+            Toggle(title, isOn: binding)
                 .toggleStyle(.checkbox)
                 .labelsHidden()
+                .accessibilityHint(subtitle ?? "")
         case .none:
             EmptyView()
         }

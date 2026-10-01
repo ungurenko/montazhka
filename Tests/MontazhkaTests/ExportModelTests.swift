@@ -55,6 +55,30 @@ struct ExportModelTests {
     }
 
     @Test
+    func completedWarningsKeepDistinctIdentityUntilNextExport() async throws {
+        let report = FinalExportReport(
+            loudness: nil, normalized: false, gainDB: 0, targetMet: nil, subtitlesURL: nil,
+            subtitlesSkippedReason: nil, warnings: ["Проверочное замечание", "Проверочное замечание"])
+        let exporter = ControlledVideoExporter(completedReport: report)
+        let model = ExportModel(videoExporter: exporter)
+        let destination = URL(fileURLWithPath: "/tmp/montazhka-export-notices.mp4")
+        model.start(preparer: ImmediateExportPreparer(), quality: .high, to: destination)
+        try await waitUntil { model.state == .exporting }
+
+        exporter.complete()
+        try await waitUntil { model.state == .done(destination, report) }
+        let ids = try #require(model.resultText).notices.map(\.id)
+        #expect(ids.count == 2)
+        #expect(Set(ids).count == 2)
+        #expect(model.resultText?.notices.map(\.id) == ids)
+
+        model.start(preparer: SlowExportPreparer(), quality: .high, to: destination)
+        #expect(model.state == .preparing)
+        #expect(model.resultText == nil)
+        model.cancel()
+    }
+
+    @Test
     func cancellationDuringPreparationReturnsToIdle() async throws {
         let model = ExportModel(videoExporter: ControlledVideoExporter())
 
@@ -188,6 +212,11 @@ private final class ControlledVideoExporter: VideoExporting {
         loudness: nil, normalized: false, gainDB: 0, targetMet: nil, subtitlesURL: nil,
         subtitlesSkippedReason: "нет расшифровки", warnings: [])
     private var continuation: CheckedContinuation<Void, Error>?
+    private let completedReport: FinalExportReport
+
+    init(completedReport: FinalExportReport = ControlledVideoExporter.report) {
+        self.completedReport = completedReport
+    }
 
     func export(
         _ prepared: PreparedExport,
@@ -198,7 +227,7 @@ private final class ControlledVideoExporter: VideoExporting {
     ) async throws -> FinalExportReport {
         progress(0.5)
         try await withCheckedThrowingContinuation { continuation = $0 }
-        return Self.report
+        return completedReport
     }
 
     func complete() {

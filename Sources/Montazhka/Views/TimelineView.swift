@@ -48,8 +48,9 @@ private struct TimelineTrimPreview: Equatable, Sendable {
 /// Лента клипов: волны звука, линейка времени, курсор, зум, перетаскивание.
 struct TimelineView: View {
     var controller: EditorController
-    @State private var draggedClipID: UUID?
-    @State private var orderAtDragStart: [Clip]?
+    @State private var reorderSession: TimelineReorderSession?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.displayScale) private var displayScale
     @State private var viewportWidth: CGFloat = 800
     @State private var viewportProxy = TimelineViewportProxy()
     @State private var handToolLatched = false
@@ -72,7 +73,7 @@ struct TimelineView: View {
     }
 
     var body: some View {
-        let layout = TimelineLayout(clips: controller.project.clips)
+        let layout = TimelineLayout(clips: reorderSession?.previewClips ?? controller.project.clips)
 
         VStack(spacing: 6) {
             header(duration: layout.duration)
@@ -120,12 +121,15 @@ struct TimelineView: View {
             )
         }
         .accessibilityIdentifier("editor.timeline")
-        .onDrop(of: [.text], isTargeted: nil) { _ in
-            finishReorder()
-            return true
+        .onDrop(of: [.timelineClip], isTargeted: nil) { _ in finishReorder() }
+        .onChange(of: controller.project.clips) {
+            if let session = reorderSession, session.originalClips != controller.project.clips {
+                reorderSession = nil
+            }
         }
         .onDisappear {
             handKeyHeld = false
+            reorderSession = nil
             viewportProxy.onManualScroll = nil
         }
     }
@@ -311,12 +315,36 @@ struct TimelineView: View {
             }
     }
 
-    private func finishReorder() {
-        if let original = orderAtDragStart {
-            controller.commitReorder(originalOrder: original)
+    private func finishReorder() -> Bool {
+        guard let session = reorderSession, session.originalClips == controller.project.clips else {
+            reorderSession = nil
+            return false
         }
-        draggedClipID = nil
-        orderAtDragStart = nil
+        reorderSession = nil
+        controller.commitReorder(session.previewClips, expectedClips: session.originalClips)
+        return true
+    }
+
+    private func beginReorder(_ clipID: UUID) -> UUID? {
+        trimPreview = nil
+        let session = TimelineReorderSession(clipID: clipID, clips: controller.project.clips)
+        reorderSession = session
+        return session?.id
+    }
+
+    private func moveReorder(over targetID: UUID) {
+        guard var session = reorderSession, session.originalClips == controller.project.clips else {
+            reorderSession = nil
+            return
+        }
+        session.move(over: targetID)
+        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.15)) {
+            reorderSession = session
+        }
+    }
+
+    private func endReorder(_ sessionID: UUID) {
+        if reorderSession?.id == sessionID { reorderSession = nil }
     }
 
     private var playheadContentX: CGFloat {
@@ -335,13 +363,16 @@ struct TimelineView: View {
             selected: controller.selectedClipID == item.clip.id,
             waveforms: controller.waveforms,
             waveformVersion: controller.waveformVersion,
-            isDragged: draggedClipID == item.clip.id,
+            isDragged: reorderSession?.draggedClipID == item.clip.id,
             timelineStart: item.start,
             pps: pps,
             trimPreview: trimPreview?.originalClip.id == item.clip.id ? trimPreview : nil,
             controller: controller,
-            draggedClipID: $draggedClipID,
-            orderAtDragStart: $orderAtDragStart,
+            displayScale: displayScale,
+            onReorderBegan: { beginReorder(item.clip.id) },
+            onReorderEnded: endReorder,
+            onReorderEntered: { moveReorder(over: item.clip.id) },
+            onReorderDropped: finishReorder,
             onTrimChanged: updateTrimPreview,
             onTrimEnded: commitTrimPreview
         )
@@ -402,6 +433,11 @@ struct TimelineView: View {
     }
 
     private func cancelTransientInteraction() -> Bool {
+        if reorderSession != nil {
+            reorderSession = nil
+            // Esc должен также завершить нативную NSDraggingSession.
+            return false
+        }
         if trimPreview != nil {
             trimPreview = nil
             trimWasCancelled = true
@@ -543,7 +579,7 @@ private struct RulerView: View {
                 context.draw(
                     Text(TimeFormat.compact(t))
                         .font(.system(size: 9, weight: .medium, design: .monospaced))
-                        .foregroundColor(Theme.textSecondary),
+                        .foregroundStyle(Theme.textSecondary),
                     at: CGPoint(x: x + 3, y: 4),
                     anchor: .topLeading
                 )
@@ -581,8 +617,11 @@ private struct ClipCell: View, Equatable {
     let pps: CGFloat
     let trimPreview: TimelineTrimPreview?
     let controller: EditorController
-    @Binding var draggedClipID: UUID?
-    @Binding var orderAtDragStart: [Clip]?
+    let displayScale: CGFloat
+    let onReorderBegan: () -> UUID?
+    let onReorderEnded: (UUID) -> Void
+    let onReorderEntered: () -> Void
+    let onReorderDropped: () -> Bool
     let onTrimChanged: (Clip, TimelineTrimEdge, Double) -> Void
     let onTrimEnded: () -> Void
     @State private var isHovering = false
@@ -591,6 +630,12 @@ private struct ClipCell: View, Equatable {
         lhs.clip == rhs.clip
             && lhs.originalClip == rhs.originalClip
             && lhs.width == rhs.width
+            && lhs.height == rhs.height
+            && lhs.pps == rhs.pps
+            && lhs.displayScale == rhs.displayScale
+            && lhs.viewport === rhs.viewport
+            && lhs.waveforms === rhs.waveforms
+            && lhs.controller === rhs.controller
             && lhs.contentX == rhs.contentX
             && lhs.selected == rhs.selected
             && lhs.waveformVersion == rhs.waveformVersion
@@ -600,6 +645,75 @@ private struct ClipCell: View, Equatable {
     }
 
     var body: some View {
+        interactiveSurface
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Клип \(clip.fileName)")
+            .accessibilityIdentifier("timeline.clip.\(clip.id.uuidString)")
+            .accessibilityValue("\(TimeFormat.spoken(clip.duration))\(selected ? ", выбран" : "")")
+            .accessibilityHint("Активируй, чтобы выбрать клип")
+            .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
+            .accessibilityAction {
+                controller.selectedClipID = clip.id
+                controller.seek(to: timelineStart)
+            }
+            .accessibilityAction(named: "Переместить влево") {
+                controller.moveClip(id: clip.id, direction: -1)
+            }
+            .accessibilityAction(named: "Переместить вправо") {
+                controller.moveClip(id: clip.id, direction: 1)
+            }
+            .accessibilityAction(named: "Укоротить начало на один кадр") {
+                trimOneFrame(edge: .start)
+            }
+            .accessibilityAction(named: "Укоротить конец на один кадр") {
+                trimOneFrame(edge: .end)
+            }
+            .accessibilityAction(named: "Удалить клип") {
+                controller.deleteClip(id: clip.id)
+            }
+    }
+
+    private var interactiveSurface: some View {
+        surface
+            .frame(width: width, height: height)
+            .clipShape(RoundedRectangle(cornerRadius: Theme.radiusSmall, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: Theme.radiusSmall, style: .continuous)
+                    .stroke(
+                        selected ? Theme.accent : Color.black.opacity(0.08),
+                        lineWidth: selected ? 2 : 1)
+            )
+            .opacity(isDragged ? 0.5 : 1)
+            .contentShape(Rectangle())
+            .gesture(tapToSelectAndSeek)
+            .contextMenu {
+                Button("Переместить влево") { controller.moveClip(id: clip.id, direction: -1) }
+                Button("Переместить вправо") { controller.moveClip(id: clip.id, direction: 1) }
+                Divider()
+                Button("Удалить клип", role: .destructive) { controller.deleteClip(id: clip.id) }
+            }
+            .overlay { dragSource }
+            .onDrop(
+                of: [.timelineClip],
+                delegate: ReorderDropDelegate(onEntered: onReorderEntered, onDropped: onReorderDropped)
+            )
+            .overlay(alignment: .leading) {
+                if isHovering || selected || trimPreview != nil {
+                    trimHandle(edge: .start)
+                }
+            }
+            .overlay(alignment: .trailing) {
+                if isHovering || selected || trimPreview != nil {
+                    trimHandle(edge: .end)
+                }
+            }
+            .overlay(alignment: trimPreview?.edge == .start ? .topLeading : .topTrailing) {
+                trimIndicator
+            }
+            .onHover { isHovering = $0 }
+    }
+
+    private var surface: some View {
         ZStack(alignment: .topLeading) {
             RoundedRectangle(cornerRadius: Theme.radiusSmall, style: .continuous)
                 .fill(Theme.clipBackground)
@@ -618,93 +732,55 @@ private struct ClipCell: View, Equatable {
                     .padding(.top, 4)
             }
         }
-        .frame(width: width, height: height)
-        .clipShape(RoundedRectangle(cornerRadius: Theme.radiusSmall, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: Theme.radiusSmall, style: .continuous)
-                .stroke(
-                    selected ? Theme.accent : Color.black.opacity(0.08),
-                    lineWidth: selected ? 2 : 1)
+    }
+
+    private var dragSource: some View {
+        TimelineClipDragSource(
+            clipID: clip.id,
+            image: {
+                let renderer = ImageRenderer(
+                    content: TimelineClipDragPreview(
+                        fileName: clip.fileName,
+                        width: TimelineDragPreviewMath.width(forClipWidth: width)))
+                renderer.scale = displayScale
+                return renderer.nsImage
+            },
+            onBegin: onReorderBegan,
+            onEnd: onReorderEnded,
+            onClick: { x in selectAndSeek(x: x) }
         )
-        .opacity(isDragged ? 0.5 : 1)
-        .contentShape(Rectangle())
-        .gesture(tapToSelectAndSeek)
-        .contextMenu {
-            Button("Переместить влево") { controller.moveClip(id: clip.id, direction: -1) }
-            Button("Переместить вправо") { controller.moveClip(id: clip.id, direction: 1) }
-            Divider()
-            Button("Удалить клип", role: .destructive) { controller.deleteClip(id: clip.id) }
+        .accessibilityHidden(true)
+    }
+
+    @ViewBuilder
+    private var trimIndicator: some View {
+        if let trimPreview {
+            Text(TimeFormat.short(trimBoundaryTime(trimPreview)))
+                .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 3)
+                .background(Theme.accent)
+                .clipShape(Capsule())
+                .offset(y: -25)
+                .allowsHitTesting(false)
         }
-        .onDrag {
-            orderAtDragStart = controller.project.clips
-            draggedClipID = clip.id
-            return NSItemProvider(object: clip.id.uuidString as NSString)
-        } preview: {
-            TimelineClipDragPreview(
-                fileName: clip.fileName,
-                width: TimelineDragPreviewMath.width(forClipWidth: width)
-            )
-        }
-        .onDrop(
-            of: [.text],
-            delegate: ReorderDropDelegate(
-                targetID: clip.id,
-                controller: controller,
-                draggedClipID: $draggedClipID,
-                orderAtDragStart: $orderAtDragStart
-            )
-        )
-        .overlay(alignment: .leading) {
-            if isHovering || selected || trimPreview != nil {
-                trimHandle(edge: .start)
-            }
-        }
-        .overlay(alignment: .trailing) {
-            if isHovering || selected || trimPreview != nil {
-                trimHandle(edge: .end)
-            }
-        }
-        .overlay(alignment: trimPreview?.edge == .start ? .topLeading : .topTrailing) {
-            if let trimPreview {
-                Text(TimeFormat.short(trimBoundaryTime(trimPreview)))
-                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 3)
-                    .background(Theme.accent)
-                    .clipShape(Capsule())
-                    .offset(y: -25)
-                    .allowsHitTesting(false)
-            }
-        }
-        .onHover { isHovering = $0 }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Клип \(clip.fileName)")
-        .accessibilityValue("\(TimeFormat.spoken(clip.duration))\(selected ? ", выбран" : "")")
-        .accessibilityHint("Активируй, чтобы выбрать клип")
-        .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
-        .accessibilityAction {
-            controller.selectedClipID = clip.id
-            controller.seek(to: timelineStart)
-        }
-        .accessibilityAction(named: "Переместить влево") {
-            controller.moveClip(id: clip.id, direction: -1)
-        }
-        .accessibilityAction(named: "Переместить вправо") {
-            controller.moveClip(id: clip.id, direction: 1)
-        }
-        .accessibilityAction(named: "Удалить клип") {
-            controller.deleteClip(id: clip.id)
-        }
+    }
+
+    private func trimOneFrame(edge: TimelineTrimEdge) {
+        controller.trimOneFrame(clipID: clip.id, edge: edge)
     }
 
     private var tapToSelectAndSeek: some Gesture {
         SpatialTapGesture()
             .onEnded { value in
-                controller.selectedClipID = clip.id
-                controller.seek(
-                    to: timelineStart + Double(value.location.x) / Double(max(1, width / CGFloat(clip.duration))))
+                selectAndSeek(x: value.location.x)
             }
+    }
+
+    private func selectAndSeek(x: CGFloat) {
+        controller.selectedClipID = clip.id
+        controller.seek(to: timelineStart + Double(x) / Double(max(1, width / CGFloat(clip.duration))))
     }
 
     private func trimHandle(edge: TimelineTrimEdge) -> some View {
@@ -781,28 +857,14 @@ private struct TimelineClipDragPreview: View {
 }
 
 private struct ReorderDropDelegate: DropDelegate {
-    let targetID: UUID
-    let controller: EditorController
-    @Binding var draggedClipID: UUID?
-    @Binding var orderAtDragStart: [Clip]?
+    let onEntered: () -> Void
+    let onDropped: () -> Bool
 
-    func dropEntered(info: DropInfo) {
-        guard let dragged = draggedClipID else { return }
-        controller.liveReorder(draggedID: dragged, over: targetID)
-    }
+    func dropEntered(info: DropInfo) { onEntered() }
 
-    func dropUpdated(info: DropInfo) -> DropProposal? {
-        DropProposal(operation: .move)
-    }
+    func dropUpdated(info: DropInfo) -> DropProposal? { DropProposal(operation: .move) }
 
-    func performDrop(info: DropInfo) -> Bool {
-        if let original = orderAtDragStart {
-            controller.commitReorder(originalOrder: original)
-        }
-        draggedClipID = nil
-        orderAtDragStart = nil
-        return true
-    }
+    func performDrop(info: DropInfo) -> Bool { onDropped() }
 }
 
 // MARK: - Волна звука

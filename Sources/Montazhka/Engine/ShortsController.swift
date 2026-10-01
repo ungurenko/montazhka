@@ -62,6 +62,12 @@ private struct ShortsPreviewKey: Equatable {
     let frameSettings: ShortsFrameSettings
 }
 
+private struct ShortsSubtitlePreviewKey: Equatable {
+    let candidateID: UUID
+    let timeMap: ShortsTimeMap
+    let transcriptRevision: Int
+}
+
 @MainActor
 struct DefaultShortsPreviewBuilder: ShortsPreviewBuilding {
     func makeItem(for request: ShortsPreviewRequest) async throws -> ShortsPreviewItem {
@@ -97,6 +103,7 @@ struct DefaultShortsPreviewBuilder: ShortsPreviewBuilding {
 @MainActor
 @Observable
 final class ShortsController {
+    let isPreview: Bool
     private(set) var source: MediaReference
     private(set) var sourceDuration: Double = 0
     private(set) var displaySize = CGSize(width: 1920, height: 1080)
@@ -126,6 +133,7 @@ final class ShortsController {
         didSet {
             guard trimPauses != oldValue else { return }
             preferences.set(trimPauses ? "on" : "off", forKey: Self.trimPausesKey)
+            refreshPreviewSubtitleCues()
             refreshPreviewAfterDisplayChange()
         }
     }
@@ -182,8 +190,16 @@ final class ShortsController {
 
     private(set) var status: ShortsStatus = .idle
     @ObservationIgnored let activity: ActivityCenter
-    var candidates: [ShortCandidate] = []
-    private(set) var transcriptWords: [TranscriptWord] = []
+    var candidates: [ShortCandidate] = [] {
+        didSet { refreshPreviewSubtitleCues() }
+    }
+    private(set) var transcriptWords: [TranscriptWord] = [] {
+        didSet {
+            transcriptRevision += 1
+            refreshPreviewSubtitleCues()
+        }
+    }
+    private(set) var previewSubtitleCues: [ShortsSubtitleCue] = []
     private(set) var analysisWarnings: [ShortsAnalysisWarning] = []
     private(set) var exportState: ShortsExportState = .idle
 
@@ -206,6 +222,8 @@ final class ShortsController {
     @ObservationIgnored private let prepareOperation = LatestOperation()
     @ObservationIgnored private let previewOperation = LatestOperation()
     @ObservationIgnored private var preparedPreview: (key: ShortsPreviewKey, plan: ShortsPreviewPlan)?
+    @ObservationIgnored private var subtitlePreviewKey: ShortsSubtitlePreviewKey?
+    @ObservationIgnored private var transcriptRevision = 0
     @ObservationIgnored private var pendingPreviewKey: ShortsPreviewKey?
     @ObservationIgnored private let seekOperation = LatestOperation()
     @ObservationIgnored private var sourceAccess: MediaAccessLease?
@@ -218,18 +236,38 @@ final class ShortsController {
 
     var fileName: String { source.displayName }
 
+    var canAnalyze: Bool {
+        aiConnection.isReady && prepareError == nil
+            && sourceDuration >= ShortsLimits.minSourceDuration && SmartEditPlatform.isSupported
+    }
+
     var subtitleMode: ShortsSubtitleMode {
         subtitleSettings.mode(with: transcriptWords)
     }
 
     var currentPreviewSubtitle: ShortsSubtitleOverlay? {
-        guard let previewingID,
-            let candidate = candidates.first(where: { $0.id == previewingID })
-        else { return nil }
+        guard subtitleSettings.enabled else { return nil }
         return ShortsSubtitleOverlayBuilder.make(
             at: currentTime,
-            timeMap: timeMap(for: candidate),
-            mode: subtitleMode)
+            cues: previewSubtitleCues,
+            appearance: subtitleSettings.appearance,
+            highlight: subtitleSettings.highlightActiveWord)
+    }
+
+    private func refreshPreviewSubtitleCues() {
+        guard let previewingID,
+            let candidate = candidates.first(where: { $0.id == previewingID })
+        else {
+            subtitlePreviewKey = nil
+            previewSubtitleCues = []
+            return
+        }
+        let map = timeMap(for: candidate)
+        let key = ShortsSubtitlePreviewKey(
+            candidateID: previewingID, timeMap: map, transcriptRevision: transcriptRevision)
+        guard key != subtitlePreviewKey else { return }
+        subtitlePreviewKey = key
+        previewSubtitleCues = ShortsSubtitleCueBuilder.make(words: transcriptWords, timeMap: map)
     }
 
     /// Единственный источник правды о том, из каких кусков собран ролик.
@@ -262,12 +300,17 @@ final class ShortsController {
         previewBuilder: any ShortsPreviewBuilding = DefaultShortsPreviewBuilder(),
         preferences: any PreferenceStoring = UserDefaultsPreferenceStore.standard,
         activity: ActivityCenter = .shared,
-        initialTranscriptWords: [TranscriptWord] = []
+        initialTranscriptWords: [TranscriptWord] = [],
+        isPreview: Bool = false,
+        aiConnection: AIConnectionController? = nil,
+        previewSourceDuration: Double = 0
     ) {
+        self.isPreview = isPreview
         self.activity = activity
-        let source = MediaReference(url: sourceURL)
+        let source = isPreview ? MediaReference(path: sourceURL.path) : MediaReference(url: sourceURL)
         self.source = source
         self.transcriptWords = initialTranscriptWords
+        if isPreview { self.sourceDuration = previewSourceDuration }
         self.preferences = preferences
         count = ShortsCount.saved(in: preferences)
         subtitleSettings = ShortsSubtitleSettings.saved(in: preferences)
@@ -280,11 +323,13 @@ final class ShortsController {
             modelsDir: store.directories.models)
         self.transcriptStore = transcriptStore
         let openRouter = OpenRouterClient()
-        self.aiConnection = AIConnectionController(
-            preferences: preferences,
-            reasoningPreferenceKey: ShortsController.reasoningKey,
-            openRouter: openRouter,
-            keyStore: openRouterKeyStore)
+        self.aiConnection =
+            aiConnection
+            ?? AIConnectionController(
+                preferences: preferences,
+                reasoningPreferenceKey: ShortsController.reasoningKey,
+                openRouter: openRouter,
+                keyStore: openRouterKeyStore)
         let aiClient = UnifiedAIClient(openRouter: openRouter)
         self.service = ShortsCutService(
             transcriptStore: transcriptStore,
@@ -293,6 +338,7 @@ final class ShortsController {
             cache: ShortsAnalysisCache(cacheDir: store.directories.shortsAnalysis))
         self.previewBuilder = previewBuilder
         frameSettings = ShortsFrameSettings.loadAndMigrate(in: preferences)
+        guard !isPreview else { return }
         attachObservers()
         // Security-scoped доступ резолвим вне главного потока: внутри лизинга
         // — resolvingBookmarkData и проверки существования (дисковый I/O).
@@ -330,7 +376,7 @@ final class ShortsController {
 
     /// Читает длительность, видеодорожку и размер кадра выбранного файла.
     func prepare() {
-        guard sourceDuration == 0, prepareError == nil else { return }
+        guard !isPreview, sourceDuration == 0, prepareError == nil else { return }
         let asset = AVURLAsset(url: sourceURL)
         prepareOperation.start { [weak self] token in
             guard let self else { return }
@@ -376,7 +422,7 @@ final class ShortsController {
     // MARK: - Анализ
 
     func analyze() {
-        guard prepareError == nil, sourceDuration >= ShortsLimits.minSourceDuration else { return }
+        guard !isPreview, prepareError == nil, sourceDuration >= ShortsLimits.minSourceDuration else { return }
         let file = source
         let duration = sourceDuration
         let requestedCount = count
@@ -483,6 +529,12 @@ final class ShortsController {
     func preview(_ candidate: ShortCandidate) {
         previewError = nil
         previewingID = candidate.id
+        refreshPreviewSubtitleCues()
+        if isPreview {
+            currentTime = 0
+            previewFrameSize = displaySize
+            return
+        }
         previewFrameSize = nil
         cancelPreviewStop()
         seekOperation.cancel()
@@ -618,7 +670,7 @@ final class ShortsController {
     // MARK: - Экспорт
 
     func chooseFolderAndExport() {
-        guard selectedCount > 0 else { return }
+        guard !isPreview, selectedCount > 0 else { return }
         let panel = NSOpenPanel()
         panel.title = "Выбери папку для роликов"
         panel.prompt = "Сохранить"
@@ -631,6 +683,7 @@ final class ShortsController {
     }
 
     func startExport(to folder: URL) {
+        guard !isPreview else { return }
         let selected = candidates.filter(\.enabled)
         guard !selected.isEmpty else { return }
         let items = selected.enumerated().map {

@@ -339,6 +339,17 @@ enum ShortsSubtitleOverlayBuilder {
     ) -> ShortsSubtitleOverlay? {
         guard case let .on(words, appearance, highlight) = mode else { return nil }
         let cues = ShortsSubtitleCueBuilder.make(words: words, timeMap: timeMap)
+        return make(at: time, cues: cues, appearance: appearance, highlight: highlight)
+    }
+
+    /// Фразы готовятся при смене расшифровки или карты времени; кадр просмотра
+    /// выбирает только готовую фразу и звучащее слово.
+    static func make(
+        at time: Double,
+        cues: [ShortsSubtitleCue],
+        appearance: ShortsSubtitleAppearance,
+        highlight: Bool
+    ) -> ShortsSubtitleOverlay? {
         guard let cue = cues.first(where: { time >= $0.start && time < $0.end }) else {
             return nil
         }
@@ -381,8 +392,8 @@ enum ShortsSubtitleCueBuilder {
             let segment: Int
         }
 
-        // Сначала отсекаем всё за пределами ролика: превью строит фразы на
-        // каждом кадре, а транскрипт часового видео — это тысячи слов.
+        // Отсекаем всё за пределами ролика: транскрипт часового видео —
+        // тысячи слов, но фразы нужны только для выбранного кандидата.
         let placed: [Placed] =
             words
             .filter { $0.end > timeMap.sourceStart && $0.start < timeMap.sourceEnd }

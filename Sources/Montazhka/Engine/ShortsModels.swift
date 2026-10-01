@@ -188,11 +188,24 @@ enum ShortsExportState: Equatable {
     case failed(message: UserFacingError, completed: Int, total: Int, folder: URL)
 }
 
-enum ShortsAnalysisWarning: Equatable, Sendable {
+enum ShortsAnalysisWarning: Equatable, Sendable, Identifiable {
     case mapWindowsFailed(failed: Int, total: Int)
     case proposalWindowsFailed(failed: Int, total: Int)
     case rankingFallback
     case verificationSkipped
+
+    enum ID: Hashable {
+        case mapWindowsFailed, proposalWindowsFailed, rankingFallback, verificationSkipped
+    }
+
+    var id: ID {
+        switch self {
+        case .mapWindowsFailed: .mapWindowsFailed
+        case .proposalWindowsFailed: .proposalWindowsFailed
+        case .rankingFallback: .rankingFallback
+        case .verificationSkipped: .verificationSkipped
+        }
+    }
 
     var message: String {
         switch self {

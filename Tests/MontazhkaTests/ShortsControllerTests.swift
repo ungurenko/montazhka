@@ -7,6 +7,95 @@ import Testing
 @Suite
 @MainActor
 struct ShortsControllerTests {
+    @Test(arguments: AIProvider.allCases)
+    func analysisEligibilityUsesSelectedProviderWithoutRequiringAnUnrelatedKey(provider: AIProvider) async throws {
+        let root = temporaryDirectory("analysis-eligibility")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let preferences = ControllerPreferenceStore()
+        provider.save(in: preferences)
+        let available = AIAgentAvailability(
+            provider: provider, isAvailable: true, executablePath: provider == .openRouter ? nil : "/fixture/cli",
+            models: [AIModelOption(id: provider.fallbackModelID)], message: nil)
+        let keyStore = ControllerFixtureKeyStore(key: provider == .openRouter ? "fixture-key" : nil)
+        let connection = AIConnectionController(
+            preferences: preferences, reasoningPreferenceKey: "test.shorts.reasoning",
+            openRouter: OpenRouterClient(), keyStore: keyStore,
+            discovery: { _ in [available] }, allowsNetworkRequests: false)
+        connection.refreshAgents()
+        try await waitUntil { !connection.isRefreshing && connection.openRouterKeyStatus != .checking }
+        let controller = ShortsController(
+            sourceURL: root.appendingPathComponent("absent.mov"),
+            store: ProjectStore(baseDirectory: root), openRouterKeyStore: keyStore,
+            preferences: preferences, isPreview: true,
+            aiConnection: connection, previewSourceDuration: 45)
+        #expect(controller.canAnalyze == SmartEditPlatform.isSupported)
+        if provider != .openRouter {
+            #expect(controller.openRouterKeyStatus == .missing)
+            connection.modelID = "unavailable-model"
+            #expect(!controller.canAnalyze)
+        } else {
+            #expect(await connection.deleteOpenRouterKey())
+            #expect(!controller.canAnalyze)
+        }
+        await controller.shutdown()
+    }
+
+    @Test
+    func subtitleCacheFollowsCutsCandidateChangesAndTranscriptReset() async {
+        let root = temporaryDirectory("subtitle-cache")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let builder = ControlledShortsPreviewBuilder()
+        let sourceID = UUID()
+        let words = [
+            TranscriptWord(sourceID: sourceID, text: "Начало", start: 0, end: 1, confidence: 1),
+            TranscriptWord(sourceID: sourceID, text: "После паузы", start: 3, end: 4, confidence: 1),
+        ]
+        let controller = ShortsController(
+            sourceURL: root.appendingPathComponent("absent.mov"),
+            store: ProjectStore(baseDirectory: root),
+            openRouterKeyStore: EmptyOpenRouterKeyStore(), previewBuilder: builder,
+            preferences: ControllerPreferenceStore(), initialTranscriptWords: words,
+            isPreview: true, previewSourceDuration: 45)
+        controller.subtitlesEnabled = true
+        controller.subtitleHighlight = true
+        var item = candidate(title: "Склейка")
+        item.segments = [ShortsSegment(start: 0, end: 2), ShortsSegment(start: 3, end: 5)]
+        controller.candidates = [item]
+        controller.preview(item)
+        controller.currentTime = 2.25
+        #expect(controller.currentPreviewSubtitle?.words == ["После паузы"])
+        #expect(controller.currentPreviewSubtitle?.activeWordIndex == 0)
+
+        let preparedCues = controller.previewSubtitleCues
+        controller.subtitleHighlight = false
+        controller.subtitlePreset = .plate
+        #expect(controller.previewSubtitleCues == preparedCues)
+        controller.currentTime = 2.25
+        #expect(controller.currentPreviewSubtitle?.activeWordIndex == nil)
+        #expect(controller.currentPreviewSubtitle?.appearance == ShortsSubtitlePreset.plate.appearance)
+
+        controller.trimPauses = false
+        controller.currentTime = 2.25
+        #expect(controller.currentPreviewSubtitle == nil)
+        controller.currentTime = 3.25
+        #expect(controller.currentPreviewSubtitle?.words == ["После паузы"])
+
+        controller.trimPauses = true
+        item.segments = [ShortsSegment(start: 0, end: 2)]
+        controller.candidates = [item]
+        controller.currentTime = 2.25
+        #expect(controller.currentPreviewSubtitle == nil)
+        #expect(controller.previewSubtitleCues.map(\.text) == ["Начало"])
+
+        controller.cancelAnalysis()
+        controller.candidates = [item]
+        controller.currentTime = 0.25
+        #expect(controller.previewSubtitleCues.isEmpty)
+        #expect(controller.currentPreviewSubtitle == nil)
+        #expect(builder.callCount == 0)
+        await controller.shutdown()
+    }
+
     @Test
     func appearanceChangesReuseReadyPlanWithFreshPlayerItems() async throws {
         let root = temporaryDirectory("preview-reuse")
@@ -316,6 +405,13 @@ private final class ControllerPreferenceStore: PreferenceStoring, @unchecked Sen
     func set(_ value: Bool, forKey key: String) {
         lock.withLock { bools[key] = value }
     }
+}
+
+private struct ControllerFixtureKeyStore: OpenRouterKeyStoring {
+    let key: String?
+    func load() async throws -> String? { key }
+    func save(_ key: String) async throws {}
+    func delete() async throws {}
 }
 
 @MainActor

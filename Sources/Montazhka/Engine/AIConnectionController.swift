@@ -18,6 +18,8 @@ final class AIConnectionController {
     private let reasoningPreferenceKey: String
     private let openRouter: OpenRouterClient
     private let keyManager: OpenRouterKeyManager
+    private let discovery: @Sendable (Bool) async -> [AIAgentAvailability]
+    private let allowsNetworkRequests: Bool
     @ObservationIgnored private let discoveryOperation = LatestOperation()
     @ObservationIgnored private let reasoningOperation = LatestOperation()
 
@@ -25,7 +27,18 @@ final class AIConnectionController {
         preferences: any PreferenceStoring,
         reasoningPreferenceKey: String,
         openRouter: OpenRouterClient,
-        keyStore: any OpenRouterKeyStoring
+        keyStore: any OpenRouterKeyStoring,
+        discovery: @escaping @Sendable (Bool) async -> [AIAgentAvailability] = {
+            if UITestMode.isActive {
+                return AIProvider.allCases.map { provider in
+                    AIAgentAvailability(
+                        provider: provider, isAvailable: false, executablePath: nil, models: [],
+                        message: "Изолированная тестовая среда")
+                }
+            }
+            return await AIAgentDiscovery.shared.discover(force: $0)
+        },
+        allowsNetworkRequests: Bool = !UITestMode.isActive
     ) {
         let provider = AIProvider.saved(in: preferences)
         selectedProvider = provider
@@ -34,7 +47,9 @@ final class AIConnectionController {
         self.preferences = preferences
         self.reasoningPreferenceKey = reasoningPreferenceKey
         self.openRouter = openRouter
-        keyManager = OpenRouterKeyManager(store: keyStore)
+        self.discovery = discovery
+        self.allowsNetworkRequests = allowsNetworkRequests
+        keyManager = OpenRouterKeyManager(store: UITestMode.isActive ? EmptyOpenRouterKeyStore() : keyStore)
         keyManager.refresh()
     }
 
@@ -80,7 +95,7 @@ final class AIConnectionController {
         isRefreshing = true
         discoveryOperation.start { [weak self] token in
             guard let self else { return }
-            let discovered = await AIAgentDiscovery.shared.discover(force: force)
+            let discovered = await self.discovery(force)
             guard self.discoveryOperation.isCurrent(token) else { return }
             self.agents = discovered
             self.isRefreshing = false
@@ -98,6 +113,7 @@ final class AIConnectionController {
             let options: [ReasoningChoice]
             switch requestedProvider {
             case .openRouter:
+                guard self.allowsNetworkRequests else { return }
                 do {
                     guard let model = SmartEditModel(rawValue: requestedModelID),
                         let apiKey = try await self.keyManager.load()
@@ -156,11 +172,15 @@ final class AIConnectionController {
     }
 
     func saveAndValidateOpenRouterKey(_ key: String) async {
+        guard allowsNetworkRequests else { return }
         await keyManager.saveAndValidate(key)
         refreshReasoningOptions()
     }
 
-    func validateSavedOpenRouterKey() async { await keyManager.validateSaved() }
+    func validateSavedOpenRouterKey() async {
+        guard allowsNetworkRequests else { return }
+        await keyManager.validateSaved()
+    }
 
     func deleteOpenRouterKey() async -> Bool { await keyManager.delete() }
 

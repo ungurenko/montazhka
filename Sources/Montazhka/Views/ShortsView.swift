@@ -10,7 +10,6 @@ struct ShortsView: View {
     @Bindable var controller: ShortsController
     @State private var keyInput = ""
     @State private var replacingKey = false
-    @State private var keyMonitor: LocalEventMonitor?
     @State private var showExportOptions = false
     @State private var subtitleSettingsExpanded = false
 
@@ -19,7 +18,7 @@ struct ShortsView: View {
             topBar
             HStack(spacing: Theme.Spacing.medium) {
                 VStack(spacing: 0) {
-                    playerArea
+                    ShortsPlayerView(controller: controller)
                     Divider()
                     ShortsTransportBar(controller: controller)
                 }
@@ -31,13 +30,13 @@ struct ShortsView: View {
             .padding(.bottom, Theme.Spacing.medium)
         }
         .background(Theme.background)
+        .background(ShortsPlaybackKeyMonitor(controller: controller))
         .task {
+            guard !controller.isPreview else { return }
             controller.prepare()
             controller.aiConnection.refreshAgents()
             controller.aiConnection.refreshReasoningOptions()
         }
-        .onAppear(perform: installKeyMonitor)
-        .onDisappear(perform: removeKeyMonitor)
     }
 
     // MARK: - Верхняя панель
@@ -55,41 +54,6 @@ struct ShortsView: View {
                 subtitle:
                     "\(controller.fileName) · \(TimeFormat.compact(controller.sourceDuration)) · русская речь")
         }
-    }
-
-    // MARK: - Плеер
-
-    private var playerArea: some View {
-        ZStack {
-            Color.black
-            Button {
-                controller.togglePlay()
-            } label: {
-                PlayerLayerView(player: controller.player)
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(controller.isPlaying ? "Поставить просмотр на паузу" : "Воспроизвести просмотр")
-            .accessibilityIdentifier("shorts.player")
-            if let subtitle = controller.currentPreviewSubtitle {
-                ShortsSubtitleOverlayView(
-                    subtitle: subtitle,
-                    frameSize: controller.previewFrameSize)
-            }
-            if let error = controller.prepareError ?? controller.previewError {
-                EmptyStateView(
-                    systemImage: "exclamationmark.triangle.fill",
-                    title: error.what,
-                    message: error.hint,
-                    appearance: .onMedia)
-            } else if controller.candidates.isEmpty && !controller.status.isWorking {
-                EmptyStateView(
-                    systemImage: "sparkles.rectangle.stack",
-                    title: "Готов искать сильные моменты",
-                    message: "Выбери параметры справа и нажми «Найти моменты»",
-                    appearance: .onMedia)
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     // MARK: - Боковая панель
@@ -211,8 +175,7 @@ struct ShortsView: View {
     }
 
     private var analyzeDisabled: Bool {
-        !controller.aiConnection.isReady || controller.prepareError != nil
-            || controller.sourceDuration < ShortsLimits.minSourceDuration || !SmartEditPlatform.isSupported
+        !controller.canAnalyze
     }
 
     private func errorLabel(_ error: UserFacingError) -> some View {
@@ -414,7 +377,8 @@ struct ShortsView: View {
                 Button("Искать заново") { controller.analyze() }
                     .buttonStyle(.link)
                     .typeStyle(.helper)
-                    .disabled(controller.openRouterKeyStatus != .saved)
+                    .disabled(analyzeDisabled)
+                    .accessibilityIdentifier("shorts.analyzeAgain")
             }
             usageLine
             ForEach(controller.candidates) { candidate in
@@ -425,7 +389,7 @@ struct ShortsView: View {
 
     private var analysisWarningBlock: some View {
         VStack(alignment: .leading, spacing: 8) {
-            ForEach(Array(controller.analysisWarnings.enumerated()), id: \.offset) { _, warning in
+            ForEach(controller.analysisWarnings) { warning in
                 Label(warning.message, systemImage: "exclamationmark.triangle.fill")
                     .typeStyle(.helper)
                     .foregroundStyle(.orange)
@@ -434,7 +398,8 @@ struct ShortsView: View {
             Button("Повторить анализ") { controller.analyze() }
                 .buttonStyle(.link)
                 .typeStyle(.helperEmphasis)
-                .disabled(controller.openRouterKeyStatus != .saved)
+                .disabled(analyzeDisabled)
+                .accessibilityIdentifier("shorts.retryAnalysis")
         }
         .padding(Theme.Spacing.small)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -772,31 +737,50 @@ struct ShortsView: View {
         }
     }
 
-    // MARK: - Клавиатура
+}
 
-    /// Пробел ловим сами, а не пунктом меню: перехватчик пропускает событие
-    /// дальше, когда курсор стоит в текстовом поле, — иначе пробел нельзя было
-    /// бы набрать в поле ключа OpenRouter.
-    private func installKeyMonitor() {
-        removeKeyMonitor()
-        let controller = self.controller
-        let monitor = LocalEventMonitor()
-        monitor.install(matching: .keyDown) { event in
-            if NSApp.keyWindow?.firstResponder is NSTextView { return event }
-            if event.modifierFlags.contains(.command) { return event }
-            if event.keyCode == 49 {  // пробел
+private struct ShortsPlayerView: View {
+    var controller: ShortsController
+
+    var body: some View {
+        ZStack {
+            Color.black
+            Button {
                 controller.togglePlay()
-                return nil
+            } label: {
+                PlayerLayerView(player: controller.player)
             }
-            return event
+            .buttonStyle(.plain)
+            .accessibilityLabel(controller.isPlaying ? "Поставить просмотр на паузу" : "Воспроизвести просмотр")
+            .accessibilityIdentifier("shorts.player")
+            ShortsPreviewSubtitleLayer(controller: controller)
+            if let error = controller.prepareError ?? controller.previewError {
+                EmptyStateView(
+                    systemImage: "exclamationmark.triangle.fill",
+                    title: error.what,
+                    message: error.hint,
+                    appearance: .onMedia)
+            } else if controller.candidates.isEmpty && !controller.status.isWorking {
+                EmptyStateView(
+                    systemImage: "sparkles.rectangle.stack",
+                    title: "Готов искать сильные моменты",
+                    message: "Выбери параметры справа и нажми «Найти моменты»",
+                    appearance: .onMedia)
+            }
         }
-        keyMonitor = monitor
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
+}
 
-    private func removeKeyMonitor() {
-        if let keyMonitor {
-            keyMonitor.remove()
-            self.keyMonitor = nil
+/// Только этот слой читает время для выбора фразы; экран и видеослой
+/// не зависят от каждого тика проигрывателя.
+private struct ShortsPreviewSubtitleLayer: View {
+    var controller: ShortsController
+
+    var body: some View {
+        if let subtitle = controller.currentPreviewSubtitle {
+            ShortsSubtitleOverlayView(subtitle: subtitle, frameSize: controller.previewFrameSize)
+                .allowsHitTesting(false)
         }
     }
 }

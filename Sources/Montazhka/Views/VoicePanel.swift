@@ -3,7 +3,17 @@ import SwiftUI
 /// Панель улучшения голоса: тумблер и три ползунка.
 struct VoicePanel: View {
     var controller: EditorController
-    @State private var settings = VoiceEnhanceSettings()
+    private var settings: VoiceEnhanceSettings { controller.project.voiceEnhance }
+
+    func setting<Value>(_ keyPath: WritableKeyPath<VoiceEnhanceSettings, Value>) -> Binding<Value> {
+        Binding(
+            get: { controller.project.voiceEnhance[keyPath: keyPath] },
+            set: { value in
+                var latest = controller.project.voiceEnhance
+                latest[keyPath: keyPath] = value
+                controller.updateVoiceSettings(latest)
+            })
+    }
 
     var body: some View {
         InspectorPanel(
@@ -22,15 +32,11 @@ struct VoicePanel: View {
                 .padding(.bottom, 16)
             }
         }
-        .onAppear { settings = controller.project.voiceEnhance }
-        .onChange(of: settings) { _, new in
-            controller.updateVoiceSettings(new)
-        }
     }
 
     private var toggleBlock: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.small) {
-            Toggle("Улучшить голос", isOn: $settings.enabled)
+            Toggle("Улучшить голос", isOn: setting(\.enabled))
                 .toggleStyle(.switch)
                 .tint(Theme.accent)
                 .typeStyle(.bodyEmphasis)
@@ -48,21 +54,21 @@ struct VoicePanel: View {
             SettingSlider(
                 title: "Выравнивание громкости",
                 explain: "Тихое подтягивает, слишком громкое приглушает",
-                value: $settings.leveling,
+                value: setting(\.leveling),
                 range: 0...100, step: 1,
                 display: { "\(Int($0)) %" }
             )
             SettingSlider(
                 title: "Чистка шума",
                 explain: "Приглушает шипение и гул в паузах между фразами",
-                value: $settings.noiseReduction,
+                value: setting(\.noiseReduction),
                 range: 0...100, step: 1,
                 display: { "\(Int($0)) %" }
             )
             SettingSlider(
                 title: "Звонкость",
                 explain: "Делает голос чётче и разборчивее",
-                value: $settings.presence,
+                value: setting(\.presence),
                 range: 0...100, step: 1,
                 display: { "\(Int($0)) %" }
             )

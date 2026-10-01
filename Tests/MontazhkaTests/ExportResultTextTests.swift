@@ -75,7 +75,8 @@ struct ExportResultTextTests {
             report: report(loudness: nil, targetMet: nil, warnings: ["Не получилось замерить громкость готового файла"])
         )
 
-        #expect(text.notices == [ExportResultText.Notice(title: "Не получилось замерить громкость готового файла")])
+        #expect(text.notices.map(\.title) == ["Не получилось замерить громкость готового файла"])
+        #expect(text.notices.first?.hint == nil)
     }
 
     @Test

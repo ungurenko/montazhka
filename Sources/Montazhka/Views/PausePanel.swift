@@ -3,7 +3,15 @@ import SwiftUI
 /// Панель поиска пауз: настройки, список найденного, вырезка.
 struct PausePanel: View {
     var controller: EditorController
-    @State private var settings = DetectionSettings()
+    func setting<Value>(_ keyPath: WritableKeyPath<DetectionSettings, Value>) -> Binding<Value> {
+        Binding(
+            get: { controller.project.detection[keyPath: keyPath] },
+            set: { value in
+                var latest = controller.project.detection
+                latest[keyPath: keyPath] = value
+                controller.updateDetectionSettings(latest)
+            })
+    }
 
     var body: some View {
         InspectorPanel(
@@ -31,6 +39,7 @@ struct PausePanel: View {
                                     + "или уменьши минимальную паузу.",
                                 actions: [
                                     StatusBanner.Action(
+                                        id: "pauses.retry",
                                         title: "Искать снова",
                                         accessibilityIdentifier: "pauses.retry",
                                         perform: { controller.detectPauses() })
@@ -60,10 +69,6 @@ struct PausePanel: View {
                 cutBar
             }
         }
-        .onAppear { settings = controller.project.detection }
-        .onChange(of: settings) { _, new in
-            controller.updateDetectionSettings(new)
-        }
     }
 
     // MARK: - Настройки
@@ -73,21 +78,21 @@ struct PausePanel: View {
             SettingSlider(
                 title: "Чувствительность",
                 explain: "Что тише этого уровня — считается тишиной",
-                value: $settings.thresholdDB,
+                value: setting(\.thresholdDB),
                 range: -60...(-20), step: 1,
                 display: { "\(Int($0)) дБ" }
             )
             SettingSlider(
                 title: "Минимальная пауза",
                 explain: "Короче — не трогаем, это обычная речь",
-                value: $settings.minPauseDuration,
+                value: setting(\.minPauseDuration),
                 range: 0.3...3.0, step: 0.1,
                 display: { String(format: "%.1f сек", $0) }
             )
             SettingSlider(
                 title: "Воздух по краям",
                 explain: "Сколько тишины оставить, чтобы не резало слух",
-                value: $settings.paddingMS,
+                value: setting(\.paddingMS),
                 range: 0...500, step: 25,
                 display: { "\(Int($0)) мс" }
             )

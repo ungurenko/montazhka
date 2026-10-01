@@ -3,30 +3,36 @@
 
     @MainActor
     private enum PreviewFixtures {
-        static func repository(_ name: String) -> ProjectStore {
-            let root = FileManager.default.temporaryDirectory
-                .appendingPathComponent("montazhka-preview-\(name)", isDirectory: true)
-            return ProjectStore(baseDirectory: root)
-        }
-
-        static func editor(_ section: EditorInspectorSection? = nil) -> (AppModel, EditorController) {
-            let store = repository("editor-\(section?.rawValue ?? "base")")
+        static func editor(_ section: EditorInspectorSection? = nil) -> (
+            PreviewEnvironment, AppModel, EditorController
+        ) {
+            let environment = PreviewEnvironment()
+            var project = Project(name: "Демо-проект")
+            project.voiceEnhance.enabled = section == .voice
             let controller = EditorController(
-                project: Project(name: "Демо-проект"),
-                store: store,
-                openRouterKeyStore: EmptyOpenRouterKeyStore()
-            )
+                project: project,
+                store: environment.repository,
+                openRouterKeyStore: EmptyOpenRouterKeyStore(),
+                preferences: environment.preferences,
+                activity: environment.activity,
+                isPreview: true,
+                aiConnection: environment.makeAIConnection(reasoningKey: EditorController.smartEditReasoningKey))
             controller.activeInspector = section
-            return (AppModel(store: store), controller)
+            return (environment, AppModel(store: environment.repository, isPreview: true), controller)
         }
 
-        static func shorts() -> (AppModel, ShortsController) {
-            let store = repository("shorts")
-            let sourceURL = store.directories.projects.appendingPathComponent("Интервью.mov")
+        static func shorts() -> (PreviewEnvironment, AppModel, ShortsController) {
+            let environment = PreviewEnvironment()
+            let sourceURL = environment.repository.root.appendingPathComponent("Демо.mov")
             let controller = ShortsController(
                 sourceURL: sourceURL,
-                store: store,
-                openRouterKeyStore: EmptyOpenRouterKeyStore())
+                store: environment.repository,
+                openRouterKeyStore: EmptyOpenRouterKeyStore(),
+                preferences: environment.preferences,
+                activity: environment.activity,
+                isPreview: true,
+                aiConnection: environment.makeAIConnection(reasoningKey: ShortsController.reasoningKey),
+                previewSourceDuration: 120)
             controller.candidates = [
                 ShortCandidate(
                     id: UUID(), rank: 1, title: "Почему быстрый монтаж важен",
@@ -45,16 +51,17 @@
                     hookScore: 8, standaloneScore: 8, payoffScore: 9, pacingScore: 7,
                     enabled: true),
             ]
-            return (AppModel(store: store), controller)
+            return (environment, AppModel(store: environment.repository, isPreview: true), controller)
         }
     }
 
     @MainActor
     struct StartViewPreview: PreviewProvider {
         static var previews: some View {
-            StartView()
-                .environment(AppModel(store: PreviewFixtures.repository("start")))
-                .environment(ActivityCenter.shared)
+            let environment = PreviewEnvironment()
+            return StartView()
+                .environment(AppModel(store: environment.repository, isPreview: true))
+                .environment(environment.activity)
                 .frame(width: 1080, height: 660)
                 .preferredColorScheme(.light)
         }
@@ -63,10 +70,10 @@
     @MainActor
     struct EditorViewPreview: PreviewProvider {
         static var previews: some View {
-            let (app, controller) = PreviewFixtures.editor()
+            let (environment, app, controller) = PreviewFixtures.editor()
             return EditorView(controller: controller)
                 .environment(app)
-                .environment(ActivityCenter.shared)
+                .environment(environment.activity)
                 .frame(width: 1180, height: 720)
                 .preferredColorScheme(.light)
         }
@@ -84,10 +91,10 @@
                 ],
                 id: \.rawValue
             ) { section in
-                let (app, controller) = PreviewFixtures.editor(section)
+                let (environment, app, controller) = PreviewFixtures.editor(section)
                 EditorView(controller: controller)
                     .environment(app)
-                    .environment(ActivityCenter.shared)
+                    .environment(environment.activity)
                     .frame(width: 1280, height: 720)
                     .preferredColorScheme(.light)
                     .previewDisplayName("Панель: \(section.rawValue)")
@@ -98,8 +105,9 @@
     @MainActor
     struct ExportSheetPreview: PreviewProvider {
         static var previews: some View {
-            let (_, controller) = PreviewFixtures.editor()
-            ExportSheet(controller: controller)
+            let (environment, _, controller) = PreviewFixtures.editor()
+            ExportSheet(controller: controller, activity: environment.activity)
+                .environment(environment.activity)
                 .preferredColorScheme(.light)
                 .previewDisplayName("Экспорт")
         }
@@ -108,10 +116,10 @@
     @MainActor
     struct ShortsViewPreview: PreviewProvider {
         static var previews: some View {
-            let (app, controller) = PreviewFixtures.shorts()
+            let (environment, app, controller) = PreviewFixtures.shorts()
             ShortsView(controller: controller)
                 .environment(app)
-                .environment(ActivityCenter.shared)
+                .environment(environment.activity)
                 .frame(width: 1280, height: 720)
                 .preferredColorScheme(.light)
                 .previewDisplayName("Shorts")

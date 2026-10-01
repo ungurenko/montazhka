@@ -271,6 +271,11 @@ struct TimelineInputMonitor: NSViewRepresentable {
             coordinator?.parent.onPointerChanged(nil)
         }
 
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            if window == nil { coordinator?.resetHandKey() }
+        }
+
         override func hitTest(_ point: NSPoint) -> NSView? { nil }
     }
 
@@ -279,12 +284,17 @@ struct TimelineInputMonitor: NSViewRepresentable {
         var parent: TimelineInputMonitor
         weak var view: MonitorView?
         private let monitor = LocalEventMonitor()
+        private var handKeyHeld = false
 
         init(parent: TimelineInputMonitor) {
             self.parent = parent
         }
 
         func installMonitor() {
+            NotificationCenter.default.addObserver(
+                self, selector: #selector(resetHandKey), name: NSApplication.didResignActiveNotification, object: nil)
+            NotificationCenter.default.addObserver(
+                self, selector: #selector(windowResignedKey(_:)), name: NSWindow.didResignKeyNotification, object: nil)
             monitor.install(
                 matching: [.keyDown, .keyUp, .magnify, .scrollWheel]
             ) { [weak self] event in
@@ -294,9 +304,24 @@ struct TimelineInputMonitor: NSViewRepresentable {
 
         func removeMonitor() {
             monitor.remove()
+            NotificationCenter.default.removeObserver(self)
+            resetHandKey()
+        }
+
+        @objc func resetHandKey() {
+            handKeyHeld = false
+            parent.onHandKeyChanged(false)
+        }
+
+        @objc private func windowResignedKey(_ notification: Notification) {
+            if notification.object as? NSWindow === view?.window { resetHandKey() }
         }
 
         private func handle(_ event: NSEvent) -> NSEvent? {
+            if event.type == .keyUp, event.keyCode == 4, handKeyHeld {
+                resetHandKey()
+                return nil
+            }
             guard let view, event.window === view.window else { return event }
             let location = view.convert(event.locationInWindow, from: nil)
             let isInside = view.bounds.contains(location)
@@ -316,8 +341,19 @@ struct TimelineInputMonitor: NSViewRepresentable {
             }
         }
 
-        private func handleKey(_ event: NSEvent) -> NSEvent? {
-            if NSApp.keyWindow?.firstResponder is NSTextView { return event }
+        func handleKey(
+            _ event: NSEvent,
+            keyWindow: NSWindow? = NSApp.keyWindow,
+            modalWindow: NSWindow? = NSApp.modalWindow
+        ) -> NSEvent? {
+            if event.type == .keyUp, event.keyCode == 4, handKeyHeld {
+                resetHandKey()
+                return nil
+            }
+            guard let window = view?.window, window === keyWindow,
+                window.attachedSheet == nil, modalWindow == nil,
+                !(window.firstResponder is any NSTextInputClient)
+            else { return event }
             let isDown = event.type == .keyDown
             let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
 
@@ -326,6 +362,7 @@ struct TimelineInputMonitor: NSViewRepresentable {
                 !modifiers.contains(.control),
                 !modifiers.contains(.option)
             {  // H / Р
+                handKeyHeld = isDown
                 parent.onHandKeyChanged(isDown)
                 return nil
             }

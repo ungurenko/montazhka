@@ -3,15 +3,8 @@ import Foundation
 import OSLog
 import SwiftUI
 
-private struct FocusedEditorControllerKey: FocusedValueKey {
-    typealias Value = EditorController
-}
-
 extension FocusedValues {
-    var editorController: EditorController? {
-        get { self[FocusedEditorControllerKey.self] }
-        set { self[FocusedEditorControllerKey.self] = newValue }
-    }
+    @Entry var editorController: EditorController?
 }
 
 struct MontazhkaApp: App {
@@ -123,15 +116,20 @@ final class AppModel {
     @ObservationIgnored private let recentsOperation = LatestOperation()
     private var projectOperationTask: Task<Void, Never>?
     private var projectOperationGeneration = Generation()
-    var agentIntegration = AgentIntegrationInstaller.status()
+    var agentIntegration: AgentIntegrationStatus
     private(set) var isAgentIntegrationInProgress = false
 
-    init(store: (any ProjectRepository)? = nil) {
+    init(store: (any ProjectRepository)? = nil, isPreview: Bool = false) {
         let arguments = CommandLine.arguments
         let environment = ProcessInfo.processInfo.environment
         let isUITesting = UITestMode.isActive
         let resolvedStore = store ?? Self.defaultStore(isUITesting: isUITesting, environment: environment)
         self.store = resolvedStore
+        self.agentIntegration =
+            isPreview
+            ? AgentIntegrationStatus(installed: false, message: "Превью")
+            : AgentIntegrationInstaller.status()
+        guard !isPreview else { return }
         refreshRecents(openLatestAfterLoad: CommandLine.arguments.contains("--open-latest"))
         if isUITesting, arguments.contains("--ui-test-open-fixture-project") {
             openUITestFixtureProject(using: resolvedStore)
@@ -163,7 +161,10 @@ final class AppModel {
                 try await TestVideoFactory.make(
                     segments: [(duration: 2, loud: true)],
                     to: fixtureURL)
-                self?.newProject(with: [fixtureURL])
+                let urls =
+                    CommandLine.arguments.contains("--ui-test-reorder-fixture")
+                    ? Array(repeating: fixtureURL, count: 3) : [fixtureURL]
+                self?.newProject(with: urls)
             } catch {
                 self?.storeErrorMessage = UserFacingError.make(error, context: .project)
             }
@@ -366,9 +367,20 @@ final class AppModel {
                         sourceID: UUID(), text: text, start: Double(index) * 0.5,
                         end: Double(index + 1) * 0.5, confidence: 1)
                 } : []
-            let controller = ShortsController(sourceURL: url, store: store, initialTranscriptWords: words)
+            let isLongTranscript =
+                UITestMode.isActive
+                && CommandLine.arguments.contains("--ui-test-long-shorts-transcript")
+            let transcriptSourceID = UUID()
+            let preparedWords =
+                isLongTranscript
+                ? (0..<18_000).map { index in
+                    TranscriptWord(
+                        sourceID: transcriptSourceID, text: "слово\(index)", start: Double(index) * 0.2,
+                        end: Double(index) * 0.2 + 0.15, confidence: 1)
+                } : words
+            let controller = ShortsController(sourceURL: url, store: store, initialTranscriptWords: preparedWords)
             if seedUITestCandidate {
-                controller.candidates = [Self.uiTestShortCandidate]
+                controller.candidates = [Self.uiTestShortCandidate(end: isLongTranscript ? 20 : 2)]
                 if UITestMode.isActive { controller.subtitlesEnabled = true }
             }
             shorts = controller
@@ -377,22 +389,24 @@ final class AppModel {
         }
     }
 
-    private static let uiTestShortCandidate = ShortCandidate(
-        id: UUID(),
-        rank: 1,
-        title: "Тестовый ролик",
-        reason: "Локальный UI fixture",
-        hook: "Проверка настроек",
-        pattern: "тест",
-        excerpt: "Локальные данные без сети",
-        start: 0,
-        end: 2,
-        confidence: 1,
-        hookScore: 10,
-        standaloneScore: 10,
-        payoffScore: 10,
-        pacingScore: 10,
-        enabled: true)
+    private static func uiTestShortCandidate(end: Double) -> ShortCandidate {
+        ShortCandidate(
+            id: UUID(),
+            rank: 1,
+            title: "Тестовый ролик",
+            reason: "Локальный UI fixture",
+            hook: "Проверка настроек",
+            pattern: "тест",
+            excerpt: "Локальные данные без сети",
+            start: 0,
+            end: end,
+            confidence: 1,
+            hookScore: 10,
+            standaloneScore: 10,
+            payoffScore: 10,
+            pacingScore: 10,
+            enabled: true)
+    }
 
     func closeShorts() {
         guard let closingShorts = shorts else { return }

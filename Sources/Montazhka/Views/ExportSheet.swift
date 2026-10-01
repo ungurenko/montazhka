@@ -4,9 +4,14 @@ import SwiftUI
 struct ExportSheet: View {
     @Environment(\.dismiss) private var dismiss
     var controller: EditorController
-    @State private var export = ExportModel()
+    @State private var export: ExportModel
     @State private var quality: ExportQuality = .high
     @State private var sourceSize: CGSize?
+
+    init(controller: EditorController, activity: ActivityCenter = .shared) {
+        self.controller = controller
+        _export = State(initialValue: ExportModel(activity: activity))
+    }
 
     var body: some View {
         VStack(spacing: Theme.Spacing.large) {
@@ -17,8 +22,10 @@ struct ExportSheet: View {
                 preparingView
             case .exporting:
                 progressView
-            case .done(let url, let report):
-                doneView(url, result: ExportResultText(report: report))
+            case .done(let url, _):
+                if let result = export.resultText {
+                    doneView(url, result: result)
+                }
             case .failed(let message):
                 failedView(message)
             }
@@ -45,15 +52,17 @@ struct ExportSheet: View {
 
             VStack(spacing: 0) {
                 ForEach(ExportQuality.allCases) { q in
-                    QualityRow(
-                        quality: q,
-                        displaySize: sourceSize ?? CGSize(width: 1920, height: 1080),
-                        estimate: q.estimateText(
-                            duration: controller.duration,
-                            displaySize: sourceSize ?? CGSize(width: 1920, height: 1080)),
-                        selected: quality == q
-                    ) { quality = q }
-                    if q != ExportQuality.allCases.last { Divider().padding(.leading, 44) }
+                    VStack(spacing: 0) {
+                        QualityRow(
+                            quality: q,
+                            displaySize: sourceSize ?? CGSize(width: 1920, height: 1080),
+                            estimate: q.estimateText(
+                                duration: controller.duration,
+                                displaySize: sourceSize ?? CGSize(width: 1920, height: 1080)),
+                            selected: quality == q
+                        ) { quality = q }
+                        if q != ExportQuality.allCases.last { Divider().padding(.leading, 44) }
+                    }
                 }
             }
             .background(Theme.card)
@@ -197,7 +206,7 @@ struct ExportSheet: View {
                 .foregroundStyle(Theme.textSecondary)
                 .lineLimit(1)
             resultSummary(result)
-            ForEach(Array(result.notices.enumerated()), id: \.offset) { _, notice in
+            ForEach(result.notices) { notice in
                 StatusBanner(kind: .warning, title: notice.title, hint: notice.hint)
             }
             audioWarningLine
@@ -228,6 +237,7 @@ struct ExportSheet: View {
                     ExportResultRow(
                         systemImage: "captions.bubble", title: subtitles,
                         action: StatusBanner.Action(
+                            id: "export.result.revealSubtitles",
                             title: "Показать", accessibilityIdentifier: "export.result.revealSubtitles"
                         ) { export.revealInFinder(subtitlesURL) })
                 } else if let skipped = result.subtitlesSkipped {
@@ -377,7 +387,8 @@ private struct QualityRow: View {
 /// Чистая функция отчёта — без окна и файлов.
 struct ExportResultText: Equatable {
     /// Замечание: файл сохранён, но что-то вышло не так, как задумано.
-    struct Notice: Equatable {
+    struct Notice: Equatable, Identifiable {
+        let id = UUID()
         let title: String
         var hint: String?
     }

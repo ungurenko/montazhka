@@ -8,6 +8,8 @@ struct EditorView: View {
     @Environment(AppModel.self) private var app
     var controller: EditorController
     @State private var projectName: String = ""
+    @State private var canonicalName: String = ""
+    @FocusState private var isNameFocused: Bool
     @State private var showExport = false
     @State private var dropTask: Task<Void, Never>?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -61,7 +63,11 @@ struct EditorView: View {
             }
         }
         .onAppear {
-            projectName = controller.project.name
+            synchronizeName()
+        }
+        .onChange(of: controller.project.name) { synchronizeName() }
+        .onChange(of: isNameFocused) {
+            if !isNameFocused { saveProjectName() }
         }
         .onDisappear {
             dropTask?.cancel()
@@ -83,6 +89,19 @@ struct EditorView: View {
                 controller.missingFilesMessage = message
             }
         }
+    }
+
+    private func synchronizeName() {
+        canonicalName = controller.project.name
+        projectName = canonicalName
+    }
+
+    private func saveProjectName() {
+        // Внешнее переименование имеет приоритет даже до следующего onChange.
+        if canonicalName == controller.project.name {
+            controller.renameProject(projectName)
+        }
+        synchronizeName()
     }
 
     private var missingAlertBinding: Binding<Bool> {
@@ -110,14 +129,24 @@ struct EditorView: View {
                 title: "Проекты",
                 accessibilityIdentifier: "editor.back",
                 isDisabled: app.isProjectOperationInProgress,
-                action: { app.closeProject() })
+                action: {
+                    saveProjectName()
+                    app.closeProject()
+                })
         ) {
             TextField("Название", text: $projectName)
                 .textFieldStyle(.plain)
                 .typeStyle(.sectionTitle)
                 .foregroundStyle(Theme.textPrimary)
                 .frame(width: 220)
-                .onSubmit { controller.renameProject(projectName) }
+                .focused($isNameFocused)
+                .onSubmit { saveProjectName() }
+                .onKeyPress(.escape) {
+                    guard isNameFocused else { return .ignored }
+                    synchronizeName()
+                    isNameFocused = false
+                    return .handled
+                }
                 .accessibilityIdentifier("editor.projectName")
 
             saveStatusView
@@ -292,10 +321,16 @@ struct EditorView: View {
             StatusBanner(
                 kind: .info, title: notice.title, hint: notice.hint,
                 actions: [
-                    .init(title: "Вернуть как было", accessibilityIdentifier: "editor.externalChange.undo") {
+                    .init(
+                        id: "editor.externalChange.undo", title: "Вернуть как было",
+                        accessibilityIdentifier: "editor.externalChange.undo"
+                    ) {
                         controller.undo()
                     },
-                    .init(title: "Понятно", accessibilityIdentifier: "editor.externalChange.dismiss") {
+                    .init(
+                        id: "editor.externalChange.dismiss", title: "Понятно",
+                        accessibilityIdentifier: "editor.externalChange.dismiss"
+                    ) {
                         controller.dismissExternalChangeNotice()
                     },
                 ]
