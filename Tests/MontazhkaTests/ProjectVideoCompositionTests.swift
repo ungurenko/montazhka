@@ -2,6 +2,7 @@
 import CoreVideo
 import Foundation
 import Testing
+import VideoToolbox
 
 @testable import MontazhkaKit
 
@@ -247,25 +248,74 @@ struct ProjectVideoCompositionTests {
         return times.sorted()
     }
 
-    /// Ролик 29,97 к/с (шаг 1001/30000), 10 с, серый, с пометками цвета BT.709, без звука.
-    private func writeNTSCBase(to url: URL) async throws {
-        let frame = try TestOverlayFactory.pixelBuffer(width: 320, height: 180, format: kCVPixelFormatType_32BGRA)
+    enum SourceColour: String, CaseIterable, Sendable {
+        case sdr, hlg
+    }
+
+    private func sourceFrame(colour: SourceColour) throws -> CVPixelBuffer {
+        let (width, height) = (320, 180)
+        let frame = try TestOverlayFactory.pixelBuffer(
+            width: width, height: height,
+            format: colour == .hlg ? kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange : kCVPixelFormatType_32BGRA)
         CVPixelBufferLockBaseAddress(frame, [])
-        if let base = CVPixelBufferGetBaseAddress(frame) {
-            memset(base, 128, CVPixelBufferGetDataSize(frame))
+        defer { CVPixelBufferUnlockBaseAddress(frame, []) }
+        if colour == .hlg {
+            let yBase = try #require(CVPixelBufferGetBaseAddressOfPlane(frame, 0))
+            let uvBase = try #require(CVPixelBufferGetBaseAddressOfPlane(frame, 1))
+            for y in 0..<height {
+                let row = (yBase + y * CVPixelBufferGetBytesPerRowOfPlane(frame, 0)).assumingMemoryBound(
+                    to: UInt16.self)
+                for x in 0..<width {
+                    let value = x < width / 8 && y < height / 8 ? 940 : 64 + (876 * x / (width - 1))
+                    row[x] = UInt16(value) << 6
+                }
+            }
+            for y in 0..<height / 2 {
+                let row = (uvBase + y * CVPixelBufferGetBytesPerRowOfPlane(frame, 1)).assumingMemoryBound(
+                    to: UInt16.self)
+                for x in 0..<width { row[x] = 512 << 6 }
+            }
+            CVBufferSetAttachment(
+                frame, kCVImageBufferColorPrimariesKey, kCVImageBufferColorPrimaries_ITU_R_2020, .shouldPropagate)
+            CVBufferSetAttachment(
+                frame, kCVImageBufferTransferFunctionKey, kCVImageBufferTransferFunction_ITU_R_2100_HLG,
+                .shouldPropagate)
+            CVBufferSetAttachment(
+                frame, kCVImageBufferYCbCrMatrixKey, kCVImageBufferYCbCrMatrix_ITU_R_2020, .shouldPropagate)
+        } else {
+            memset(CVPixelBufferGetBaseAddress(frame), 128, CVPixelBufferGetDataSize(frame))
         }
-        CVPixelBufferUnlockBaseAddress(frame, [])
-        try await TestOverlayFactory.writeStill(
-            frame,
-            settings: [
-                AVVideoCodecKey: AVVideoCodecType.h264, AVVideoWidthKey: 320, AVVideoHeightKey: 180,
-                AVVideoColorPropertiesKey: [
-                    AVVideoColorPrimariesKey: AVVideoColorPrimaries_ITU_R_709_2,
-                    AVVideoTransferFunctionKey: AVVideoTransferFunction_ITU_R_709_2,
-                    AVVideoYCbCrMatrixKey: AVVideoYCbCrMatrix_ITU_R_709_2,
-                ],
+        return frame
+    }
+
+    /// Ролик 29,97 к/с (шаг 1001/30000), 10 с, BT.709 SDR или настоящий 10-битный HLG, без звука.
+    private func writeNTSCBase(to url: URL, colour: SourceColour) async throws {
+        let primaries = colour == .hlg ? AVVideoColorPrimaries_ITU_R_2020 : AVVideoColorPrimaries_ITU_R_709_2
+        let transfer = colour == .hlg ? AVVideoTransferFunction_ITU_R_2100_HLG : AVVideoTransferFunction_ITU_R_709_2
+        let matrix = colour == .hlg ? AVVideoYCbCrMatrix_ITU_R_2020 : AVVideoYCbCrMatrix_ITU_R_709_2
+        var settings: [String: Any] = [
+            AVVideoCodecKey: colour == .hlg ? AVVideoCodecType.hevc : .h264,
+            AVVideoWidthKey: 320, AVVideoHeightKey: 180,
+            AVVideoColorPropertiesKey: [
+                AVVideoColorPrimariesKey: primaries,
+                AVVideoTransferFunctionKey: transfer, AVVideoYCbCrMatrixKey: matrix,
             ],
+        ]
+        if colour == .hlg {
+            settings[AVVideoCompressionPropertiesKey] = [
+                AVVideoProfileLevelKey: kVTProfileLevel_HEVC_Main10_AutoLevel as String
+            ]
+        }
+        try await TestOverlayFactory.writeStill(
+            sourceFrame(colour: colour), settings: settings,
             fileType: .mov, frameCount: 300, frameDuration: CMTime(value: 1001, timescale: 30000), to: url)
+        let track = try #require(try await AVURLAsset(url: url).loadTracks(withMediaType: .video).first)
+        let format = try #require(try await track.load(.formatDescriptions).first)
+        let tags = CMFormatDescriptionGetExtensions(format) as? [String: Any] ?? [:]
+        #expect(tags[kCVImageBufferColorPrimariesKey as String] as? String == primaries)
+        #expect(tags[kCVImageBufferTransferFunctionKey as String] as? String == transfer)
+        #expect(tags[kCVImageBufferYCbCrMatrixKey as String] as? String == matrix)
+        #expect(try await track.load(.naturalSize) == CGSize(width: 320, height: 180))
     }
 
     private func export(
@@ -281,27 +331,40 @@ struct ProjectVideoCompositionTests {
 
     /// Анимация не меняет ни шаг кадров ролика, ни его цвет: 29,97 к/с не пересчитываются
     /// в 30 (иначе раз в ~33 с кадр повторяется), цвет — как у обычного экспорта.
-    @Test("an animation keeps the plain export's frame cadence and colour handling")
-    func cadenceAndColourMatchPlainExport() async throws {
+    @Test("an animation keeps the plain export's frame cadence and colour handling", arguments: SourceColour.allCases)
+    func cadenceAndColourMatchPlainExport(colour: SourceColour) async throws {
         let scene = try await Scene.make()
         defer { scene.remove() }
         let base = scene.root.appendingPathComponent("ntsc.mov")
-        try await writeNTSCBase(to: base)
+        try await writeNTSCBase(to: base, colour: colour)
         let media = MediaReference(url: base)
         var project = Project(name: "29,97", clips: [Clip(source: media, start: 0, end: 10)])
         let plain = await scene.pipeline.render(
             MediaRenderRequest(project: project, mode: .export, readyEnhancedAudio: [:]))
+        let plainPreview = await scene.pipeline.render(
+            MediaRenderRequest(project: project, mode: .preview, readyEnhancedAudio: [:]))
+        #expect(plain.videoPlan == nil)
+        #expect(plainPreview.videoPlan == nil)
         project.overlays = [Scene.overlay(url: scene.overlayURL, anchor: media.id, at: 1)]
         let animated = await scene.pipeline.render(
             MediaRenderRequest(project: project, mode: .export, readyEnhancedAudio: [:]))
+        let animatedPreview = await scene.pipeline.render(
+            MediaRenderRequest(project: project, mode: .preview, readyEnhancedAudio: [:]))
+        for result in [plain, plainPreview, animated, animatedPreview] { #expect(result.warnings.isEmpty) }
 
         let reference = try await AVMutableVideoComposition.videoComposition(withPropertiesOf: plain.composition)
+        let previewReference = try await AVMutableVideoComposition.videoComposition(
+            withPropertiesOf: plainPreview.composition)
         let plan = try #require(animated.videoPlan)
-        let composition = plan.frameComposition
-        #expect(composition.frameDuration == reference.frameDuration, "\(composition.frameDuration)")
-        #expect(composition.colorPrimaries == reference.colorPrimaries)
-        #expect(composition.colorTransferFunction == reference.colorTransferFunction)
-        #expect(composition.colorYCbCrMatrix == reference.colorYCbCrMatrix)
+        let previewPlan = try #require(animatedPreview.videoPlan)
+        #expect(reference.renderSize == CGSize(width: 320, height: 180))
+        for composition in [previewReference, plan.frameComposition, previewPlan.frameComposition] {
+            #expect(composition.renderSize == reference.renderSize)
+            #expect(composition.frameDuration == reference.frameDuration, "\(composition.frameDuration)")
+            #expect(composition.colorPrimaries == reference.colorPrimaries)
+            #expect(composition.colorTransferFunction == reference.colorTransferFunction)
+            #expect(composition.colorYCbCrMatrix == reference.colorYCbCrMatrix)
+        }
 
         let plainFile = scene.root.appendingPathComponent("plain.mp4")
         let animatedFile = scene.root.appendingPathComponent("animated.mp4")

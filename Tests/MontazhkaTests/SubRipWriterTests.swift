@@ -66,30 +66,6 @@ struct SubRipWriterTests {
     }
 
     @Test
-    func writesCyrillicAsUTF8AndReplacesTheOldFile() throws {
-        let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("SubRipWriterTests-\(UUID().uuidString)", isDirectory: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let url = directory.appendingPathComponent("video.srt")
-        let cues = [cue(["Привет"], start: 0, end: 1)]
-
-        try SubRipWriter.write(cues: cues, to: url)
-
-        let data = try Data(contentsOf: url)
-        #expect(data.starts(with: Array("1\n".utf8)))
-        #expect(String(data: data, encoding: .utf8) == SubRipWriter.text(cues: cues))
-        #expect(data.range(of: Data([0xD0, 0x9F, 0xD1, 0x80, 0xD0, 0xB8])) != nil)
-        #expect(!data.contains(0x0D))
-
-        try SubRipWriter.write(cues: [], to: url)
-
-        #expect(try Data(contentsOf: url).isEmpty)
-        #expect(try FileManager.default.contentsOfDirectory(atPath: directory.path) == ["video.srt"])
-        #expect(SubRipWriter.text(cues: []).isEmpty)
-    }
-
-    @Test
     func subtitlesSitNextToTheVideoUnderTheSameName() {
         #expect(
             SubRipWriter.url(forVideo: URL(fileURLWithPath: "/tmp/Монтаж/ролик.v2.mp4"))

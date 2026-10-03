@@ -167,23 +167,6 @@ final class EditorController: ExportPreparing {
 
     /// `revision` — версия файла из того же чтения, что и `project`; nil — прочитать
     /// версию сейчас (проект только что создан тестом или ещё не записан).
-    convenience init(
-        project: Project,
-        revision: ProjectRevision? = nil,
-        store: any ProjectRepository,
-        openRouterKeyStore: any OpenRouterKeyStoring = OpenRouterKeyStore(),
-        preferences: any PreferenceStoring = UserDefaultsPreferenceStore.standard,
-        activity: ActivityCenter = .shared,
-        isPreview: Bool = false,
-        aiConnection: AIConnectionController? = nil
-    ) {
-        self.init(
-            project: project, revision: revision, store: store,
-            openRouterKeyStore: openRouterKeyStore, preferences: preferences, activity: activity,
-            isPreview: isPreview, aiConnection: aiConnection,
-            readClip: EditorClipLoader.read, voiceRender: VoiceEnhancer.render)
-    }
-
     /// Внутренние точки подмены чтения клипа и обработки голоса для проверок отмены.
     init(
         project: Project,
@@ -194,8 +177,8 @@ final class EditorController: ExportPreparing {
         activity: ActivityCenter = .shared,
         isPreview: Bool = false,
         aiConnection: AIConnectionController? = nil,
-        readClip: @escaping EditorClipLoader.Read,
-        voiceRender: @escaping VoiceEnhanceStore.Render
+        readClip: @escaping EditorClipLoader.Read = EditorClipLoader.read,
+        voiceRender: @escaping VoiceEnhanceStore.Render = VoiceEnhancer.render
     ) {
         self.readClip = readClip
         self.isPreview = isPreview
@@ -388,7 +371,7 @@ final class EditorController: ExportPreparing {
 
     func renderComposition(
         _ snapshot: Project, mode: MediaRenderMode, speechRanges: [TimelineRange]?,
-        subtitleLayer: ProjectSubtitleLayer? = nil, exportQuality: ExportQuality? = nil
+        subtitleLayer: ProjectSubtitleLayer? = nil
     ) async -> MediaRenderResult {
         let processesMusic = snapshot.music.enabled && snapshot.music.eqEnabled
         if processesMusic { musicProcessing = true }
@@ -397,7 +380,7 @@ final class EditorController: ExportPreparing {
             mode: mode,
             readyEnhancedAudio: enhancedAudioURLs,
             speechRanges: speechRanges,
-            subtitleLayer: subtitleLayer, exportQuality: exportQuality)
+            subtitleLayer: subtitleLayer)
         let result = await mediaPipeline.render(request)
         if processesMusic { musicProcessing = false }
         return result

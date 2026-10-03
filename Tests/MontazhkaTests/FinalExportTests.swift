@@ -87,7 +87,11 @@ struct FinalExportTests {
         let subtitles = SubRipWriter.url(forVideo: output)
         #expect(report.subtitlesURL == subtitles)
         #expect(report.subtitlesSkippedReason == nil)
-        let text = try String(contentsOf: subtitles, encoding: .utf8)
+        let data = try Data(contentsOf: subtitles)
+        let text = try #require(String(data: data, encoding: .utf8))
+        #expect(data.starts(with: Array("1\n".utf8)))
+        #expect(data.range(of: Data([0xD0, 0x9F, 0xD0, 0xB5, 0xD1, 0x80])) != nil)
+        #expect(!data.contains(0x0D))
         #expect(
             text == "1\n00:00:00,500 --> 00:00:02,000\nПервая\n\n2\n00:00:05,500 --> 00:00:06,000\nХвост\n",
             "фраза обрезана по концу ролика, фраза после конца выброшена")

@@ -12,32 +12,25 @@ struct EmptyStateView: View {
         let perform: () -> Void
     }
 
-    /// Где показывается блок: на светлой карточке или поверх чёрного плеера.
-    enum Appearance {
-        case surface
-        case onMedia
-    }
-
     let systemImage: String
     let title: String
     var message: String?
-    var appearance: Appearance = .surface
     var action: Action?
 
     var body: some View {
         VStack(spacing: Theme.Spacing.snug) {
             Image(systemName: systemImage)
                 .font(.system(size: IconScale.emptyState, weight: .light))
-                .foregroundStyle(iconColor)
+                .foregroundStyle(.white.opacity(0.5))
 
             VStack(spacing: Theme.Spacing.compact) {
                 Text(title)
                     .typeStyle(.bodyEmphasis)
-                    .foregroundStyle(titleColor)
+                    .foregroundStyle(.white.opacity(0.9))
                 if let message {
                     Text(message)
                         .typeStyle(.helper)
-                        .foregroundStyle(messageColor)
+                        .foregroundStyle(.white.opacity(0.6))
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
@@ -51,17 +44,5 @@ struct EmptyStateView: View {
         }
         .frame(maxWidth: 320)
         .padding(Theme.Spacing.large)
-    }
-
-    private var iconColor: Color {
-        appearance == .onMedia ? .white.opacity(0.5) : Theme.textSecondary.opacity(0.7)
-    }
-
-    private var titleColor: Color {
-        appearance == .onMedia ? .white.opacity(0.9) : Theme.textPrimary
-    }
-
-    private var messageColor: Color {
-        appearance == .onMedia ? .white.opacity(0.6) : Theme.textSecondary
     }
 }

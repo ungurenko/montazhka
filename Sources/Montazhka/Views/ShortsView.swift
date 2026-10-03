@@ -758,14 +758,12 @@ private struct ShortsPlayerView: View {
                 EmptyStateView(
                     systemImage: "exclamationmark.triangle.fill",
                     title: error.what,
-                    message: error.hint,
-                    appearance: .onMedia)
+                    message: error.hint)
             } else if controller.candidates.isEmpty && !controller.status.isWorking {
                 EmptyStateView(
                     systemImage: "sparkles.rectangle.stack",
                     title: "Готов искать сильные моменты",
-                    message: "Выбери параметры справа и нажми «Найти моменты»",
-                    appearance: .onMedia)
+                    message: "Выбери параметры справа и нажми «Найти моменты»")
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)

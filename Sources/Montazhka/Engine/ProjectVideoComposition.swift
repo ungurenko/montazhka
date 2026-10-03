@@ -59,7 +59,7 @@ enum ProjectVideoComposition {
     /// Отступ анимации в углу — доля ширины и высоты кадра.
     static let cornerMargin: CGFloat = 0.04
 
-    /// nil, когда отсутствуют анимации, субтитры, особая геометрия и запрос размера:
+    /// nil, когда отсутствуют анимации, субтитры и особая геометрия:
     /// экспорт и предпросмотр — как раньше.
     /// Одна инструкция на всю длину: анимации сверху вниз от последней к первой, база под ними.
     /// Непрозрачность анимации 0 до окна и после него: иначе после конца своего куска
@@ -68,10 +68,9 @@ enum ProjectVideoComposition {
     /// как у первого куска, остальные вписываются в него целиком по центру, поля чёрные.
     static func make(
         composition: AVComposition, baseTrackID: CMPersistentTrackID, overlays: [OverlayTrack],
-        subtitles: ProjectSubtitleLayer?, segments: [VideoSegmentGeometry] = [], freezeAt: Double? = nil,
-        targetRenderSize: CGSize? = nil
+        subtitles: ProjectSubtitleLayer?, segments: [VideoSegmentGeometry] = [], freezeAt: Double? = nil
     ) async throws -> ProjectVideoPlan? {
-        guard !overlays.isEmpty || subtitles != nil || !segments.isEmpty || targetRenderSize != nil else { return nil }
+        guard !overlays.isEmpty || subtitles != nil || !segments.isEmpty else { return nil }
         guard let base = try await composition.loadTrack(withTrackID: baseTrackID) else { throw BuildError.noBaseVideo }
         let (trackNatural, trackPreferred, frameRate) = try await base.load(
             .naturalSize, .preferredTransform, .nominalFrameRate)
@@ -79,13 +78,10 @@ enum ProjectVideoComposition {
         let preferred = segments.first?.preferredTransform ?? trackPreferred
         let length = try await composition.load(.duration)
         let oriented = CGRect(origin: .zero, size: natural).applying(preferred)
-        let nativeSize = CGSize(width: abs(oriented.width), height: abs(oriented.height))
-        guard nativeSize.width > 0, nativeSize.height > 0, length > .zero else { throw BuildError.noBaseVideo }
-        let renderSize = targetRenderSize ?? nativeSize
+        let renderSize = CGSize(width: abs(oriented.width), height: abs(oriented.height))
+        guard renderSize.width > 0, renderSize.height > 0, length > .zero else { throw BuildError.noBaseVideo }
         guard renderSize.width.isFinite, renderSize.height.isFinite, renderSize.width > 0, renderSize.height > 0
         else { throw BuildError.invalidRenderSize }
-        let outputScale = CGAffineTransform(
-            scaleX: renderSize.width / nativeSize.width, y: renderSize.height / nativeSize.height)
 
         let baseLayer = AVMutableVideoCompositionLayerInstruction(assetTrack: base)
         // Обрезка по всему кадру ничего не отрезает, но заставляет честно смешивать каждый
@@ -94,9 +90,8 @@ enum ProjectVideoComposition {
             timeRange: CMTimeRange(start: .zero, duration: length), naturalSize: natural, preferredTransform: preferred)
         for piece in segments.isEmpty ? [whole] : segments {
             let fitted = fittedTransform(
-                naturalSize: piece.naturalSize, preferredTransform: piece.preferredTransform, renderSize: nativeSize)
-            baseLayer.setTransform(
-                targetRenderSize == nil ? fitted : fitted.concatenating(outputScale), at: piece.timeRange.start)
+                naturalSize: piece.naturalSize, preferredTransform: piece.preferredTransform, renderSize: renderSize)
+            baseLayer.setTransform(fitted, at: piece.timeRange.start)
             baseLayer.setCropRectangle(CGRect(origin: .zero, size: piece.naturalSize), at: piece.timeRange.start)
         }
         var layers: [AVVideoCompositionLayerInstruction] = [baseLayer]
@@ -107,10 +102,8 @@ enum ProjectVideoComposition {
             let layer = AVMutableVideoCompositionLayerInstruction(assetTrack: track)
             let placed = overlayTransform(
                 naturalSize: overlay.naturalSize, preferredTransform: overlay.preferredTransform,
-                position: overlay.position, scale: overlay.scale, renderSize: nativeSize)
-            layer.setTransform(
-                targetRenderSize == nil ? placed : placed.concatenating(outputScale),
-                at: .zero)
+                position: overlay.position, scale: overlay.scale, renderSize: renderSize)
+            layer.setTransform(placed, at: .zero)
             let start = CMTime(seconds: overlay.window.from, preferredTimescale: 60_000)
             if start > .zero { layer.setOpacity(0, at: .zero) }
             layer.setOpacity(1, at: start)
@@ -134,7 +127,7 @@ enum ProjectVideoComposition {
 
         let overlay = subtitles.flatMap {
             OverlayFrameRenderer(
-                renderSize: nativeSize, cues: $0.cues, appearance: $0.appearance, highlight: $0.highlight, hook: nil)
+                renderSize: renderSize, cues: $0.cues, appearance: $0.appearance, highlight: $0.highlight, hook: nil)
         }
         let imageAt: (@Sendable (Double) -> CGImage?)?
         if let renderer = overlay {

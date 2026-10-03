@@ -119,8 +119,7 @@ extension AgentService {
         let rendered = await MediaPipeline(voiceStore: voice, musicEQStore: music).render(
             MediaRenderRequest(
                 project: project, mode: .export, readyEnhancedAudio: [:], speechRanges: speech.speechRanges,
-                subtitleLayer: burnSubtitles ? ProjectSubtitleLayer.saved(cues: speech.horizontalCues) : nil,
-                exportQuality: ExportRenderResolutionPolicy.requestedQuality(quality)))
+                subtitleLayer: burnSubtitles ? ProjectSubtitleLayer.saved(cues: speech.horizontalCues) : nil))
         let job = FinalExportJob(
             input: ExportInput(
                 composition: rendered.composition, audioMix: rendered.audioMix,

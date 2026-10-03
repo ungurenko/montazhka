@@ -18,8 +18,6 @@ struct MediaRenderRequest: Sendable {
     var videoCopies = 1
     /// Субтитры, впечатанные в кадр обычного проекта; nil — без них.
     var subtitleLayer: ProjectSubtitleLayer? = nil
-    /// Только обычный экспорт. Предпросмотр и шортсы сохраняют собственные размеры.
-    var exportQuality: ExportQuality? = nil
 }
 
 struct MediaRenderResult: @unchecked Sendable {

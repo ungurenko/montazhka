@@ -1,4 +1,3 @@
-@preconcurrency import AVFoundation
 import AppKit
 import CoreText
 import QuartzCore
@@ -33,14 +32,12 @@ struct SubtitleLayerPlan {
 
 /// Слой надписей (хук и фразы) для записи MP4 и снимков — см. `OverlayFrameRenderer`.
 enum ShortsSubtitleRenderer {
-    /// Все надписи ролика одним слоем: хук и фразы с анимацией видимости.
-    /// Этот же слой рисует неподвижный снимок для агента.
+    /// Все надписи ролика одним слоем: эталон проверок выбирает видимые по метаданным.
     static func overlayLayer(
         renderSize: CGSize,
         cues: [ShortsSubtitleCue],
         appearance: ShortsSubtitleAppearance,
         highlight: Bool,
-        duration: Double,
         hook: ShortsHook?
     ) -> CALayer {
         let overlay = CALayer()
@@ -51,13 +48,12 @@ enum ShortsSubtitleRenderer {
                     for: cue,
                     renderSize: renderSize,
                     appearance: appearance,
-                    highlight: highlight,
-                    duration: duration
+                    highlight: highlight
                 ).layer)
         }
         if let hook, !hook.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             overlay.addSublayer(
-                hookLayer(hook, renderSize: renderSize, appearance: appearance, duration: duration).layer)
+                hookLayer(hook, renderSize: renderSize, appearance: appearance).layer)
         }
         return overlay
     }
@@ -66,8 +62,7 @@ enum ShortsSubtitleRenderer {
     static func hookLayer(
         _ hook: ShortsHook,
         renderSize: CGSize,
-        appearance: ShortsSubtitleAppearance,
-        duration: Double
+        appearance: ShortsSubtitleAppearance
     ) -> SubtitleLayerPlan {
         let text = hook.text.trimmingCharacters(in: .whitespacesAndNewlines)
         var fontSize = appearance.baseFontSize(canvasSize: renderSize) * hookScale
@@ -90,8 +85,8 @@ enum ShortsSubtitleRenderer {
         var style = appearance
         if style.background == .none { style.background = .shadow }
         let block = textBlock(textLayout, font: font, appearance: style, frame: frame)
-        let timed = addVisibilityAnimation(
-            to: block.container, start: 0, end: hook.duration, duration: duration, fadeOut: 0.3)
+        let timed = visibilityWindow(
+            to: block.container, start: 0, end: hook.duration, fadeOut: 0.3)
         return SubtitleLayerPlan(layer: block.container, timed: [timed], rasters: block.image.map { [$0] } ?? [])
     }
 
@@ -151,8 +146,7 @@ enum ShortsSubtitleRenderer {
         for cue: ShortsSubtitleCue,
         renderSize: CGSize,
         appearance: ShortsSubtitleAppearance,
-        highlight: Bool,
-        duration: Double
+        highlight: Bool
     ) -> SubtitleLayerPlan {
         let font = ShortsSubtitleLayout.fittingFont(
             text: cue.text, appearance: appearance, canvasSize: renderSize)
@@ -194,14 +188,13 @@ enum ShortsSubtitleRenderer {
             let words = highlightedWordLayers(
                 cue: cue, textLayout: textLayout, image: highlighted,
                 bounds: CGRect(origin: .zero, size: textFrame.size),
-                lineHeight: lineHeight, fontSize: fontSize, duration: duration)
+                lineHeight: lineHeight, fontSize: fontSize)
             for word in words { overlay.addSublayer(word.layer) }
             timed.append(contentsOf: words)
             if !words.isEmpty { rasters.append(highlighted) }
             container.addSublayer(overlay)
         }
-        let phrase = addVisibilityAnimation(
-            to: container, start: cue.start, end: cue.end, duration: duration)
+        let phrase = visibilityWindow(to: container, start: cue.start, end: cue.end)
         timed.insert(phrase, at: 0)
         return SubtitleLayerPlan(layer: container, timed: timed, rasters: rasters)
     }
@@ -215,8 +208,7 @@ enum ShortsSubtitleRenderer {
         image: CGImage,
         bounds: CGRect,
         lineHeight: CGFloat,
-        fontSize: CGFloat,
-        duration: Double
+        fontSize: CGFloat
     ) -> [SubtitleLayerPlan.Timed] {
         guard bounds.width > 0, bounds.height > 0 else { return [] }
         let inset = fontSize * ShortsSubtitleLayout.highlightInsetScale
@@ -247,9 +239,7 @@ enum ShortsSubtitleRenderer {
                 width: frame.width / bounds.width,
                 height: frame.height / bounds.height)
             layer.opacity = 0
-            return addVisibilityAnimation(
-                to: layer, start: cue.words[index].start, end: cue.words[index].end,
-                duration: duration)
+            return visibilityWindow(to: layer, start: cue.words[index].start, end: cue.words[index].end)
         }
     }
 
@@ -321,40 +311,15 @@ enum ShortsSubtitleRenderer {
     /// Сколько секунд слой затухает к концу окна; нет ключа — гаснет сразу.
     static let visibleFadeKey = "montazhkaVisibleFade"
 
-    private static func addVisibilityAnimation(
+    private static func visibilityWindow(
         to layer: CALayer,
         start visibleFrom: Double,
         end visibleTo: Double,
-        duration: Double,
         fadeOut: Double = 0
     ) -> SubtitleLayerPlan.Timed {
         layer.setValue(visibleFrom, forKey: visibleFromKey)
         layer.setValue(visibleTo, forKey: visibleToKey)
         if fadeOut > 0 { layer.setValue(fadeOut, forKey: visibleFadeKey) }
-        // Жёсткое включение и выключение (или плавное затухание `fadeOut`).
-        // Между ключами прозрачность меняется линейно, поэтому у каждого края
-        // два ключа почти в одной точке — иначе фраза проступала бы с начала ролика.
-        let edge = 0.002 / duration
-        let start = min(1, max(0, visibleFrom / duration))
-        let end = min(1, max(start + edge, visibleTo / duration))
-        let fadeStart = max(start + edge, end - max(edge, fadeOut / duration))
-        let points: [(time: Double, value: Double)] = [
-            (0, start <= 0 ? 1 : 0), (start, start <= 0 ? 1 : 0), (start + edge, 1), (fadeStart, 1), (end, 0), (1, 0),
-        ]
-        var keyTimes: [NSNumber] = []
-        var values: [Double] = []
-        for point in points where keyTimes.last.map({ point.time > $0.doubleValue }) ?? true {
-            keyTimes.append(NSNumber(value: min(1, point.time)))
-            values.append(point.value)
-        }
-        let animation = CAKeyframeAnimation(keyPath: "opacity")
-        animation.values = values
-        animation.keyTimes = keyTimes
-        animation.duration = duration
-        animation.beginTime = AVCoreAnimationBeginTimeAtZero
-        animation.isRemovedOnCompletion = false
-        animation.fillMode = .both
-        layer.add(animation, forKey: "shorts-subtitle-visibility")
         return SubtitleLayerPlan.Timed(layer: layer, from: visibleFrom, to: visibleTo, fade: fadeOut)
     }
 }

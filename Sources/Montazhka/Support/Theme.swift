@@ -49,41 +49,6 @@ enum Theme {
         static let inspectorWidth: CGFloat = 340
     }
 
-    /// Тень означает высоту слоя, а не украшение: чем выше слой над
-    /// содержимым, тем мягче и дальше падает тень.
-    enum Elevation {
-        /// Лежит на фоне: рабочие карточки, панели.
-        case flat
-        /// Приподнято над содержимым: плавающая верхняя панель.
-        case raised
-        /// Оторвано от плоскости: модальные окна, всплывающие подсказки.
-        case floating
-
-        var radius: CGFloat {
-            switch self {
-            case .flat: return 0
-            case .raised: return 8
-            case .floating: return 24
-            }
-        }
-
-        var opacity: Double {
-            switch self {
-            case .flat: return 0
-            case .raised: return 0.06
-            case .floating: return 0.14
-            }
-        }
-
-        var offsetY: CGFloat {
-            switch self {
-            case .flat: return 0
-            case .raised: return 2
-            case .floating: return 8
-            }
-        }
-    }
-
     /// Движение интерфейса. Пружины вместо кривых: их можно перехватить
     /// на полпути, и они не «доигрывают» вопреки новому действию.
     enum Motion {
@@ -125,15 +90,6 @@ extension View {
                 RoundedRectangle(cornerRadius: Theme.radiusSmall, style: .continuous)
                     .stroke(selected ? Theme.accent.opacity(0.45) : Theme.border, lineWidth: 1)
             }
-    }
-
-    /// Поднимает слой над содержимым: тень как высота, не как декор.
-    func elevation(_ level: Theme.Elevation) -> some View {
-        shadow(
-            color: .black.opacity(level.opacity),
-            radius: level.radius,
-            x: 0,
-            y: level.offsetY)
     }
 }
 

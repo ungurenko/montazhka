@@ -26,7 +26,6 @@ final class OverlayFrameRenderer: @unchecked Sendable {
     private let appearance: ShortsSubtitleAppearance
     private let highlight: Bool
     private let hook: ShortsHook?
-    private let duration: Double
     private let cacheCostLimit: Int
     private var cache: [Int: Entry] = [:]
     private var cacheCost = 0
@@ -52,7 +51,6 @@ final class OverlayFrameRenderer: @unchecked Sendable {
         self.appearance = appearance
         self.highlight = highlight
         self.hook = hook
-        self.duration = max(hook?.duration ?? 0, cues.map(\.end).max() ?? 0) + 1
         self.renderSize = renderSize
         self.cacheCostLimit = max(0, cacheCostLimit)
         CATransaction.begin()
@@ -107,13 +105,12 @@ final class OverlayFrameRenderer: @unchecked Sendable {
         let plan: SubtitleLayerPlan
         if index == cues.count, let hook {
             plan = ShortsSubtitleRenderer.hookLayer(
-                hook, renderSize: renderSize, appearance: appearance, duration: duration)
+                hook, renderSize: renderSize, appearance: appearance)
         } else {
             plan = ShortsSubtitleRenderer.captionLayer(
                 for: cues[index], renderSize: renderSize, appearance: appearance,
-                highlight: highlight, duration: duration)
+                highlight: highlight)
         }
-        for item in plan.timed { item.layer.removeAllAnimations() }
         return Entry(layer: plan.layer, timed: plan.timed, cost: plan.rasterBytes, access: access)
     }
 

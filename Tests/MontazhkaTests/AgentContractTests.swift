@@ -301,6 +301,31 @@ struct AgentContractTests {
         #expect(object["nextUri"] as? String != nil)
     }
 
+    @Test("Agent project lock stays held across suspension and releases with its owner")
+    func projectLockLifetime() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("montazhka-project-lock-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let id = UUID()
+        var held: AgentProjectLock? = try AgentProjectLock(projectID: id, directory: root)
+        #expect(FileManager.default.fileExists(atPath: root.appendingPathComponent("\(id.uuidString).lock").path))
+
+        await Task.yield()
+
+        do {
+            _ = try AgentProjectLock(projectID: id, directory: root)
+            Issue.record("A second owner acquired the held project lock")
+        } catch let error as AgentProjectLockError {
+            if case .busy(let blockedID) = error { #expect(blockedID == id) }
+            #expect(error.errorDescription == "Проект \(id.uuidString) уже изменяется в другом процессе.")
+        }
+        withExtendedLifetime(held) {}
+        held = nil
+
+        let reacquired = try AgentProjectLock(projectID: id, directory: root)
+        withExtendedLifetime(reacquired) {}
+    }
+
     @Test("Existing compatible model is reused in place")
     func existingModelIsReused() throws {
         let root = FileManager.default.temporaryDirectory

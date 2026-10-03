@@ -31,10 +31,9 @@ final class LegacyCaptionFrameRenderer {
     ) {
         let hook = hook.flatMap { $0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 }
         guard !cues.isEmpty || hook != nil, renderSize.width > 0, renderSize.height > 0 else { return nil }
-        let duration = max(hook?.duration ?? 0, cues.map(\.end).max() ?? 0) + 1
         root = ShortsSubtitleRenderer.overlayLayer(
             renderSize: renderSize, cues: cues, appearance: appearance, highlight: highlight,
-            duration: duration, hook: hook)
+            hook: hook)
         self.renderSize = renderSize
         var timed: [Timed] = []
         Self.collect(root, into: &timed)

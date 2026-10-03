@@ -334,7 +334,7 @@ struct ShortsSubtitleTests {
         let cue = ShortsSubtitleCue(words: [ShortsSubtitleWord(text: "Привет", start: 0, end: 1)], start: 0, end: 1)
         for canvas in [horizontal, vertical] {
             let layer = ShortsSubtitleRenderer.overlayLayer(
-                renderSize: canvas, cues: [cue], appearance: appearance, highlight: false, duration: 2, hook: nil)
+                renderSize: canvas, cues: [cue], appearance: appearance, highlight: false, hook: nil)
             let frame = layer.sublayers?.first?.frame ?? .zero
             #expect(abs(frame.width - canvas.width * ShortsSubtitleLayout.widthRatio(for: canvas)) < 1e-9)
             #expect(abs(frame.midX - canvas.width / 2) < 1e-9)

@@ -15,19 +15,6 @@ enum SubRipWriter {
         return blocks.joined(separator: "\n")
     }
 
-    /// Файл заменяется целиком: сначала пишется временная копия в той же
-    /// папке, и только готовая встаёт на место старой.
-    static func write(cues: [ShortsSubtitleCue], to url: URL) throws {
-        var output = AtomicMediaOutput(destinationURL: url)
-        do {
-            try Data(text(cues: cues).utf8).write(to: output.temporaryURL)
-            try output.commit()
-        } catch {
-            output.discard()
-            throw error
-        }
-    }
-
     /// Та же папка и то же имя, что у видео, расширение `.srt` — так плееры
     /// находят субтитры сами.
     static func url(forVideo videoURL: URL) -> URL {
