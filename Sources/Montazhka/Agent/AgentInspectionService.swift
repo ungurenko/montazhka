@@ -167,9 +167,9 @@ extension AgentService {
             guard !clips.isEmpty else { throw AgentServiceError.emptyProject }
             let total = clips.reduce(0) { $0 + $1.duration }
             let range = LoudnessProbe.normalizedRange(total: total, from: from ?? 0, to: to ?? total)
-            for path in LoudnessProbe.sourcePaths(clips: clips, range: range) { await waveforms.ensure(path: path) }
+            let peaks = await waveforms.ensureAll(LoudnessProbe.sourcePaths(clips: clips, range: range))
             let report = LoudnessProbe.measure(
-                clips: clips, peaksFor: { self.waveforms.peaks(for: $0) },
+                clips: clips, peaksFor: { peaks[$0] },
                 from: from ?? 0, to: to ?? total, buckets: buckets ?? 60, settings: settings)
             var data: [String: AgentJSONValue] = [
                 "from": .number(Self.rounded(report.from)), "to": .number(Self.rounded(report.to)),

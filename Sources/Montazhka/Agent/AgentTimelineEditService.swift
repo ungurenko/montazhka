@@ -288,10 +288,10 @@ extension AgentService {
                 "Лента изменилась после чтения расшифровки, номера слов устарели. Вызовите montazhka_transcript "
                     + "заново и возьмите новые номера и timeline. Несколько диапазонов — в одном deleteWords.")
         }
-        for path in Set(clips.map(\.sourcePath)) { _ = await waveforms.ensure(path: path) }
+        let peaks = await waveforms.ensureAll(Set(clips.map(\.sourcePath)))
         let map = TranscriptTimelineMapper.make(clips: clips, transcripts: transcript)
         return try AgentWordCuts.timelineRanges(
-            ranges, map: map, clips: clips, peaksFor: { self.waveforms.peaks(for: $0) },
+            ranges, map: map, clips: clips, peaksFor: { peaks[$0] },
             thresholdDB: thresholdDB)
     }
 

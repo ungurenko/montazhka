@@ -92,6 +92,25 @@ struct AgentInspectionScopeTests {
         #expect(result == full)
     }
 
+    /// Кэш волн в памяти может вытеснить волну до расчёта (нехватка памяти при экспорте):
+    /// речь тогда превращалась в «тишину −100 дБ».
+    @Test
+    func evictedWaveformsAreNotReportedAsSilence() async throws {
+        let f = try await fixture()
+        defer { try? FileManager.default.removeItem(at: f.root) }
+        let tiny = WaveformStore(
+            cacheDir: f.root.appendingPathComponent("tiny"), memoryCountLimit: 1, loader: { _, _ in f.peaks })
+        let result = await AgentService(baseDirectory: f.root, waveforms: tiny).audio(
+            target: AgentMediaTarget(projectID: f.project.id), from: 0, to: 100, buckets: 60)
+        #expect(result.ok)
+        guard case .array(let levels)? = result.data?["levelsDB"] else {
+            Issue.record("levelsDB missing")
+            return
+        }
+        #expect(levels.count == 60)
+        #expect(!levels.contains(.number(LoudnessProbe.floorDB)))
+    }
+
     @Test(arguments: [false, true])
     func transcriptOnlyLoadsPageSources(phrases: Bool) async throws {
         let f = try await fixture()

@@ -54,6 +54,20 @@ final class WaveformStore: @unchecked Sendable {
         return result
     }
 
+    /// Волны нескольких файлов для одного расчёта. Расчёт читает этот словарь,
+    /// а не `peaks(for:)`: NSCache может вытеснить волну между `ensure` и чтением
+    /// (например, при нехватке памяти во время экспорта), и звук стал бы «тишиной».
+    func ensureAll(_ paths: Set<String>) async -> [String: [Float]] {
+        await withTaskGroup(of: (String, [Float]?).self) { group in
+            for path in paths {
+                group.addTask { (path, await self.ensure(path: path)) }
+            }
+            var result: [String: [Float]] = [:]
+            for await (path, peaks) in group { result[path] = peaks }
+            return result
+        }
+    }
+
     // MARK: - Кэш
 
     private func cacheFileURL(for path: String) -> URL {

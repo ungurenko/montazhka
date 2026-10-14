@@ -49,14 +49,18 @@ struct TranscriptTimelineMap: Sendable {
 enum TranscriptTimelineMapper {
     static func make(clips: [Clip], transcripts: [TranscriptWord]) -> TranscriptTimelineMap {
         let snapshot = SmartEditSnapshot(clips: clips)
+        // Слова каждого исходника сортируются один раз; клип берёт свой срез
+        // бинарным поиском, а не перебирает все слова исходника.
         let grouped = Dictionary(grouping: transcripts, by: \.sourceID)
+            .mapValues { $0.sorted { $0.start < $1.start } }
         var timelineOffset = 0.0
         var mapped: [MappedTranscriptWord] = []
 
         for clip in clips {
-            let visible = (grouped[clip.source.id] ?? [])
-                .filter { $0.start >= clip.start - 0.005 && $0.end <= clip.end + 0.005 }
-                .sorted { $0.start < $1.start }
+            let words = grouped[clip.source.id] ?? []
+            let first = words.partitioningIndex { $0.start >= clip.start - 0.005 }
+            let past = words.partitioningIndex { $0.start > clip.end + 0.005 }
+            let visible = words[first..<max(first, past)].filter { $0.end <= clip.end + 0.005 }
             for word in visible {
                 let number = mapped.count + 1
                 mapped.append(
@@ -75,5 +79,19 @@ enum TranscriptTimelineMapper {
             timelineOffset += clip.duration
         }
         return TranscriptTimelineMap(snapshot: snapshot, words: mapped)
+    }
+}
+
+extension Array {
+    /// Первый индекс, где `predicate` истинен, при условии что он ложен для начала
+    /// массива и истинен для конца (массив отсортирован по проверяемому полю).
+    func partitioningIndex(where predicate: (Element) -> Bool) -> Int {
+        var low = 0
+        var high = count
+        while low < high {
+            let middle = (low + high) / 2
+            if predicate(self[middle]) { high = middle } else { low = middle + 1 }
+        }
+        return low
     }
 }

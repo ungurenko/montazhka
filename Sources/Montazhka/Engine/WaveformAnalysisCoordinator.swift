@@ -46,18 +46,14 @@ final class WaveformAnalysisCoordinator {
         isDetecting = true
         hasResult = false
         detectionTask = Task { [weak self, store] in
-            await withTaskGroup(of: Void.self) { group in
-                for path in Set(clips.map(\.sourcePath)) {
-                    group.addTask { await store.ensure(path: path) }
-                }
-            }
+            let peaks = await store.ensureAll(Set(clips.map(\.sourcePath)))
             guard let self, !Task.isCancelled, detectionGeneration.isCurrent(current) else { return }
             // Отдельный unstructured-таск: отмена в него сама не протекает,
             // поэтому хэндл храним и отменяем явно.
             let detached = Task.detached(priority: .userInitiated) {
                 SilenceDetector.findPauses(
                     clips: clips,
-                    peaksFor: { store.peaks(for: $0) },
+                    peaksFor: { peaks[$0] },
                     settings: settings
                 )
             }

@@ -26,9 +26,20 @@ enum SilenceDetector {
     static func sparingWords(
         _ pauses: [PauseCandidate], words: [(start: Double, end: Double)]
     ) -> [PauseCandidate] {
-        pauses.flatMap { pause -> [PauseCandidate] in
+        // Слова по началу и наибольший конец среди предыдущих: для паузы
+        // бинарным поиском берётся только срез слов, который может её задеть.
+        // Порядок слов на результат не влияет: каждое слово вычитает свой отрезок.
+        let sorted = words.sorted { $0.start < $1.start }
+        var maxEnd = -Double.infinity
+        let reachedEnd = sorted.map { word -> Double in
+            maxEnd = max(maxEnd, word.end)
+            return maxEnd
+        }
+        return pauses.flatMap { pause -> [PauseCandidate] in
             var pieces = [(from: pause.start, to: pause.end)]
-            for word in words where word.end > pause.start && word.start < pause.end {
+            let first = reachedEnd.partitioningIndex { $0 > pause.start }
+            let past = sorted.partitioningIndex { $0.start >= pause.end }
+            for word in sorted[first..<max(first, past)] where word.end > pause.start && word.start < pause.end {
                 let keepFrom = word.start - wordAir
                 let keepTo = word.end + wordAir
                 pieces = pieces.flatMap { piece -> [(from: Double, to: Double)] in
