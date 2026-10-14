@@ -291,6 +291,10 @@ private struct AgentMCPServer {
     }
 
     func run() async throws {
+        // Сессия агента может идти неделями без запуска окна: уборка раз в сутки и отсюда.
+        Task.detached(priority: .utility) {
+            StorageCleanup.runIfDue(base: AgentBackgroundJob.runsDirectory.deletingLastPathComponent())
+        }
         let server = Server(
             name: "Montazhka", version: AgentBuildInfo.version,
             instructions:

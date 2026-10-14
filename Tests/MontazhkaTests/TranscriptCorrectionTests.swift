@@ -170,6 +170,22 @@ extension TranscriptCorrectionTests {
         #expect(try Data(contentsOf: url) == Data("broken JSON".utf8))
     }
 
+    @Test("the in-memory transcript cache hands out new words once the file is rewritten")
+    func rewrittenTranscriptIsReread() async throws {
+        let fixture = try await fixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let store = await fixture.service.makeTranscriptStore()
+        let url = await store.cacheURL(for: fixture.media)
+        let before = try #require(await store.validatedCachedWords(source: fixture.media))
+        let word = TranscriptWord(sourceID: fixture.media.id, text: "новое", start: 0, end: 0.5, confidence: 1)
+        try JSONEncoder().encode(TranscriptDocument(words: [word])).write(to: url, options: .atomic)
+
+        let after = try #require(await store.validatedCachedWords(source: fixture.media))
+
+        #expect(before.map(\.text) != ["новое"])
+        #expect(after.map(\.text) == ["новое"])
+    }
+
     @Test("a competing transcription rechecks the cache after taking ownership")
     func cacheIsRecheckedAfterLock() async throws {
         let fixture = try await fixture()

@@ -85,9 +85,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.activate(ignoringOtherApps: true)
         if !UITestMode.isActive {
             AgentIntegrationInstaller.refreshSkillsIfInstalled()
-            // Задачи агента, чей фоновый процесс умер (в том числе при перезагрузке), получают конечный статус.
+            // Задачи агента, чей фоновый процесс умер (в том числе при перезагрузке), получают конечный статус;
+            // затем раз в сутки убирается то, что больше не нужно ни одному проекту.
             Task.detached(priority: .utility) {
                 await AgentRunStore(baseDirectory: AgentBackgroundJob.runsDirectory).reconcileAll()
+                StorageCleanup.runIfDue(base: AgentBackgroundJob.runsDirectory.deletingLastPathComponent())
             }
         }
     }

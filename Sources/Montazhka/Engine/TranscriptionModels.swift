@@ -80,15 +80,9 @@ actor TranscriptStore {
     }
 
     func validatedCachedWords(source: MediaReference) -> [TranscriptWord]? {
-        guard let document = try? load(from: cacheURL(for: source)),
-            document.schemaVersion == TranscriptDocument.currentVersion,
-            document.model == "parakeet-tdt-0.6b-v3-int8", document.language == "ru",
-            document.words.allSatisfy({
-                $0.start.isFinite && $0.end.isFinite && $0.start >= 0 && $0.end >= $0.start
-                    && $0.confidence.isFinite
-            })
+        guard let words = TranscriptDocumentCache.shared.words(at: cacheURL(for: source), load: Self.validatedWords)
         else { return nil }
-        return document.words.map {
+        return words.map {
             TranscriptWord(
                 sourceID: source.id, text: $0.text, start: $0.start,
                 end: $0.end, confidence: $0.confidence)
@@ -99,8 +93,16 @@ actor TranscriptStore {
         await transcriber.modelIsCached()
     }
 
-    private func load(from url: URL) throws -> TranscriptDocument {
-        try JSONDecoder().decode(TranscriptDocument.self, from: Data(contentsOf: url))
+    private static func validatedWords(at url: URL) -> [TranscriptWord]? {
+        guard let document = try? JSONDecoder().decode(TranscriptDocument.self, from: Data(contentsOf: url)),
+            document.schemaVersion == TranscriptDocument.currentVersion,
+            document.model == "parakeet-tdt-0.6b-v3-int8", document.language == "ru",
+            document.words.allSatisfy({
+                $0.start.isFinite && $0.end.isFinite && $0.start >= 0 && $0.end >= $0.start
+                    && $0.confidence.isFinite
+            })
+        else { return nil }
+        return document.words
     }
 
     static func cacheKey(for path: String) -> String {
@@ -112,5 +114,41 @@ actor TranscriptStore {
         let key = Self.cacheKey(for: path)
         let hash = SHA256.hash(data: Data(key.utf8)).hex
         return cacheDir.appendingPathComponent("\(hash).json")
+    }
+}
+
+/// Разобранные файлы расшифровок на весь процесс: агент читает одну и ту же расшифровку
+/// десятки раз за сессию, а разбор JSON часовой записи стоит десятки миллисекунд.
+/// Файл узнаётся по размеру, дате и номеру: запись идёт атомарной заменой файла,
+/// поэтому новая расшифровка или правка руками никогда не отдаёт старые слова.
+final class TranscriptDocumentCache: @unchecked Sendable {
+    static let shared = TranscriptDocumentCache()
+    /// Столько расшифровок держим: часовая запись — около 7.000 слов, ~1 МБ памяти.
+    static let limit = 8
+
+    private struct Identity: Equatable {
+        let size: UInt64
+        let modified: Date
+        let file: UInt64
+    }
+
+    private let lock = NSLock()
+    private var entries: [String: (identity: Identity, words: [TranscriptWord])] = [:]
+    private var order: [String] = []
+
+    /// nil — файла нет или он не прошёл проверку `load` (такой ответ не запоминается).
+    func words(at url: URL, load: (URL) -> [TranscriptWord]?) -> [TranscriptWord]? {
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path) else { return nil }
+        let identity = Identity(
+            size: (attributes[.size] as? NSNumber)?.uint64Value ?? 0,
+            modified: attributes[.modificationDate] as? Date ?? .distantPast,
+            file: (attributes[.systemFileNumber] as? NSNumber)?.uint64Value ?? 0)
+        if let hit = lock.withLock({ entries[url.path] }), hit.identity == identity { return hit.words }
+        guard let words = load(url) else { return nil }
+        lock.withLock {
+            if entries.updateValue((identity, words), forKey: url.path) == nil { order.append(url.path) }
+            if order.count > Self.limit { entries[order.removeFirst()] = nil }
+        }
+        return words
     }
 }

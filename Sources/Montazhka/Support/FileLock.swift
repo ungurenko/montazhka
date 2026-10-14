@@ -67,13 +67,21 @@ final class FileLock {
         }
     }
 
-    static func acquireSlot(in directory: URL, count: Int) async throws -> FileLock {
+    /// `onBusy` вызывается один раз, если все места заняты и придётся ждать.
+    static func acquireSlot(
+        in directory: URL, count: Int, onBusy: (() async -> Void)? = nil
+    ) async throws -> FileLock {
+        var waiting = false
         while true {
             try Task.checkCancellation()
             for index in 0..<count {
                 do {
                     return try FileLock(lockFile: directory.appendingPathComponent("worker-\(index).lock"), wait: false)
                 } catch is Busy { continue }
+            }
+            if !waiting {
+                waiting = true
+                await onBusy?()
             }
             try await Task.sleep(for: .milliseconds(100))
         }

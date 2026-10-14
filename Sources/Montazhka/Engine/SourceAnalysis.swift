@@ -3,6 +3,7 @@
 import FluidAudio
 import Foundation
 import Vision
+import os
 
 /// Дополнительная защита речи и кандидаты приватности. Границы VAD не являются резами.
 /// Сырые строки OCR никогда не попадают в JSON или stdout.
@@ -65,6 +66,121 @@ enum SourceAnalysis {
         return patterns.first { text.range(of: $0.1, options: .regularExpression) != nil }?.0
     }
 
+    /// Звук всех дорожек читается кусками на родной частоте и одним непрерывным конвертером
+    /// переводится в 16 кГц моно — как делал `AudioConverter` FluidAudio, но без всей дорожки
+    /// в памяти. Встроенный в чтение пересчёт частоты не годится: от запуска к запуску он даёт
+    /// разное число сэмплов. В VAD звук уходит кусками по 4096 сэмплов с переносом состояния
+    /// модели, как в `VadManager.process`. Возвращает вероятность речи на кусок и число сэмплов.
+    private static func speechProbabilities(
+        asset: AVURLAsset, manager: VadManager
+    ) async throws -> (probabilities: [Float], samples: Int) {
+        let tracks = try await asset.loadTracks(withMediaType: .audio)
+        guard !tracks.isEmpty,
+            let target = AVAudioFormat(
+                commonFormat: .pcmFormatFloat32, sampleRate: Double(VadManager.sampleRate), channels: 1,
+                interleaved: false),
+            let resampled = AVAudioPCMBuffer(pcmFormat: target, frameCapacity: 65_536)
+        else { throw SpeechTranscriptionError.audioExtractionFailed }
+        let reader = try AVAssetReader(asset: asset)
+        let settings: [String: Any] = [
+            AVFormatIDKey: kAudioFormatLinearPCM,
+            AVLinearPCMBitDepthKey: 32,
+            AVLinearPCMIsFloatKey: true,
+            AVLinearPCMIsNonInterleaved: true,
+            AVLinearPCMIsBigEndianKey: false,
+        ]
+        let output: AVAssetReaderOutput =
+            tracks.count == 1
+            ? AVAssetReaderTrackOutput(track: tracks[0], outputSettings: settings)
+            : AVAssetReaderAudioMixOutput(audioTracks: tracks, audioSettings: settings)
+        guard reader.canAdd(output) else { throw SpeechTranscriptionError.audioExtractionFailed }
+        reader.add(output)
+        guard reader.startReading() else { throw reader.error ?? SpeechTranscriptionError.audioExtractionFailed }
+        defer { reader.cancelReading() }
+
+        var converter: AVAudioConverter?
+        var state = await manager.makeStreamState()
+        var probabilities: [Float] = []
+        var chunk: [Float] = []
+        chunk.reserveCapacity(VadManager.chunkSize)
+        var total = 0
+
+        /// Переводит `input` (nil — конец звука) и отдаёт готовые сэмплы в VAD.
+        func convert(_ input: AVAudioPCMBuffer?, with converter: AVAudioConverter) async throws {
+            nonisolated(unsafe) let input = input
+            let given = OSAllocatedUnfairLock(initialState: false)
+            while true {
+                resampled.frameLength = 0
+                var error: NSError?
+                let status = converter.convert(to: resampled, error: &error) { _, inputStatus in
+                    guard let input,
+                        !given.withLock({
+                            defer { $0 = true }; return $0
+                        })
+                    else {
+                        inputStatus.pointee = input == nil ? .endOfStream : .noDataNow
+                        return nil
+                    }
+                    inputStatus.pointee = .haveData
+                    return input
+                }
+                guard status != .error else { throw error ?? SpeechTranscriptionError.audioExtractionFailed }
+                let samples = UnsafeBufferPointer(
+                    start: resampled.floatChannelData![0], count: Int(resampled.frameLength))
+                total += samples.count
+                var offset = 0
+                while offset < samples.count {
+                    let take = min(VadManager.chunkSize - chunk.count, samples.count - offset)
+                    chunk += samples[offset..<(offset + take)]
+                    offset += take
+                    guard chunk.count == VadManager.chunkSize else { continue }
+                    let result = try await manager.processStreamingChunk(chunk, state: state)
+                    probabilities.append(result.probability)
+                    state = result.state
+                    chunk.removeAll(keepingCapacity: true)
+                }
+                guard status == .haveData else { return }
+            }
+        }
+
+        while let sample = output.copyNextSampleBuffer() {
+            try Task.checkCancellation()
+            let frames = CMSampleBufferGetNumSamples(sample)
+            guard frames > 0 else { continue }
+            // Больше двух каналов без раскладки AVAudioFormat не принимает: тогда каналы
+            // считаются просто по порядку. Пропускать кусок нельзя — сместилось бы время речи.
+            guard let description = CMSampleBufferGetFormatDescription(sample),
+                let stream = CMAudioFormatDescriptionGetStreamBasicDescription(description),
+                let layout = CMAudioFormatDescriptionGetChannelLayout(description, sizeOut: nil)
+                    .map({ AVAudioChannelLayout(layout: $0) })
+                    ?? AVAudioChannelLayout(
+                        layoutTag: kAudioChannelLayoutTag_DiscreteInOrder | stream.pointee.mChannelsPerFrame),
+                let format = AVAudioFormat(streamDescription: stream, channelLayout: layout),
+                let input = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(frames))
+            else { throw SpeechTranscriptionError.audioExtractionFailed }
+            input.frameLength = AVAudioFrameCount(frames)
+            guard
+                CMSampleBufferCopyPCMDataIntoAudioBufferList(
+                    sample, at: 0, frameCount: Int32(frames), into: input.mutableAudioBufferList) == noErr
+            else { throw SpeechTranscriptionError.audioExtractionFailed }
+            if converter == nil {
+                converter = AVAudioConverter(from: format, to: target)
+                // Стерео в моно конвертер сам сводит к первому каналу; для каналов «по порядку»
+                // своего правила у него нет, и без явной карты он отдаёт тишину.
+                if format.channelCount > 2 { converter?.channelMap = [0] }
+            }
+            guard let converter else { throw SpeechTranscriptionError.audioExtractionFailed }
+            try await convert(input, with: converter)
+        }
+        guard reader.status == .completed else { throw reader.error ?? SpeechTranscriptionError.audioExtractionFailed }
+        if let converter { try await convert(nil, with: converter) }
+        // Последний неполный кусок модель дополняет сама, как в `VadManager.process`.
+        if !chunk.isEmpty {
+            probabilities.append(try await manager.processStreamingChunk(chunk, state: state).probability)
+        }
+        return (probabilities, total)
+    }
+
     static func run(file: URL, output: URL, vad: Bool, ocr: Bool, confirmDownload: Bool) async throws {
         guard file.standardizedFileURL != output.standardizedFileURL else {
             throw AgentServiceError.invalidInput("Анализ нельзя записать поверх исходника.")
@@ -94,19 +210,11 @@ enum SourceAnalysis {
                 }
                 manager = try await VadManager(modelDirectory: base)
             }
-            let audio = FileManager.default.temporaryDirectory.appendingPathComponent(
-                "montazhka-vad-\(UUID().uuidString).m4a")
-            defer { try? FileManager.default.removeItem(at: audio) }
-            guard let export = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetAppleM4A) else {
-                throw SpeechTranscriptionError.audioExtractionFailed
-            }
-            try await export.export(to: audio, as: .m4a)
-            let samples = try AudioConverter().resampleAudioFile(audio)
+            let (probabilities, samples) = try await speechProbabilities(asset: asset, manager: manager)
             let enter = await manager.config.defaultThreshold
             speech = speechRuns(
-                probabilities: try await manager.process(samples).map(\.probability),
-                enter: enter, exit: enter - 0.15,
-                duration: Double(samples.count) / Double(VadManager.sampleRate))
+                probabilities: probabilities, enter: enter, exit: enter - 0.15,
+                duration: Double(samples) / Double(VadManager.sampleRate))
         }
         var findings: [Finding] = []
         var sampled: [Double] = []

@@ -12,7 +12,8 @@ enum AgentRevisionError: LocalizedError {
 }
 
 /// Снимки проекта перед каждой правкой агента: `<base>/<projectId>/<n>.json`.
-/// Номер ревизии — число сохранённых снимков, поэтому он переживает перезапуск.
+/// Номер ревизии — номер последнего снимка, поэтому он переживает перезапуск и не падает,
+/// когда уборка (`StorageCleanup`) удаляет самые старые снимки.
 actor AgentRevisionStore {
     let baseDirectory: URL
 
@@ -21,7 +22,7 @@ actor AgentRevisionStore {
     }
 
     func revision(of projectID: UUID) -> Int {
-        numbers(projectID).count
+        numbers(projectID).last ?? 0
     }
 
     /// Сохраняет состояние ДО правки и возвращает новый номер ревизии.
@@ -31,7 +32,7 @@ actor AgentRevisionStore {
         let next = (numbers(project.id).last ?? 0) + 1
         try JSONEncoder().encode(project).write(
             to: directory.appendingPathComponent("\(next).json"), options: .atomic)
-        return numbers(project.id).count
+        return next
     }
 
     /// Проект на `steps` шагов назад. История не меняется, пока вызывающий

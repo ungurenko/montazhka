@@ -94,6 +94,24 @@ enum AgentBackgroundJob {
         return SHA256.hash(data: data).hex
     }
 
+    /// Экспорт и шортсы нагружают весь компьютер: одновременно идут не больше двух
+    /// на все сессии агента, остальные ждут в очереди.
+    static let heavyWorkSlots = 2
+
+    private static func heavyWorkSlot(
+        for request: AgentWorkerRequest, jobID: UUID, store: AgentRunStore
+    ) async throws -> FileLock? {
+        switch request {
+        case .export, .shorts: break
+        case .edit, .transcribe, .transcribeFile: return nil
+        }
+        return try await FileLock.acquireSlot(
+            in: runsDirectory.appendingPathComponent("heavy-slots", isDirectory: true), count: heavyWorkSlots
+        ) {
+            try? await store.update(id: jobID) { $0.stage = "В очереди: уже идут две тяжёлые задачи" }
+        }
+    }
+
     static func work(jobID: UUID, requestURL: URL) async -> AgentResponse {
         let store = AgentRunStore(baseDirectory: runsDirectory)
         do { try await store.claim(id: jobID) } catch {
@@ -101,6 +119,8 @@ enum AgentBackgroundJob {
         }
         do {
             let request = try JSONDecoder().decode(AgentWorkerRequest.self, from: Data(contentsOf: requestURL))
+            let slot = try await heavyWorkSlot(for: request, jobID: jobID, store: store)
+            defer { withExtendedLifetime(slot) {} }
             let service = AgentService(runs: store)
             let result: AgentResponse
             switch request {

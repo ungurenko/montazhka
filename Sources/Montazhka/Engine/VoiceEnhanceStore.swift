@@ -97,7 +97,7 @@ actor VoiceEnhanceStore {
         return cacheDir.appendingPathComponent("\(Self.sourceHash(for: path))-\(settingsHash).caf")
     }
 
-    private static func sourceHash(for path: String) -> String {
+    static func sourceHash(for path: String) -> String {
         hash(SourceFileFingerprint.key(for: path))
     }
 

@@ -76,13 +76,19 @@ struct Glossary: Equatable, Sendable {
         let patterns = entries.flatMap { entry in
             entry.match.map { (tokens: $0.split(separator: " ").map(String.init), replace: entry.replace) }
         }.sorted { ($0.tokens.count, $0.tokens.joined().count) > ($1.tokens.count, $1.tokens.joined().count) }
+        // Совпасть может только шаблон, чьё первое слово начинается с той же буквы:
+        // остальные отсекаются сравнением одной буквы вместо сравнения строк.
+        let initials = patterns.map { $0.tokens.first?.first }
         let normalized = words.map { Self.normalized($0.text) }
         var texts = words.map(\.text)
         var index = 0
         while index < words.count {
+            let initial = normalized[index].first
             guard
-                let hit = patterns.first(where: { pattern in
-                    index + pattern.tokens.count <= words.count
+                let found = patterns.indices.first(where: { number in
+                    let pattern = patterns[number]
+                    return (initials[number] == nil || initials[number] == "*" || initials[number] == initial)
+                        && index + pattern.tokens.count <= words.count
                         && pattern.tokens.enumerated().allSatisfy { offset, token in
                             Self.matches(normalized[index + offset], token)
                         }
@@ -91,6 +97,7 @@ struct Glossary: Equatable, Sendable {
                 index += 1
                 continue
             }
+            let hit = patterns[found]
             let last = index + hit.tokens.count - 1
             let tail = Self.hyphenTail(words[last].text, token: hit.tokens[hit.tokens.count - 1])
             texts[index] = hit.replace + tail + Self.trailingPunctuation(words[last].text)
