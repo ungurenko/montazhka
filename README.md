@@ -82,7 +82,7 @@
 
 ## 🔧 Для разработчика (и AI-агентов)
 
-Нативное приложение: Swift 6 + SwiftUI + AVFoundation, macOS 14+. SwiftPM-сборке достаточно Command Line Tools; UI-тестам, архивированию и notarization нужен полный Xcode.
+Нативное приложение: Swift 6 + SwiftUI + AVFoundation, macOS 14+. SwiftPM-сборке достаточно Command Line Tools; архивированию и notarization нужен полный Xcode.
 
 ```bash
 ./scripts/bootstrap-tools.sh                  # XcodeGen, SwiftLint и actionlint закреплённых версий
@@ -93,7 +93,7 @@
 ./scripts/build-app.sh --adhoc                # временная подпись для локальной диагностики
 ./script/build_and_run.sh                     # собрать, обновить /Applications и запустить
 MONTAZHKA_SELFTEST_TIMEOUT=30 .build/release/Montazhka --selftest
-.tools/xcodegen generate                      # Montazhka.xcodeproj для Xcode и UI-тестов
+.tools/xcodegen generate                      # Montazhka.xcodeproj для Xcode
 ```
 
 Command Line Tools 27 не содержат плагин макросов SwiftUI, которого требует SDK 27. `scripts/build-app.sh` и `scripts/test.sh` сами замечают это через `scripts/swift-env.sh` и собирают с последним совместимым SDK. Голый `swift build` в такой среде падает — используйте скрипты или `swift build --sdk <путь к MacOSX26.5.sdk>`.
@@ -142,7 +142,6 @@ Sources/
     ├── Views/                  # редактор, лента и панели инструментов
     └── SelfTest/               # сквозная самопроверка на сгенерированном видео
 Tests/MontazhkaTests/        # миграции, монтаж, медиасборка и умный монтаж
-Tests/MontazhkaUITests/      # Xcode UI smoke-тест доступности стартового экрана
 ```
 
 Ключевые принципы:

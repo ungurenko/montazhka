@@ -83,14 +83,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.appearance = NSAppearance(named: .aqua)
         // Запуск из терминала (swift run) не выводит окно вперёд — активируем сами.
         NSApp.activate(ignoringOtherApps: true)
-        if !UITestMode.isActive {
-            AgentIntegrationInstaller.refreshSkillsIfInstalled()
-            // Задачи агента, чей фоновый процесс умер (в том числе при перезагрузке), получают конечный статус;
-            // затем раз в сутки убирается то, что больше не нужно ни одному проекту.
-            Task.detached(priority: .utility) {
-                await AgentRunStore(baseDirectory: AgentBackgroundJob.runsDirectory).reconcileAll()
-                StorageCleanup.runIfDue(base: AgentBackgroundJob.runsDirectory.deletingLastPathComponent())
-            }
+        AgentIntegrationInstaller.refreshSkillsIfInstalled()
+        // Задачи агента, чей фоновый процесс умер (в том числе при перезагрузке), получают конечный статус;
+        // затем раз в сутки убирается то, что больше не нужно ни одному проекту.
+        Task.detached(priority: .utility) {
+            await AgentRunStore(baseDirectory: AgentBackgroundJob.runsDirectory).reconcileAll()
+            StorageCleanup.runIfDue(base: AgentBackgroundJob.runsDirectory.deletingLastPathComponent())
         }
     }
 
@@ -122,24 +120,13 @@ final class AppModel {
     private(set) var isAgentIntegrationInProgress = false
 
     init(store: (any ProjectRepository)? = nil, isPreview: Bool = false) {
-        let arguments = CommandLine.arguments
-        let environment = ProcessInfo.processInfo.environment
-        let isUITesting = UITestMode.isActive
-        let resolvedStore = store ?? Self.defaultStore(isUITesting: isUITesting, environment: environment)
-        self.store = resolvedStore
+        self.store = store ?? ProjectStore()
         self.agentIntegration =
             isPreview
             ? AgentIntegrationStatus(installed: false, message: "Превью")
             : AgentIntegrationInstaller.status()
         guard !isPreview else { return }
         refreshRecents(openLatestAfterLoad: CommandLine.arguments.contains("--open-latest"))
-        if isUITesting, arguments.contains("--ui-test-open-fixture-project") {
-            openUITestFixtureProject(using: resolvedStore)
-        } else if isUITesting, arguments.contains("--ui-test-open-empty-project") {
-            newProject(with: [])
-        } else if isUITesting, arguments.contains("--ui-test-open-shorts") {
-            openUITestShorts(using: resolvedStore)
-        }
     }
 
     func connectAgents() {
@@ -154,54 +141,6 @@ final class AppModel {
             }
             isAgentIntegrationInProgress = false
         }
-    }
-
-    private func openUITestFixtureProject(using store: any ProjectRepository) {
-        let fixtureURL = store.directories.waveforms.appendingPathComponent("ui-test-fixture.mov")
-        Task { [weak self] in
-            do {
-                try await TestVideoFactory.make(
-                    segments: [(duration: 2, loud: true)],
-                    to: fixtureURL)
-                let urls =
-                    CommandLine.arguments.contains("--ui-test-reorder-fixture")
-                    ? Array(repeating: fixtureURL, count: 3) : [fixtureURL]
-                self?.newProject(with: urls)
-            } catch {
-                self?.storeErrorMessage = UserFacingError.make(error, context: .project)
-            }
-        }
-    }
-
-    private func openUITestShorts(using store: any ProjectRepository) {
-        let fixtureURL = store.directories.waveforms.appendingPathComponent("ui-test-shorts.mov")
-        Task { [weak self] in
-            do {
-                try await TestVideoFactory.make(
-                    segments: [(duration: 24, loud: true)],
-                    to: fixtureURL)
-                self?.startShorts(url: fixtureURL, seedUITestCandidate: true)
-            } catch {
-                self?.storeErrorMessage = UserFacingError.make(error, context: .project)
-            }
-        }
-    }
-
-    private static func defaultStore(
-        isUITesting: Bool,
-        environment: [String: String]
-    ) -> any ProjectRepository {
-        guard isUITesting else { return ProjectStore() }
-        let baseDirectory: URL
-        if let path = environment["MONTAZHKA_UI_TEST_DATA_DIR"], !path.isEmpty {
-            baseDirectory = URL(fileURLWithPath: path, isDirectory: true)
-        } else {
-            baseDirectory = FileManager.default.temporaryDirectory
-                .appendingPathComponent(
-                    "montazhka-ui-tests-\(ProcessInfo.processInfo.processIdentifier)",
-                    isDirectory: true)
-        }
-        return ProjectStore(baseDirectory: baseDirectory)
     }
 
     func refreshRecents(openLatestAfterLoad: Bool = false) {
@@ -357,57 +296,16 @@ final class AppModel {
 
     // MARK: - Нарезка на shorts
 
-    func startShorts(url: URL, seedUITestCandidate: Bool = false) {
+    func startShorts(url: URL) {
         let generation = beginProjectOperation()
         projectOperationTask = Task { [weak self] in
             guard let self else { return }
             guard isCurrentProjectOperation(generation) else { return }
-            let words: [TranscriptWord] =
-                UITestMode.isActive && seedUITestCandidate
-                ? ["Локальные", "данные", "без", "сети"].enumerated().map { index, text in
-                    TranscriptWord(
-                        sourceID: UUID(), text: text, start: Double(index) * 0.5,
-                        end: Double(index + 1) * 0.5, confidence: 1)
-                } : []
-            let isLongTranscript =
-                UITestMode.isActive
-                && CommandLine.arguments.contains("--ui-test-long-shorts-transcript")
-            let transcriptSourceID = UUID()
-            let preparedWords =
-                isLongTranscript
-                ? (0..<18_000).map { index in
-                    TranscriptWord(
-                        sourceID: transcriptSourceID, text: "слово\(index)", start: Double(index) * 0.2,
-                        end: Double(index) * 0.2 + 0.15, confidence: 1)
-                } : words
-            let controller = ShortsController(sourceURL: url, store: store, initialTranscriptWords: preparedWords)
-            if seedUITestCandidate {
-                controller.candidates = [Self.uiTestShortCandidate(end: isLongTranscript ? 20 : 2)]
-                if UITestMode.isActive { controller.subtitlesEnabled = true }
-            }
+            let controller = ShortsController(sourceURL: url, store: store)
             shorts = controller
             controller.prepare()
             finishProjectOperation(generation)
         }
-    }
-
-    private static func uiTestShortCandidate(end: Double) -> ShortCandidate {
-        ShortCandidate(
-            id: UUID(),
-            rank: 1,
-            title: "Тестовый ролик",
-            reason: "Локальный UI fixture",
-            hook: "Проверка настроек",
-            pattern: "тест",
-            excerpt: "Локальные данные без сети",
-            start: 0,
-            end: end,
-            confidence: 1,
-            hookScore: 10,
-            standaloneScore: 10,
-            payoffScore: 10,
-            pacingScore: 10,
-            enabled: true)
     }
 
     func closeShorts() {

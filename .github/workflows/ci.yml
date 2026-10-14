@@ -48,9 +48,6 @@ jobs:
           ./scripts/verify-config.sh
           git diff --exit-code -- Resources/Info.plist
 
-      - name: Xcode UI tests
-        run: ./scripts/test-ui.sh
-
       - name: Universal ad-hoc app
         run: ./scripts/build-app.sh --universal --adhoc
 

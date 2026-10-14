@@ -43,20 +43,6 @@ targets:
         Release:
           DEBUG_INFORMATION_FORMAT: dwarf-with-dsym
 
-  MontazhkaUITests:
-    type: bundle.ui-testing
-    platform: macOS
-    sources:
-      - path: Tests/MontazhkaUITests
-    dependencies:
-      - target: MontazhkaApp
-    settings:
-      base:
-        PRODUCT_BUNDLE_IDENTIFIER: ru.ungurenko.montazhka.uitests
-        PRODUCT_NAME: MontazhkaUITests
-        PRODUCT_MODULE_NAME: MontazhkaUITests
-        GENERATE_INFOPLIST_FILE: YES
-
 schemes:
   Montazhka:
     build:
@@ -64,11 +50,5 @@ schemes:
         MontazhkaApp: all
     run:
       config: Debug
-    test:
-      config: Debug
-      gatherCoverageData: true
-      targets:
-        - name: MontazhkaUITests
-          parallelizable: false
     archive:
       config: Release

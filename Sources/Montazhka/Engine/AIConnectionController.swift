@@ -29,16 +29,9 @@ final class AIConnectionController {
         openRouter: OpenRouterClient,
         keyStore: any OpenRouterKeyStoring,
         discovery: @escaping @Sendable (Bool) async -> [AIAgentAvailability] = {
-            if UITestMode.isActive {
-                return AIProvider.allCases.map { provider in
-                    AIAgentAvailability(
-                        provider: provider, isAvailable: false, executablePath: nil, models: [],
-                        message: "Изолированная тестовая среда")
-                }
-            }
-            return await AIAgentDiscovery.shared.discover(force: $0)
+            await AIAgentDiscovery.shared.discover(force: $0)
         },
-        allowsNetworkRequests: Bool = !UITestMode.isActive
+        allowsNetworkRequests: Bool = true
     ) {
         let provider = AIProvider.saved(in: preferences)
         selectedProvider = provider
@@ -49,7 +42,7 @@ final class AIConnectionController {
         self.openRouter = openRouter
         self.discovery = discovery
         self.allowsNetworkRequests = allowsNetworkRequests
-        keyManager = OpenRouterKeyManager(store: UITestMode.isActive ? EmptyOpenRouterKeyStore() : keyStore)
+        keyManager = OpenRouterKeyManager(store: keyStore)
         keyManager.refresh()
     }
 
