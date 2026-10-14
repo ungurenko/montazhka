@@ -114,8 +114,8 @@ enum SourceAnalysis {
                 var error: NSError?
                 let status = converter.convert(to: resampled, error: &error) { _, inputStatus in
                     guard let input,
-                        !given.withLock({
-                            defer { $0 = true }; return $0
+                        !given.withLock({ wasGiven in
+                            defer { wasGiven = true }; return wasGiven
                         })
                     else {
                         inputStatus.pointee = input == nil ? .endOfStream : .noDataNow
