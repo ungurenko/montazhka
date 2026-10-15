@@ -242,6 +242,7 @@ final class EditorController: ExportPreparing {
     func close() async throws -> ProjectSaveCoordinator.FlushOutcome {
         // Пока идёт закрытие, версия с диска не подменяет проект окна.
         diskWatchTask?.cancel()
+        commitNameDraft()
         do {
             var flushed = project
             var outcome = try await saveCoordinator.flush(flushed)
@@ -761,6 +762,17 @@ final class EditorController: ExportPreparing {
         beginEdit()
         applyProjectEdit(.rename(trimmed))
         scheduleSave()
+    }
+
+    /// Название, набранное в верхней панели и ещё не принятое. `base` — имя проекта, когда набор начался.
+    /// Живёт здесь, а не в окне: выбор пункта меню не снимает фокус с поля, и без этого выход терял бы набранное.
+    var nameDraft: (base: String, text: String)?
+
+    /// Принимает набранное название. Если проект за это время переименовали со стороны, побеждает внешнее имя.
+    func commitNameDraft() {
+        guard let draft = nameDraft else { return }
+        nameDraft = nil
+        if draft.base == project.name { renameProject(draft.text) }
     }
 
     func updateDetectionSettings(_ settings: DetectionSettings) {

@@ -7,8 +7,6 @@ import UniformTypeIdentifiers
 struct EditorView: View {
     @Environment(AppModel.self) private var app
     var controller: EditorController
-    @State private var projectName: String = ""
-    @State private var canonicalName: String = ""
     @FocusState private var isNameFocused: Bool
     @State private var showExport = false
     @State private var dropTask: Task<Void, Never>?
@@ -62,12 +60,10 @@ struct EditorView: View {
                 Text(error.message)
             }
         }
-        .onAppear {
-            synchronizeName()
-        }
-        .onChange(of: controller.project.name) { synchronizeName() }
+        // Внешнее переименование сбрасывает набранное название.
+        .onChange(of: controller.project.name) { controller.nameDraft = nil }
         .onChange(of: isNameFocused) {
-            if !isNameFocused { saveProjectName() }
+            if !isNameFocused { controller.commitNameDraft() }
         }
         .onDisappear {
             dropTask?.cancel()
@@ -91,17 +87,11 @@ struct EditorView: View {
         }
     }
 
-    private func synchronizeName() {
-        canonicalName = controller.project.name
-        projectName = canonicalName
-    }
-
-    private func saveProjectName() {
-        // Внешнее переименование имеет приоритет даже до следующего onChange.
-        if canonicalName == controller.project.name {
-            controller.renameProject(projectName)
-        }
-        synchronizeName()
+    private var projectName: Binding<String> {
+        Binding(
+            get: { controller.nameDraft?.text ?? controller.project.name },
+            set: { controller.nameDraft = (controller.nameDraft?.base ?? controller.project.name, $0) }
+        )
     }
 
     private var missingAlertBinding: Binding<Bool> {
@@ -129,21 +119,18 @@ struct EditorView: View {
                 title: "Проекты",
                 accessibilityIdentifier: "editor.back",
                 isDisabled: app.isProjectOperationInProgress,
-                action: {
-                    saveProjectName()
-                    app.closeProject()
-                })
+                action: { app.closeProject() })
         ) {
-            TextField("Название", text: $projectName)
+            TextField("Название", text: projectName)
                 .textFieldStyle(.plain)
                 .typeStyle(.sectionTitle)
                 .foregroundStyle(Theme.textPrimary)
                 .frame(width: 220)
                 .focused($isNameFocused)
-                .onSubmit { saveProjectName() }
+                .onSubmit { controller.commitNameDraft() }
                 .onKeyPress(.escape) {
                     guard isNameFocused else { return .ignored }
-                    synchronizeName()
+                    controller.nameDraft = nil
                     isNameFocused = false
                     return .handled
                 }

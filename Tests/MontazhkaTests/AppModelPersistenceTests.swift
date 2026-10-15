@@ -102,6 +102,27 @@ struct AppModelPersistenceTests {
     }
 
     @MainActor
+    @Test("a typed name without Enter is saved on close unless the project was renamed elsewhere")
+    func typedNameIsSavedOnClose() async throws {
+        let repository = ControlledProjectRepository()
+        let app = AppModel(store: repository)
+        let controller = EditorController(
+            project: Project(name: "Старое"), store: repository, openRouterKeyStore: EmptyOpenRouterKeyStore())
+        app.editor = controller
+        controller.nameDraft = (base: "Старое", text: "Набранное")
+
+        #expect(await app.closeForTermination())
+        #expect(repository.savedNames.last == "Набранное")
+
+        let renamed = EditorController(
+            project: Project(name: "Старое"), store: repository, openRouterKeyStore: EmptyOpenRouterKeyStore())
+        renamed.nameDraft = (base: "Старое", text: "Набранное")
+        renamed.renameProject("Имя от агента")
+        await renamed.shutdown()
+        #expect(repository.savedNames.last == "Имя от агента")
+    }
+
+    @MainActor
     @Test("closing without saving is an explicit choice and writes nothing")
     func closeWithoutSaving() async throws {
         let repository = ControlledProjectRepository()
