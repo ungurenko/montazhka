@@ -14,6 +14,10 @@
     { "file": "Напряжённая 1.m4a", "mood": "tense", "energy": 3, "source": "Kie.ai Suno V4_5, 2026-09-25" },
     { "file": "Напряжённая 2.m4a", "mood": "tense", "energy": 3, "source": "Kie.ai Suno V4_5, 2026-09-25" },
     { "file": "Трогательная 1.m4a", "mood": "emotional", "energy": 1, "source": "Kie.ai Suno V4_5, 2026-09-25" },
-    { "file": "Трогательная 2.m4a", "mood": "emotional", "energy": 1, "source": "Kie.ai Suno V4_5, 2026-09-25" }
+    { "file": "Трогательная 2.m4a", "mood": "emotional", "energy": 1, "source": "Kie.ai Suno V4_5, 2026-09-25" },
+    { "file": "Фонк 1.m4a", "mood": "energetic", "energy": 5, "source": "Kie.ai Suno V6, 2026-10-16" },
+    { "file": "Фонк 2.m4a", "mood": "tense", "energy": 5, "source": "Kie.ai Suno V6, 2026-10-16" },
+    { "file": "Кино 1.m4a", "mood": "tense", "energy": 5, "source": "Kie.ai Suno V6, 2026-10-16" },
+    { "file": "Фонк 3.m4a", "mood": "energetic", "energy": 5, "source": "Kie.ai Suno V6, 2026-10-16" }
   ]
 }
